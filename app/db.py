@@ -150,7 +150,7 @@ def init_db() -> None:
             "eth_rpc_url": "",
             "electrs_host": "",
             "electrs_port": "50001",
-            "btc_gap_limit": "20",
+            "btc_gap_limit": "50",
             "outflow_drop_pct": "5",
             "outflow_usd": "500",
             "currency": "USD",

@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.2.8"
+version: "0.2.9"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,10 +23,11 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.2.8: il collegamento TCP a Electrs resta breve, la richiesta ha
-  fino a 60 secondi (120 per gli indirizzi) e un secondo tentativo.
-  La diagnostica mostra ogni passo con i millisecondi. Le letture
-  degli indirizzi vanno a gruppi di 20. Indirizzi e impostazioni restano.
+  0.2.9: il saldo Bitkey conta ricezione e resto, anche se il
+  descrittore ha un solo ramo, e continua finché non trova il gap di
+  indirizzi vuoti. Il totale è la somma degli UTXO, senza doppioni.
+  Il conto mostra quanti indirizzi ha letto e quanto è confermato.
+  Descrittori e indirizzi restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies:

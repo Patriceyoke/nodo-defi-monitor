@@ -460,6 +460,21 @@ function renderRows(el, rows) {
     </div>`).join("");
 }
 
+function branchLine(label, row) {
+  if (!row) return "";
+  const last = row.last_used == null ? "nessuno" : "#" + row.last_used;
+  return `${label}: ${row.scanned || 0} indirizzi, ultimo usato ${last}`;
+}
+function scanDetail(scan) {
+  if (!scan) return "";
+  const confirmed = btcFmt((scan.confirmed_sats || 0) / 100000000);
+  const unconfirmed = btcFmt((scan.unconfirmed_sats || 0) / 100000000);
+  return `<details class="electrs-diag"><summary>Dettaglio scansione</summary>
+    <p class="mini">${escapeHtml(branchLine("Ricezione", scan.receive))}</p>
+    <p class="mini">${escapeHtml(branchLine("Resto", scan.change))}</p>
+    <p class="mini">${scan.utxo_count || 0} UTXO · confermati ${confirmed} · non confermati ${unconfirmed}</p>
+  </details>`;
+}
 function renderBtc(data) {
   const node = data.node || {};
   const pill = $("#btc-node-pill");
@@ -498,6 +513,7 @@ function renderBtc(data) {
       <div class="value" style="font-size:1.3rem;font-weight:800">${btcFmt(w.btc)}</div>
       <p class="mini">${money(w.usd != null ? w.usd : (w.btc || 0) * price)}${w.utxo_count != null ? " · " + w.utxo_count + " UTXO" : ""}</p>
       <p class="mini">Ultimo movimento: ${w.last || "—"}</p>
+      ${scanDetail(w.scan)}
     </div>`).join("") : `<p class="mini">Nessun xpub in questa vista. Aggiungilo in Impostazioni.</p>`;
 
   paintChart("chart-btc", {
@@ -881,7 +897,7 @@ async function loadSettings() {
   form.electrs_host.value = s.electrs_host || "";
   form.electrs_port.value = s.electrs_port || 50001;
   showElectrsHint(s.electrs_hint);
-  if (form.btc_gap_limit) form.btc_gap_limit.value = s.btc_gap_limit || 20;
+  if (form.btc_gap_limit) form.btc_gap_limit.value = s.btc_gap_limit || 50;
   if (form.outflow_drop_pct) form.outflow_drop_pct.value = s.outflow_drop_pct ?? 5;
   if (form.outflow_usd) form.outflow_usd.value = s.outflow_usd ?? 500;
   if (form.nft_api_provider) form.nft_api_provider.value = s.nft_api_provider || "";
@@ -932,7 +948,7 @@ async function boot() {
       eth_rpc_url: f.eth_rpc_url,
       electrs_host: f.electrs_host,
       electrs_port: Number(f.electrs_port || 50001),
-      btc_gap_limit: Number(f.btc_gap_limit || 20),
+      btc_gap_limit: Number(f.btc_gap_limit || 50),
       outflow_drop_pct: Number(f.outflow_drop_pct || 5),
       outflow_usd: Number(f.outflow_usd || 0),
       gas_estimate_usd: f.gas_estimate_usd === "" ? 0 : Number(f.gas_estimate_usd),

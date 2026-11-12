@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 APP_NAME = "Monitor DeFi"
-APP_VERSION = "0.2.8"
+APP_VERSION = "0.2.9"
 DEFAULT_PORT = int(os.environ.get("PORT", "3847"))
 
 _DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data"
@@ -160,5 +160,5 @@ ETH_ASSETS = {"ETH", "WETH", "stETH", "wstETH", "rETH", "aEthWETH", "aEthwstETH"
 # Typical gas units for a withdraw+deposit style move (estimate only).
 SWITCH_GAS_UNITS = 220_000
 DUST_SATS = 1000
-DEFAULT_GAP_LIMIT = 20
+DEFAULT_GAP_LIMIT = 50
 HISTORY_DAYS = 90

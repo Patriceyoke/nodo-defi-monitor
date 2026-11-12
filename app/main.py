@@ -119,7 +119,7 @@ async def get_settings() -> dict[str, Any]:
         "electrs_host": raw.get("electrs_host") or "",
         "electrs_port": int(raw.get("electrs_port") or 50001),
         "electrs_hint": bitcoin.local_host_hint(raw.get("electrs_host") or ""),
-        "btc_gap_limit": int(raw.get("btc_gap_limit") or 20),
+        "btc_gap_limit": int(raw.get("btc_gap_limit") or 50),
         "outflow_drop_pct": float(raw.get("outflow_drop_pct") or 5),
         "outflow_usd": float(raw.get("outflow_usd") or 500),
         "currency": raw.get("currency") if raw.get("currency") in {"USD", "THB"} else "USD",
@@ -146,8 +146,8 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         db.set_setting("electrs_port", str(int(body.electrs_port)))
     if body.btc_gap_limit is not None:
         gap = int(body.btc_gap_limit)
-        if gap < 1 or gap > 100:
-            raise HTTPException(400, "Il gap limit deve essere tra 1 e 100.")
+        if gap < 1 or gap > 500:
+            raise HTTPException(400, "Il gap limit deve essere tra 1 e 500.")
         db.set_setting("btc_gap_limit", str(gap))
     if body.outflow_drop_pct is not None:
         drop = float(body.outflow_drop_pct)

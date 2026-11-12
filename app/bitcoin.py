@@ -91,13 +91,37 @@ _RESOLVE_LOCK = threading.Lock()
 _WORKING_TTL = 60.0
 
 
+MAX_SCAN_INDEX = 2000
+
+
 def gap_limit() -> int:
     raw = db.get_setting("btc_gap_limit") or str(DEFAULT_GAP_LIMIT)
     try:
         value = int(raw)
     except ValueError:
         value = DEFAULT_GAP_LIMIT
-    return max(1, min(value, 100))
+    return max(1, min(value, 500))
+
+
+def consume_until_gap(used_flags: list[bool], gap: int) -> tuple[int, int | None]:
+    """How many addresses to read, and the last used index, for one branch.
+
+    Stop after `gap` unused addresses in a row. A used address near the end
+    extends the scan instead of cutting it off.
+    """
+    unused = 0
+    seen = 0
+    last_used: int | None = None
+    for index, used in enumerate(used_flags):
+        seen += 1
+        if used:
+            last_used = index
+            unused = 0
+        else:
+            unused += 1
+        if unused >= gap or seen >= MAX_SCAN_INDEX:
+            break
+    return seen, last_used
 
 
 def _configured_endpoint() -> tuple[str, int]:
@@ -509,41 +533,97 @@ def prepare_watch_descriptor(raw: str) -> str:
     return "\n".join(cleaned)
 
 
+def _norm_desc(body: str) -> str:
+    return re.sub(r"\s+", "", (body or "").split("#")[0])
+
+
+def _is_multipath(body: str) -> bool:
+    return "<0;1>" in body or "{0,1}" in body
+
+
+def _retarget_branch(body: str, src: str, dst: str) -> str:
+    """Swap only the wildcard step, not an origin like /0h/ or /0'/."""
+    return re.sub(rf"/{src}/\*", f"/{dst}/*", body)
+
+
+def branch_plans(raw: str) -> list[tuple[str, str, int]]:
+    """Receive and change for every descriptor, even when only one branch was pasted.
+
+    Each item is (role, descriptor body, embit branch index).
+    """
+    prepared = prepare_watch_descriptor(raw)
+    plans: list[tuple[str, str, int]] = []
+    seen: set[tuple[str, str, int]] = set()
+
+    def add(role: str, body: str, branch: int) -> None:
+        key = (role, _norm_desc(body), branch)
+        if key in seen:
+            return
+        seen.add(key)
+        plans.append((role, body, branch))
+
+    for line in prepared.split("\n"):
+        body = line.split("#")[0].strip()
+        if not body:
+            continue
+        kind = classify_btc_key(body)
+        if kind not in {"descriptor", "multisig"}:
+            add("receive", body, 0)
+            add("change", body, 1)
+            continue
+        if _is_multipath(body):
+            add("receive", body, 0)
+            add("change", body, 1)
+            continue
+        if re.search(r"/0/\*", body):
+            add("receive", body, 0)
+            add("change", _retarget_branch(body, "0", "1"), 0)
+            continue
+        if re.search(r"/1/\*", body):
+            add("receive", _retarget_branch(body, "1", "0"), 0)
+            add("change", body, 0)
+            continue
+        desc = _parse_public(body, kind)
+        if (getattr(desc, "num_branches", 1) or 1) >= 2:
+            add("receive", body, 0)
+            add("change", body, 1)
+        else:
+            add("receive", body, 0)
+    return plans
+
+
+def _derive_at(body: str, branch: int, index: int):
+    kind = classify_btc_key(body)
+    desc = _parse_public(body, kind)
+    try:
+        return desc.derive(index, branch)
+    except TypeError:
+        return desc.derive(index)
+
+
 def derive_addresses(raw: str, gap: int | None = None) -> list[dict[str, Any]]:
     """Derive receive (/0) and change (/1) addresses. Never touches private keys."""
-    prepared = prepare_watch_descriptor(raw)
     if gap is None:
         gap = gap_limit()
-    gap = max(1, min(int(gap), 100))
-    lines = prepared.split("\n")
+    gap = max(1, min(int(gap), 500))
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for line in lines:
-        body = verify_checksum(line)
-        kind = classify_btc_key(body)
-        desc = _parse_public(body, kind)
-        forced = _chain_role(body) if kind in {"descriptor", "multisig"} else None
-        branches = getattr(desc, "num_branches", 1) or 1
-        for branch in range(branches):
-            role = forced if forced and branches == 1 else {0: "receive", 1: "change"}.get(branch, f"branch{branch}")
-            for index in range(gap):
-                try:
-                    derived = desc.derive(index, branch)
-                except TypeError:
-                    derived = desc.derive(index)
-                addr = derived.address(NETWORKS["main"])
-                if addr in seen:
-                    continue
-                seen.add(addr)
-                out.append(
-                    {
-                        "address": addr,
-                        "scriptpubkey": derived.script_pubkey().data.hex(),
-                        "branch": 1 if role == "change" else branch,
-                        "index": index,
-                        "role": role,
-                    }
-                )
+    for role, body, branch in branch_plans(raw):
+        for index in range(gap):
+            derived = _derive_at(body, branch, index)
+            addr = derived.address(NETWORKS["main"])
+            if addr in seen:
+                continue
+            seen.add(addr)
+            out.append(
+                {
+                    "address": addr,
+                    "scriptpubkey": derived.script_pubkey().data.hex(),
+                    "branch": 1 if role == "change" else 0,
+                    "index": index,
+                    "role": role,
+                }
+            )
     if not out:
         raise ValueError("Impossibile derivare indirizzi da questa chiave o da questo descrittore.")
     return out
@@ -858,9 +938,78 @@ async def electrs_status() -> dict[str, Any]:
     return {**base, "configured": True, "detail": detail}
 
 
+def _utxo_key(utxo: dict[str, Any]) -> tuple[str, int] | None:
+    txid = utxo.get("tx_hash") or utxo.get("txid")
+    pos = utxo.get("tx_pos")
+    if pos is None:
+        pos = utxo.get("vout")
+    if not txid or pos is None:
+        return None
+    return str(txid), int(pos)
+
+
+def _utxo_sats(utxo: dict[str, Any]) -> int:
+    value = utxo.get("value")
+    if value is None:
+        return 0
+    return int(value)
+
+
+def _utxo_unconfirmed(utxo: dict[str, Any]) -> bool:
+    height = utxo.get("height")
+    return height in (None, 0) or (isinstance(height, int) and height <= 0)
+
+
+async def _scan_branch(role: str, body: str, branch: int, gap: int) -> dict[str, Any]:
+    """Keep going until `gap` unused addresses follow the last used one."""
+    rows: list[dict[str, Any]] = []
+    index = 0
+    unused = 0
+    last_used: int | None = None
+    while unused < gap and index < MAX_SCAN_INDEX:
+        width = min(BATCH_SIZE, MAX_SCAN_INDEX - index)
+        chunk = []
+        for offset in range(width):
+            derived = _derive_at(body, branch, index + offset)
+            chunk.append(
+                {
+                    "address": derived.address(NETWORKS["main"]),
+                    "scriptpubkey": derived.script_pubkey().data.hex(),
+                    "branch": 1 if role == "change" else 0,
+                    "index": index + offset,
+                    "role": role,
+                }
+            )
+        hashes = [_scripthash(item["scriptpubkey"]) for item in chunk]
+        balances = await query_scripthashes("blockchain.scripthash.get_balance", hashes)
+        histories = await query_scripthashes("blockchain.scripthash.get_history", hashes)
+        unspents = await query_scripthashes("blockchain.scripthash.listunspent", hashes)
+        for item, scripthash in zip(chunk, hashes):
+            hist = list(histories.get(scripthash) or [])
+            utxos = list(unspents.get(scripthash) or [])
+            bal = balances.get(scripthash) or {}
+            sats = int((bal or {}).get("confirmed") or 0) + int((bal or {}).get("unconfirmed") or 0)
+            used = bool(hist) or bool(utxos) or sats > 0
+            item["history"] = hist
+            item["utxos"] = utxos
+            rows.append(item)
+            index += 1
+            if used:
+                last_used = item["index"]
+                unused = 0
+            else:
+                unused += 1
+            if unused >= gap or index >= MAX_SCAN_INDEX:
+                break
+    return {"role": role, "scanned": len(rows), "last_used": last_used, "rows": rows}
+
+
 async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[str, Any]:
+    if gap is None:
+        gap = gap_limit()
+    gap = max(1, min(int(gap), 500))
     try:
-        addrs = derive_addresses(wallet["descriptor"], gap=gap)
+        plans = branch_plans(wallet["descriptor"])
     except Exception as exc:
         log.warning("Derivazione Bitcoin non riuscita (%s).", type(exc).__name__)
         raise
@@ -892,52 +1041,74 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
 
     used: list[dict[str, Any]] = []
     txs: list[dict[str, Any]] = []
-    total = 0
-    utxo_count = 0
     reuse: list[str] = []
     dust: list[dict[str, Any]] = []
-
-    hashes = [_scripthash(item["scriptpubkey"]) for item in addrs]
+    branches: dict[str, dict[str, Any]] = {}
+    seen_outpoints: set[tuple[str, int]] = set()
+    confirmed_sats = 0
+    unconfirmed_sats = 0
     try:
-        balances = await query_scripthashes("blockchain.scripthash.get_balance", hashes)
-        histories = await query_scripthashes("blockchain.scripthash.get_history", hashes)
-        unspents = await query_scripthashes("blockchain.scripthash.listunspent", hashes)
+        for role, body, branch in plans:
+            report = await _scan_branch(role, body, branch, gap)
+            previous = branches.get(role)
+            if previous is None:
+                branches[role] = {"scanned": report["scanned"], "last_used": report["last_used"]}
+            else:
+                previous["scanned"] += report["scanned"]
+                if report["last_used"] is not None and (
+                    previous["last_used"] is None or report["last_used"] > previous["last_used"]
+                ):
+                    previous["last_used"] = report["last_used"]
+            for item in report["rows"]:
+                history = item["history"]
+                if not history and not item["utxos"]:
+                    continue
+                if len(history) > 1 and item["role"] == "receive":
+                    reuse.append(item["address"])
+                address_sats = 0
+                for utxo in item["utxos"]:
+                    if not isinstance(utxo, dict):
+                        continue
+                    key = _utxo_key(utxo)
+                    if key is None or key in seen_outpoints:
+                        continue
+                    seen_outpoints.add(key)
+                    value = _utxo_sats(utxo)
+                    address_sats += value
+                    if _utxo_unconfirmed(utxo):
+                        unconfirmed_sats += value
+                    else:
+                        confirmed_sats += value
+                if address_sats == 0 and not history:
+                    continue
+                kept = {key: value for key, value in item.items() if key not in {"history", "utxos"}}
+                used.append({**kept, "sats": address_sats, "tx_count": len(history)})
+                for ev in history:
+                    txs.append(
+                        {
+                            "txid": ev.get("tx_hash"),
+                            "height": ev.get("height") or 0,
+                            "address": item["address"],
+                            "role": item["role"],
+                        }
+                    )
+                if address_sats and 0 < address_sats <= 1000:
+                    dust.append({"address": item["address"], "sats": address_sats})
     except Exception as exc:  # noqa: BLE001
         if _INDEX_RE.search(str(exc)):
             status = {**status, "indexing": True, "connected": False, "detail": str(exc)}
-            balances, histories, unspents = {}, {}, {}
         else:
             log.warning("Lettura Electrs non riuscita (%s).", type(exc).__name__)
-            balances, histories, unspents = {}, {}, {}
-    for item, sh in zip(addrs, hashes):
-        if sh not in balances and sh not in histories:
-            continue
-        raw_bal = balances.get(sh) or {}
-        hist = histories.get(sh) or []
-        unspent = unspents.get(sh) or []
-        if isinstance(unspent, list):
-            utxo_count += len(unspent)
-        confirmed = int((raw_bal or {}).get("confirmed") or 0)
-        unconfirmed = int((raw_bal or {}).get("unconfirmed") or 0)
-        sats = confirmed + unconfirmed
-        history = list(hist or [])
-        if sats == 0 and not history:
-            continue
-        if len(history) > 1 and item["role"] == "receive":
-            reuse.append(item["address"])
-        total += sats
-        used.append({**item, "sats": sats, "tx_count": len(history)})
-        for ev in history:
-            txs.append(
-                {
-                    "txid": ev.get("tx_hash"),
-                    "height": ev.get("height") or 0,
-                    "address": item["address"],
-                    "role": item["role"],
-                }
-            )
-        if sats and 0 < sats <= 1000:
-            dust.append({"address": item["address"], "sats": sats})
+    total = confirmed_sats + unconfirmed_sats
+    utxo_count = len(seen_outpoints)
+    scan = {
+        "gap": gap,
+        "receive": branches.get("receive") or {"scanned": 0, "last_used": None},
+        "change": branches.get("change") or {"scanned": 0, "last_used": None},
+        "utxo_count": utxo_count,
+        "confirmed_sats": confirmed_sats,
+        "unconfirmed_sats": unconfirmed_sats,
+    }
 
     # Fetch a few recent transactions to classify incoming/outgoing roughly via status list
     txs.sort(key=lambda t: t.get("height") or 0, reverse=True)
@@ -1039,5 +1210,6 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
         "alert_out_btc": wallet.get("alert_out_btc"),
         "alert_min_btc": wallet.get("alert_min_btc"),
         "hot_threshold_btc": wallet.get("hot_threshold_btc"),
+        "scan": scan,
         "node": status,
     }
