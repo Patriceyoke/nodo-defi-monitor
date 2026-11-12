@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.2.7"
+version: "0.2.8"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,11 +23,10 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.2.7: Electrs su Umbrel è 10.21.21.10 porta 50001 (electrs_electrs_1),
-  non umbrel.local. La scheda Nodo / Electrs elenca ogni tentativo e
-  l'errore, più l'IP del contenitore e il gateway. L'app dipende da
-  Electrs così Umbrel passa l'indirizzo ufficiale. Indirizzi e
-  impostazioni restano.
+  0.2.8: il collegamento TCP a Electrs resta breve, la richiesta ha
+  fino a 60 secondi (120 per gli indirizzi) e un secondo tentativo.
+  La diagnostica mostra ogni passo con i millisecondi. Le letture
+  degli indirizzi vanno a gruppi di 20. Indirizzi e impostazioni restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies:

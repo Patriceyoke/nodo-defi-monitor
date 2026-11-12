@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import socket
 
 from app import bitcoin, db
 from app.btc_security import evaluate
@@ -107,6 +109,52 @@ def test_configured_host_wins_and_is_cached(monkeypatch):
     assert "Collegato via electrs.internal:50001" in first["detail"]
     assert second["connected"] is True
     assert all(host == "electrs.internal" for host, _method in calls)
+
+
+def test_electrum_request_is_newline_json_and_retries_a_timeout(monkeypatch):
+    sent = []
+
+    def exchange(host, port, calls, timeout, plain):
+        sent.append((calls, timeout, plain))
+        frame = bitcoin._format_request(1, calls[0][0], calls[0][1])
+        assert frame.endswith(b"\n")
+        body = json.loads(frame.decode())
+        assert body["params"] == ["nodo-defi-monitor", "1.4"]
+        if len(sent) == 1:
+            raise socket.timeout("timed out")
+        return [["Electrs 0.11.1", "1.4"]]
+
+    monkeypatch.setattr(bitcoin, "_electrum_exchange", exchange)
+    monkeypatch.setattr(bitcoin, "_open_socket", lambda *args, **kwargs: (None, 4))
+    result = bitcoin._electrum_request("10.21.21.10", 50001, "server.version", ["nodo-defi-monitor", "1.4"])
+    assert result == ["Electrs 0.11.1", "1.4"]
+    assert len(sent) == 2
+    assert sent[0][1] == bitcoin.VERSION_TIMEOUT
+
+
+def test_scripthash_batches_are_cached(monkeypatch):
+    bitcoin._SCRIPT_CACHE.clear()
+    calls = []
+
+    def many(host, port, batch, timeout, plain):
+        calls.append([item[1][0] for item in batch])
+        return [{"confirmed": 1, "unconfirmed": 0} for _item in batch]
+
+    monkeypatch.setattr(bitcoin, "_electrum_request_many", many)
+
+    async def run():
+        monkeypatch.setattr(bitcoin, "resolve_electrs", lambda: ("10.21.21.10", 50001, "10.21.21.10:50001", True))
+        hashes = [f"{index:064x}" for index in range(25)]
+        first = await bitcoin.query_scripthashes("blockchain.scripthash.get_balance", hashes)
+        second = await bitcoin.query_scripthashes("blockchain.scripthash.get_balance", hashes)
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert len(calls) == 2
+    assert len(calls[0]) == 20
+    assert len(calls[1]) == 5
+    assert first == second
+    assert next(iter(second.values()))["confirmed"] == 1
 
 
 def test_local_name_hint_and_security_card():

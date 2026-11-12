@@ -12,6 +12,7 @@ def _node_check(node: dict[str, Any], detail: str, tone: str, label: str) -> dic
     item = _item("tutti", "Nodo / Electrs", detail, tone, label)
     item["attempts"] = list(node.get("attempts") or [])
     item["network"] = dict(node.get("network") or {})
+    item["steps"] = list(node.get("steps") or [])
     return item
 
 

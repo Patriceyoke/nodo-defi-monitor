@@ -86,6 +86,7 @@ _WORKING_AT = 0.0
 _WORKING_KEY = ""
 _ATTEMPTS: list[dict[str, Any]] = []
 _NETWORK: dict[str, Any] = {}
+_PROBE_STEPS: list[dict[str, Any]] = []
 _RESOLVE_LOCK = threading.Lock()
 _WORKING_TTL = 60.0
 
@@ -278,7 +279,7 @@ def _forget_working() -> None:
 
 def resolve_electrs() -> tuple[str, int, str, bool]:
     """First Electrum server that answers server.version. Cached for a minute."""
-    global _WORKING, _WORKING_AT, _WORKING_KEY, _ATTEMPTS, _NETWORK
+    global _WORKING, _WORKING_AT, _WORKING_KEY, _ATTEMPTS, _NETWORK, _PROBE_STEPS
     configured_host, configured_port = _configured_endpoint()
     key = f"{configured_host}:{configured_port}"
     with _RESOLVE_LOCK:
@@ -296,20 +297,43 @@ def resolve_electrs() -> tuple[str, int, str, bool]:
                     "error": "DNS: nome non risolto",
                 })
                 continue
+            started = time.perf_counter()
             try:
-                _electrum_request(
-                    host, port, "server.version", ["monitor-defi", "1.4"], timeout=1.5, plain=plain,
+                version = _electrum_request(
+                    host,
+                    port,
+                    "server.version",
+                    [ELECTRUM_CLIENT, ELECTRUM_PROTOCOL],
+                    timeout=VERSION_TIMEOUT,
+                    plain=plain,
                 )
             except Exception as exc:
                 attempts.append({
                     "host": host,
                     "port": port,
                     "ok": False,
+                    "ms": _ms(started),
                     "error": _failure_text(exc),
                 })
                 log.info("Electrum %s:%s non risponde: %s", host, port, attempts[-1]["error"])
                 continue
-            attempts.append({"host": host, "port": port, "ok": True, "error": ""})
+            version_ms = _ms(started)
+            connect_ms = _LAST_CONNECT_MS
+            _PROBE_STEPS = [
+                {
+                    "name": "TCP connect",
+                    "ok": True,
+                    "ms": connect_ms if connect_ms is not None else version_ms,
+                    "detail": f"{host}:{port}",
+                },
+                {
+                    "name": "server.version",
+                    "ok": True,
+                    "ms": version_ms,
+                    "detail": _banner(version) or ELECTRUM_PROTOCOL,
+                },
+            ]
+            attempts.append({"host": host, "port": port, "ok": True, "ms": version_ms, "error": ""})
             found = (host, port, via, plain)
             break
         _ATTEMPTS = attempts
@@ -323,7 +347,7 @@ def resolve_electrs() -> tuple[str, int, str, bool]:
 
 
 def electrs_diagnostics() -> dict[str, Any]:
-    return {"attempts": list(_ATTEMPTS), "network": dict(_NETWORK)}
+    return {"attempts": list(_ATTEMPTS), "network": dict(_NETWORK), "steps": list(_PROBE_STEPS)}
 
 
 def electrs_endpoint() -> tuple[str, int, str]:
@@ -531,46 +555,129 @@ def _scripthash(script_hex: str) -> str:
     return digest[::-1].hex()
 
 
-def _electrum_request(
-    host: str,
-    port: int,
-    method: str,
-    params: list[Any],
-    timeout: float = 8.0,
-    plain: bool = False,
-) -> Any:
-    payload = json.dumps({"id": 1, "jsonrpc": "2.0", "method": method, "params": params}) + "\n"
-    sock = socket.create_connection((host, port), timeout=timeout)
-    try:
-        # Electrs on Umbrel is plain TCP on 50001. A saved port 50002 is TLS.
-        # Automatic fallbacks stay on plain TCP, including Fulcrum's 50002.
-        if not plain and port in {50002, 443, 60002}:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            sock = ctx.wrap_socket(sock, server_hostname=host)
-        sock.sendall(payload.encode("utf-8"))
-        chunks: list[bytes] = []
-        sock.settimeout(timeout)
-        while True:
+CONNECT_TIMEOUT = 5.0
+VERSION_TIMEOUT = 60.0
+BATCH_TIMEOUT = 120.0
+BATCH_SIZE = 20
+SCRIPT_CACHE_TTL = 10 * 60
+ELECTRUM_CLIENT = "nodo-defi-monitor"
+ELECTRUM_PROTOCOL = "1.4"
+_LAST_CONNECT_MS: int | None = None
+_PROBE_STEPS: list[dict[str, Any]] = []
+_SCRIPT_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
+
+
+def _format_request(req_id: int, method: str, params: list[Any]) -> bytes:
+    """Electrum 1.4 / Electrs 0.11: one JSON object, then a newline."""
+    payload = {"id": req_id, "method": method, "params": params}
+    return (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _request_timeout(method: str) -> float:
+    if method.startswith("blockchain.scripthash.") or method == "blockchain.transaction.get":
+        return BATCH_TIMEOUT
+    return VERSION_TIMEOUT
+
+
+def _ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _banner(result: Any) -> str:
+    if isinstance(result, list) and result:
+        parts = [str(part) for part in result[:2]]
+        return " / ".join(parts)
+    if isinstance(result, str):
+        return result
+    return ""
+
+
+def _open_socket(host: str, port: int, plain: bool) -> tuple[socket.socket, int]:
+    global _LAST_CONNECT_MS
+    started = time.perf_counter()
+    sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
+    _LAST_CONNECT_MS = _ms(started)
+    if not plain and port in {50002, 443, 60002}:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        sock = ctx.wrap_socket(sock, server_hostname=host)
+    return sock, _LAST_CONNECT_MS
+
+
+def _read_messages(sock: socket.socket, timeout: float, want: int) -> list[dict[str, Any]]:
+    sock.settimeout(timeout)
+    buf = b""
+    found: list[dict[str, Any]] = []
+    while len(found) < want:
+        if b"\n" not in buf:
             data = sock.recv(65536)
             if not data:
                 break
-            chunks.append(data)
-            if b"\n" in data:
-                break
-        raw = b"".join(chunks).decode("utf-8").strip()
+            buf += data
+            continue
+        line, buf = buf.split(b"\n", 1)
+        raw = line.decode("utf-8").strip()
         if not raw:
-            raise ElectrsError("Risposta vuota da Electrs")
-        msg = json.loads(raw.split("\n")[0])
+            continue
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ElectrsError(f"Errore di protocollo: {exc}") from exc
+        if not isinstance(msg, dict):
+            raise ElectrsError("Errore di protocollo: risposta non è un oggetto")
         if msg.get("error"):
             raise ElectrsError(str(msg["error"]))
-        return msg.get("result")
+        found.append(msg)
+    if len(found) < want:
+        raise ElectrsError("Risposta vuota da Electrs")
+    return found
+
+
+def _electrum_exchange(
+    host: str,
+    port: int,
+    calls: list[tuple[str, list[Any]]],
+    timeout: float,
+    plain: bool,
+) -> list[Any]:
+    """Send newline-terminated calls on one socket and collect the replies."""
+    sock, _connect_ms = _open_socket(host, port, plain)
+    try:
+        frames = [_format_request(index, method, params) for index, (method, params) in enumerate(calls, start=1)]
+        sock.sendall(b"".join(frames))
+        messages = _read_messages(sock, timeout, len(calls))
+        results: dict[int, Any] = {}
+        for msg in messages:
+            req_id = msg.get("id")
+            if isinstance(req_id, int):
+                results[req_id] = msg.get("result")
+        return [results.get(index) for index in range(1, len(calls) + 1)]
     finally:
         try:
             sock.close()
         except Exception:
             pass
+
+
+def _electrum_request(
+    host: str,
+    port: int,
+    method: str,
+    params: list[Any],
+    timeout: float = VERSION_TIMEOUT,
+    plain: bool = False,
+) -> Any:
+    """One Electrum call. A timeout is tried a second time."""
+    last: BaseException | None = None
+    for _attempt in range(2):
+        try:
+            return _electrum_exchange(host, port, [(method, params)], timeout, plain)[0]
+        except (TimeoutError, socket.timeout) as exc:
+            last = exc
+            continue
+    assert last is not None
+    raise last
 
 
 def _offline_detail(saved_host: str) -> str:
@@ -586,91 +693,169 @@ def _offline_detail(saved_host: str) -> str:
     )
 
 
-async def electrs_call(method: str, params: list[Any]) -> Any:
+async def electrs_call(method: str, params: list[Any], timeout: float | None = None) -> Any:
     host, port, _via, plain = await asyncio.to_thread(resolve_electrs)
     if not host:
         saved, _port = _configured_endpoint()
         raise ElectrsError(_offline_detail(saved))
     try:
         return await asyncio.to_thread(
-            _electrum_request, host, port, method, params, 8.0, plain,
+            _electrum_request,
+            host,
+            port,
+            method,
+            params,
+            timeout if timeout is not None else _request_timeout(method),
+            plain,
         )
     except ElectrsError:
         raise
-    except Exception:
-        _forget_working()
+    except (TimeoutError, socket.timeout):
+        raise
+    except OSError as exc:
+        if isinstance(exc, ConnectionRefusedError) or exc.errno in {101, 111, 113}:
+            _forget_working()
         raise
 
 
+_MISS = object()
+
+
+def _script_cache_get(method: str, scripthash: str) -> Any:
+    hit = _SCRIPT_CACHE.get((method, scripthash))
+    if not hit:
+        return _MISS
+    stored, value = hit
+    if time.time() - stored > SCRIPT_CACHE_TTL:
+        return _MISS
+    return value
+
+
+def _script_cache_put(method: str, scripthash: str, value: Any) -> None:
+    _SCRIPT_CACHE[(method, scripthash)] = (time.time(), value)
+
+
+async def query_scripthashes(method: str, scripthashes: list[str]) -> dict[str, Any]:
+    """Read many scripthashes in batches of 20. A repeat within 10 minutes is cached."""
+    found: dict[str, Any] = {}
+    missing: list[str] = []
+    for scripthash in scripthashes:
+        cached = _script_cache_get(method, scripthash)
+        if cached is _MISS:
+            missing.append(scripthash)
+        else:
+            found[scripthash] = cached
+    if not missing:
+        return found
+    host, port, _via, plain = await asyncio.to_thread(resolve_electrs)
+    if not host:
+        saved, _port = _configured_endpoint()
+        raise ElectrsError(_offline_detail(saved))
+    for start in range(0, len(missing), BATCH_SIZE):
+        batch = missing[start:start + BATCH_SIZE]
+        calls = [(method, [scripthash]) for scripthash in batch]
+        rows = await asyncio.to_thread(_electrum_request_many, host, port, calls, BATCH_TIMEOUT, plain)
+        for scripthash, value in zip(batch, rows):
+            _script_cache_put(method, scripthash, value)
+            found[scripthash] = value
+    return found
+
+
+def _electrum_request_many(
+    host: str,
+    port: int,
+    calls: list[tuple[str, list[Any]]],
+    timeout: float,
+    plain: bool,
+) -> list[Any]:
+    last: BaseException | None = None
+    for _attempt in range(2):
+        try:
+            return _electrum_exchange(host, port, calls, timeout, plain)
+        except (TimeoutError, socket.timeout) as exc:
+            last = exc
+            continue
+    assert last is not None
+    raise last
+
+
 async def electrs_status() -> dict[str, Any]:
+    global _PROBE_STEPS
     saved_host, _saved_port = _configured_endpoint()
     host, port, via, _plain = await asyncio.to_thread(resolve_electrs)
+    steps = list(_PROBE_STEPS)
+    where = f"{host}:{port}" if host else ""
+
+    async def _step(name: str, method: str, params: list[Any]) -> Any:
+        started = time.perf_counter()
+        try:
+            result = await electrs_call(method, params)
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"name": name, "ok": False, "ms": _ms(started), "detail": _failure_text(exc)})
+            return None
+        detail = ""
+        if name == "server.features" and isinstance(result, dict):
+            detail = "ok"
+        elif name == "blockchain.headers.subscribe" and isinstance(result, dict) and result.get("height") is not None:
+            detail = f"altezza {result.get('height')}"
+        elif name.startswith("scripthash"):
+            detail = "ok" if result is not None else ""
+        steps.append({"name": name, "ok": True, "ms": _ms(started), "detail": detail})
+        return result
+
+    height = None
+    indexing = False
+    if host:
+        await _step("server.features", "server.features", [])
+        headers = await _step("blockchain.headers.subscribe", "blockchain.headers.subscribe", [])
+        if isinstance(headers, dict):
+            height = headers.get("height")
+        await _step(
+            "scripthash.get_balance",
+            "blockchain.scripthash.get_balance",
+            ["00" * 32],
+        )
+        if height == 0 or any(
+            not step.get("ok") and _INDEX_RE.search(str(step.get("detail") or ""))
+            for step in steps
+        ):
+            indexing = True
+    diag_steps = steps
+    _PROBE_STEPS = diag_steps
     diag = electrs_diagnostics()
     base = {
         "configured": bool(saved_host or host),
         "detected": via not in {"configured", "missing"},
-        "connected": False,
-        "indexing": False,
+        "connected": bool(host),
+        "indexing": indexing,
         "host": host,
         "port": port,
-        "via": "" if via in {"", "missing"} else (f"{host}:{port}" if host else ""),
+        "via": where,
         "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
         "attempts": diag["attempts"],
         "network": diag["network"],
+        "steps": diag["steps"],
+        "height": height,
     }
     if not host:
         return {**base, "detail": _offline_detail(saved_host)}
-    where = f"{host}:{port}"
-    try:
-        await electrs_call("server.version", ["monitor-defi", "1.4"])
-        height = None
-        try:
-            headers = await electrs_call("blockchain.headers.subscribe", [])
-            if isinstance(headers, dict):
-                height = headers.get("height")
-        except Exception as exc:  # noqa: BLE001
-            if _INDEX_RE.search(str(exc)):
-                return {
-                    **base,
-                    "indexing": True,
-                    "height": height,
-                    "detail": f"Collegato via {where}. Electrs sta ancora indicizzando la blockchain.",
-                }
-            raise
-        indexing = height in (None, 0)
-        if not indexing:
-            try:
-                await electrs_call("blockchain.scripthash.get_balance", ["00" * 32])
-            except Exception as exc:  # noqa: BLE001
-                if _INDEX_RE.search(str(exc)):
-                    indexing = True
-                else:
-                    raise
-        if indexing:
-            return {
-                **base,
-                "indexing": True,
-                "height": height,
-                "detail": f"Collegato via {where}. Electrs sta ancora indicizzando.",
-            }
-        note = ""
-        if via != "configured" and saved_host and saved_host != host:
-            note = " " + local_host_hint(saved_host) if local_host_hint(saved_host) else (
-                f" L'host salvato {saved_host} non risponde da questo contenitore."
-            )
-        return {
-            **base,
-            "configured": True,
-            "connected": True,
-            "height": height,
-            "detail": f"Collegato via {where}.{note} Altezza blocco {height}.",
-        }
-    except Exception as exc:  # noqa: BLE001
-        _forget_working()
-        return {
-            **base,
-            "detail": f"Electrs non è raggiungibile su {where}. {exc}",
-        }
+    failed = [step for step in diag_steps if not step.get("ok")]
+    note = ""
+    if via != "configured" and saved_host and saved_host != host:
+        note = " " + local_host_hint(saved_host) if local_host_hint(saved_host) else (
+            f" L'host salvato {saved_host} non risponde da questo contenitore."
+        )
+    if indexing:
+        detail = f"Collegato via {where}.{note} Electrs sta ancora indicizzando."
+    elif failed:
+        first = failed[0]
+        detail = (
+            f"Collegato via {where}.{note} {first['name']} non è riuscito "
+            f"({first.get('detail') or 'errore'}, {first.get('ms')} ms)."
+        )
+    else:
+        detail = f"Collegato via {where}.{note} Altezza blocco {height}."
+    return {**base, "configured": True, "detail": detail}
 
 
 async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[str, Any]:
@@ -712,18 +897,24 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
     reuse: list[str] = []
     dust: list[dict[str, Any]] = []
 
-    for item in addrs:
-        sh = _scripthash(item["scriptpubkey"])
-        try:
-            raw_bal = await electrs_call("blockchain.scripthash.get_balance", [sh])
-            hist = await electrs_call("blockchain.scripthash.get_history", [sh])
-            unspent = await electrs_call("blockchain.scripthash.listunspent", [sh])
-        except Exception as exc:  # noqa: BLE001
-            if _INDEX_RE.search(str(exc)):
-                status = {**status, "indexing": True, "connected": False, "detail": str(exc)}
-                break
+    hashes = [_scripthash(item["scriptpubkey"]) for item in addrs]
+    try:
+        balances = await query_scripthashes("blockchain.scripthash.get_balance", hashes)
+        histories = await query_scripthashes("blockchain.scripthash.get_history", hashes)
+        unspents = await query_scripthashes("blockchain.scripthash.listunspent", hashes)
+    except Exception as exc:  # noqa: BLE001
+        if _INDEX_RE.search(str(exc)):
+            status = {**status, "indexing": True, "connected": False, "detail": str(exc)}
+            balances, histories, unspents = {}, {}, {}
+        else:
             log.warning("Lettura Electrs non riuscita (%s).", type(exc).__name__)
+            balances, histories, unspents = {}, {}, {}
+    for item, sh in zip(addrs, hashes):
+        if sh not in balances and sh not in histories:
             continue
+        raw_bal = balances.get(sh) or {}
+        hist = histories.get(sh) or []
+        unspent = unspents.get(sh) or []
         if isinstance(unspent, list):
             utxo_count += len(unspent)
         confirmed = int((raw_bal or {}).get("confirmed") or 0)
@@ -752,15 +943,33 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
     txs.sort(key=lambda t: t.get("height") or 0, reverse=True)
     recent: list[dict[str, Any]] = []
     seen_tx: set[str] = set()
+    ordered: list[dict[str, Any]] = []
     for ev in txs:
         txid = ev.get("txid")
         if not txid or txid in seen_tx:
             continue
         seen_tx.add(txid)
+        ordered.append(ev)
+        if len(ordered) >= 12:
+            break
+    raw_by_id: dict[str, Any] = {}
+    if ordered:
         try:
-            raw_tx = await electrs_call("blockchain.transaction.get", [txid, True])
+            tx_host, tx_port, _tx_via, tx_plain = await asyncio.to_thread(resolve_electrs)
+            fetched = await asyncio.to_thread(
+                _electrum_request_many,
+                tx_host,
+                tx_port,
+                [("blockchain.transaction.get", [ev["txid"], True]) for ev in ordered],
+                BATCH_TIMEOUT,
+                tx_plain,
+            ) if tx_host else []
+            raw_by_id = {ev["txid"]: value for ev, value in zip(ordered, fetched)}
         except Exception:
-            raw_tx = None
+            raw_by_id = {}
+    for ev in ordered:
+        txid = ev.get("txid")
+        raw_tx = raw_by_id.get(txid)
         direction = "Ricevuto"
         amount_sats = 0
         if isinstance(raw_tx, dict):

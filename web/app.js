@@ -428,8 +428,14 @@ function electrsDiagnostic(row) {
   const net = row.network || {};
   if (!attempts.length && !(net.ips || net.networks || net.gateway)) return "";
   const lines = attempts.map((item) => {
-    const result = item.ok ? "risponde" : (item.error || "errore");
-    return `<li><code>${escapeHtml(item.host)}:${escapeHtml(item.port)}</code> — ${escapeHtml(result)}</li>`;
+    const result = item.ok ? "TCP e server.version ok" : (item.error || "errore");
+    const elapsed = item.ms != null ? ` · ${item.ms} ms` : "";
+    return `<li><code>${escapeHtml(item.host)}:${escapeHtml(item.port)}</code> — ${escapeHtml(result)}${elapsed}</li>`;
+  }).join("");
+  const steps = (row.steps || []).map((step) => {
+    const outcome = step.ok ? (step.detail || "ok") : (step.detail || step.error || "errore");
+    const elapsed = step.ms != null ? `${step.ms} ms` : "n/d";
+    return `<li>${escapeHtml(step.name)} — ${escapeHtml(outcome)} · ${escapeHtml(elapsed)}</li>`;
   }).join("");
   const ips = (net.ips || []).join(", ") || "n/d";
   const networks = (net.networks || []).join(", ") || "n/d";
@@ -438,7 +444,9 @@ function electrsDiagnostic(row) {
   const injected = net.electrs_ip ? ` · APP_ELECTRS_NODE_IP: ${escapeHtml(net.electrs_ip)}:${escapeHtml(net.electrs_port || "")}` : "";
   return `<details class="electrs-diag"><summary>Diagnostica Electrs</summary>
     <p class="mini">IP del contenitore: ${escapeHtml(ips)} · Reti: ${escapeHtml(networks)} · Gateway: ${escapeHtml(gateway)}${domain}${injected}</p>
-    <ul>${lines}</ul></details>`;
+    <ul>${lines}</ul>
+    ${steps ? `<p class="mini">Passi sul server scelto</p><ul>${steps}</ul>` : ""}
+    </details>`;
 }
 function renderRows(el, rows) {
   if (!rows.length) {
