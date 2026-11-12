@@ -572,10 +572,10 @@ async def get_btc_sec(owner: str = Query("tutti")) -> dict[str, Any]:
 
 
 @app.post("/api/refresh")
-async def refresh_now(owner: str = Query("tutti")) -> dict[str, Any]:
-    """Force a portfolio read. The body is the portfolio, including errors."""
+async def refresh_now(owner: str = Query("tutti"), full: bool = Query(False)) -> dict[str, Any]:
+    """Force a portfolio read. full=1 also drops the lazy NFT cache."""
     try:
-        data = await snapshot(owner, force=True)
+        data = await snapshot(owner, force=True, fresh_nfts=full)
     except Exception as exc:  # noqa: BLE001
         _log.exception("refresh failed")
         return failed_view(owner, [f"Ricalcolo non riuscito: {exc}"])

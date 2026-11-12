@@ -65,6 +65,16 @@ def test_susds_stays_available_and_a_spike_uses_the_thirty_day_rate():
     assert idea["url"] == "https://app.sky.money/?widget=savings"
 
 
+def test_duplicate_market_quotes_stay_one_suggestion():
+    src = _pos("io", "Aave", "USDC", 20_000, 3.0)
+    alt = {"protocol": "Compound", "asset": "USDC", "apy": 5.0, "apy30": 5.0, "owner": None}
+    src["alternatives"] = [alt, dict(alt), dict(alt)]
+    ideas = suggest_switches([src], gas_usd=1)
+    assert len(ideas) == 1
+    assert ideas[0]["to_apy"] == 5.0
+    assert ideas[0]["from_apy"] == 3.0
+
+
 def test_held_row_apy_wins_over_a_different_market_quote():
     rows = [
         _pos("io", "Aave", "USDC", 20_000, 4.5),

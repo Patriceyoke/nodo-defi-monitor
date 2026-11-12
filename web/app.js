@@ -100,7 +100,14 @@ function updatedClock(ts) {
   if (!ts) return "";
   const date = new Date(Number(ts) * 1000);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+  const time = date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+  const now = new Date();
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  if (sameDay) return time;
+  const day = date.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" });
+  return day + " " + time;
 }
 
 function bindSegmented() {
@@ -342,7 +349,9 @@ function renderPositions(data) {
     const io = pack.io || {};
     const moglie = pack.moglie || {};
     const count = (io.count || 0) + (moglie.count || 0);
-    summary.textContent = `${count} posizioni · Io ${money(io.usd || 0)} · Moglie ${money(moglie.usd || 0)}`;
+    summary.textContent = count
+      ? `${count} posizioni · Io ${money(io.usd || 0)} · Moglie ${money(moglie.usd || 0)}`
+      : "Nessuna posizione";
   }
   const details = $("#positions-details");
   if (details && !state.positionsOpenApplied && typeof data.positions_open === "boolean") {
@@ -400,7 +409,7 @@ function renderSwitches(data) {
     return `
     <div class="callout warn">
       <strong>${escapeHtml(s.lead)}</strong>
-      <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
+      <div class="metrics compact">
         ${metric("APY", pct(s.from_apy) + " → " + pct(s.to_apy))}
         ${metric("Rischio", escapeHtml(s.from_risk) + " → " + escapeHtml(s.to_risk))}
         ${metric("Guadagno dopo il gas", "+" + money(s.net_year_usd), "stima annua · " + OWNER_LABEL[s.owner])}
@@ -767,9 +776,9 @@ function paintFreshness(data) {
   const sources = (data && data.sources) || {};
   const parts = Object.values(sources).map((item) => {
     const when = item.at ? updatedClock(item.at) : "n/d";
-    const stale = !item.ok || state.stale || state.refreshing;
-    const text = `${item.label || ""} ${when}`.trim();
-    return stale ? `<span class="warn-text">${escapeHtml(text)}</span>` : escapeHtml(text);
+    const failed = !item.ok;
+    const text = `${item.label || ""} ${when}${failed ? " · non letto" : ""}`.trim();
+    return failed ? `<span class="warn-text">${escapeHtml(text)}</span>` : escapeHtml(text);
   });
   line.innerHTML = parts.join(" · ");
 }
@@ -783,7 +792,9 @@ async function load(force, extra) {
   else state.stale = true;
   if (state.data) render();
   const owner = encodeURIComponent(state.owner);
-  const path = force ? "/api/refresh?owner=" + owner : "/api/portfolio?owner=" + owner;
+  const path = force
+    ? "/api/refresh?owner=" + owner + (full ? "&full=1" : "")
+    : "/api/portfolio?owner=" + owner;
   const opts = force ? { method: "POST" } : {};
   try {
     const data = await api(path, opts);
@@ -796,10 +807,14 @@ async function load(force, extra) {
     if (force) {
       const nftOpen = $("#nft-details") && $("#nft-details").open;
       const secOpen = $("#security-details") && $("#security-details").open;
-      state.nfts = null;
-      state.security = null;
-      if (full || nftOpen) loadNfts(true);
-      if (full || secOpen) loadSecurity(true);
+      if (full || nftOpen) {
+        state.nfts = null;
+        loadNfts(true);
+      }
+      if (full || secOpen) {
+        state.security = null;
+        loadSecurity(true);
+      }
     }
   } catch (err) {
     if (gen !== loadGen) return;
@@ -1072,7 +1087,10 @@ async function boot() {
       api("/api/settings", {
         method: "PUT",
         body: JSON.stringify({ positions_open: posDetails.open }),
-      }).catch(() => {});
+      }).catch(() => {
+        const existing = (state.data && state.data.errors) || [];
+        showBanner(existing.concat(["Non sono riuscito a ricordare se Posizioni è aperta. Gli indirizzi non sono stati toccati."]));
+      });
     });
   }
   await load(false);

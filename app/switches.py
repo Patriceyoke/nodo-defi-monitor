@@ -226,10 +226,13 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
     for owner, rows in by_owner.items():
         held = {(row.get("protocol"), row.get("asset")) for row in rows}
         extras = []
+        seen_extra: set[tuple[Any, Any]] = set()
         for row in rows:
             for alt in row.get("alternatives") or []:
-                if (alt.get("protocol"), alt.get("asset")) in held:
+                key = (alt.get("protocol"), alt.get("asset"))
+                if key in held or key in seen_extra:
                     continue
+                seen_extra.add(key)
                 extras.append(alt)
         destinations = list(rows) + extras
         for src in rows:

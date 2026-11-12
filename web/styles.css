@@ -66,6 +66,10 @@ header.appbar .wrap { display: flex; align-items: center; gap: 14px; padding-top
 .btn.primary { background: var(--teal); color: white; border-color: transparent; }
 .btn.ghost { background: transparent; }
 .btn:hover { filter: brightness(0.98); transform: translateY(-1px); }
+.btn:focus-visible, summary:focus-visible, a:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
   border-radius: 999px; padding: 4px 10px; font-size: 0.78rem; font-weight: 700;
@@ -162,7 +166,10 @@ form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .nft-card h3 { margin: 8px 0 2px; font-size: 1rem; }
 .lp-fold { margin-top: 16px; }
 .lp-fold summary { cursor: pointer; font-weight: 700; }
-#nft-details > summary, #security-details > summary, #positions-details > summary { cursor: pointer; list-style: none; }
+#nft-details > summary, #security-details > summary, #positions-details > summary {
+  cursor: pointer; list-style: none; display: block; min-height: 44px; padding: 2px 0 6px;
+}
+.metrics.compact { grid-template-columns: repeat(3, 1fr); }
 #nft-details > summary::-webkit-details-marker, #security-details > summary::-webkit-details-marker, #positions-details > summary::-webkit-details-marker { display: none; }
 #nft-details > summary h2, #security-details > summary h2, #positions-details > summary h2 { display: inline; }
 #nft-details > summary h2::before, #security-details > summary h2::before, #positions-details > summary h2::before { content: "▸ "; }
@@ -175,7 +182,12 @@ form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .grid.two, .grid.three, form .row { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  .metrics { grid-template-columns: 1fr; }
+  .metrics, .metrics.compact { grid-template-columns: 1fr; }
   header.appbar .wrap { flex-wrap: wrap; }
+  .btn, button.btn { min-height: 44px; }
   th, td { padding: 8px 4px; font-size: 0.85rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .btn:hover { transform: none; }
 }

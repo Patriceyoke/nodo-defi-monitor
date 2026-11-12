@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.2.4"
+version: "0.2.5"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,13 +23,11 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.2.4: i suggerimenti usano gli stessi APY e gli stessi saldi delle
-  posizioni. stUSDS è rischio medio e apre il widget stUSDS; sUSDS resta
-  il risparmio Sky. Se l'APY live è più del doppio della media a 30 giorni
-  compare «APY instabile» e il guadagno usa la media. Aggiorna rilegge
-  prezzi, APY e cambio, e finché il ricalcolo non è finito la pagina dice
-  «dati del». La sezione Posizioni si apre e si chiude e ricorda lo stato.
-  Indirizzi, impostazioni e voci nascoste restano.
+  0.2.5: piccoli ritocchi dopo il controllo di 0.2.4. L'orario dice anche
+  il giorno se i dati non sono di oggi, una fonte non letta è segnata
+  «non letto», e la cache NFT resta finché non premi Aggiorna. Posizioni
+  vuote dicono «Nessuna posizione». I pulsanti e le sezioni sono più
+  comodi da toccare. Indirizzi, impostazioni e voci nascoste restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

@@ -122,7 +122,18 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
             "view": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
         },
         "wallet_count": _STATUS.get("wallet_count") or 0,
+        "saved": False,
+        "positions_open": _positions_open_setting(),
+        "position_summary": {"io": {"count": 0, "usd": 0.0}, "moglie": {"count": 0, "usd": 0.0}},
+        "sources": {},
     }
+
+
+def _positions_open_setting() -> bool:
+    try:
+        return (db.get_setting("positions_open", "1") or "1") != "0"
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _security_summary(owner: str) -> dict[str, Any]:
@@ -373,7 +384,7 @@ def _empty_raw() -> dict[str, Any]:
     }
 
 
-async def refresh(force: bool = False) -> dict[str, Any]:
+async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str, Any]:
     global _SNAPSHOT, _SNAPSHOT_AT
     async with _LOCK:
         now = time.time()
@@ -385,7 +396,10 @@ async def refresh(force: bool = False) -> dict[str, Any]:
         _STATUS["last_started_at"] = time.time()
         _STATUS["last_ok"] = None
         markets.invalidate()
-        nft.invalidate_caches()
+        # NFT inventory is lazy. Only Aggiorna (full) drops it; a startup
+        # refresh still re-reads the balances, prices and APYs that are on screen.
+        if fresh_nfts:
+            nft.invalidate_caches()
         evm_wallets = db.list_evm()
         btc_wallets = db.list_btc()
         positions: list[dict[str, Any]] = []
@@ -621,10 +635,10 @@ async def refresh(force: bool = False) -> dict[str, Any]:
         return snapshot
 
 
-async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
+async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: bool = False) -> dict[str, Any]:
     owner = normalize_owner(owner, allow_all=True)
     try:
-        data = await refresh(force=force)
+        data = await refresh(force=force, fresh_nfts=fresh_nfts)
     except Exception as exc:  # noqa: BLE001
         log.exception("snapshot failed")
         _STATUS["last_ok"] = False
