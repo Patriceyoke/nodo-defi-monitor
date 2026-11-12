@@ -352,6 +352,16 @@ function renderPositions(data) {
     </tr>`).join("");
 }
 
+const YIELD_HOSTS = new Set([
+  "app.aave.com", "app.compound.xyz", "app.spark.finance", "fluid.io",
+  "stake.lido.fi", "app.sky.money", "stake.rocketpool.net", "maple.finance",
+]);
+function yieldLink(url) {
+  let parsed;
+  try { parsed = new URL(String(url || "")); } catch (err) { return ""; }
+  if (parsed.protocol !== "https:" || !YIELD_HOSTS.has(parsed.hostname)) return "";
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Vai alla yield</a>`;
+}
 function renderSwitches(data) {
   const box = $("#switches");
   const all = data.switches || [];
@@ -370,7 +380,7 @@ function renderSwitches(data) {
       <strong>${escapeHtml(s.lead)}</strong>
       Spostare ${money(s.usd)} da ${escapeHtml(s.from)} (${pct(s.from_apy)}, rischio ${escapeHtml(s.from_risk)}) a ${escapeHtml(s.to)} (${pct(s.to_apy)}, rischio ${escapeHtml(s.to_risk)}).
       Stesso rischio o inferiore, rendimento più alto anche dopo il gas (${money(s.gas_usd)}): circa ${money(s.net_year_usd)} in più all'anno. È solo una proposta.
-      <p><button class="btn" type="button" data-switch-${s.hidden ? "unhide" : "hide"} data-owner="${escapeHtml(s.owner || "")}" data-from="${escapeHtml(s.from || "")}" data-to="${escapeHtml(s.to || "")}" data-spread="${escapeHtml(s.spread)}">${s.hidden ? "Ripristina" : "Nascondi"}</button></p>
+      <p>${yieldLink(s.url)} <button class="btn" type="button" data-switch-${s.hidden ? "unhide" : "hide"} data-owner="${escapeHtml(s.owner || "")}" data-from="${escapeHtml(s.from || "")}" data-to="${escapeHtml(s.to || "")}" data-spread="${escapeHtml(s.spread)}">${s.hidden ? "Ripristina" : "Nascondi"}</button></p>
     </div>
     <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
       ${metric("APY", pct(s.from_apy) + " → " + pct(s.to_apy))}

@@ -4,12 +4,111 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from urllib.parse import urlparse
+
 from .config import ETH_ASSETS, PROTOCOL_RISK, RISK_RANK, STABLE_ASSETS, SWITCH_GAS_UNITS
 from . import evm
+from .protocols import DAI, USDC, USDT, USDS, WETH
+
+# Only these hosts may appear on a suggestion. No aggregators and no pasted URLs.
+OFFICIAL_HOSTS = frozenset({
+    "app.aave.com",
+    "app.compound.xyz",
+    "app.spark.finance",
+    "fluid.io",
+    "stake.lido.fi",
+    "app.sky.money",
+    "stake.rocketpool.net",
+    "maple.finance",
+})
+
+_AAVE_UNDERLYING = {"USDC": USDC, "USDT": USDT, "DAI": DAI, "WETH": WETH, "ETH": WETH}
+_COMPOUND_MARKET = {"USDC": "usdc-mainnet", "USDT": "usdt-mainnet", "WETH": "weth-mainnet", "ETH": "weth-mainnet"}
+_SPARK_SAVINGS = {"USDC": "spusdc", "USDT": "spusdt"}
+_KNOWN_PROTOCOLS = (
+    "Rocket Pool", "SparkLend", "Fluid BNB", "Compound", "Aave", "Spark", "Fluid", "Lido", "Sky", "Maple",
+)
 
 BUCKET_STABLE = "stable"
 BUCKET_ETH = "eth"
 BUCKET_OTHER = "other"
+
+
+def _official(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "") not in OFFICIAL_HOSTS:
+        return ""
+    return url
+
+
+def split_destination(label: str) -> tuple[str, str]:
+    text = (label or "").strip()
+    for name in _KNOWN_PROTOCOLS:
+        prefix = name + " "
+        if text.startswith(prefix):
+            return name, text[len(prefix):].strip()
+    return "", text
+
+
+def official_yield_url(protocol: str, asset: str) -> str:
+    """Deep link to the official app for this market, or that app's homepage."""
+    name = (protocol or "").strip()
+    symbol = (asset or "").strip().upper()
+    if name == "Aave":
+        underlying = _AAVE_UNDERLYING.get(symbol)
+        if underlying:
+            return _official(
+                "https://app.aave.com/reserve-overview/"
+                f"?underlyingAsset={underlying}&marketName=proto_mainnet_v3"
+            )
+        return _official("https://app.aave.com/")
+    if name == "Compound":
+        market = _COMPOUND_MARKET.get(symbol)
+        if market:
+            return _official(f"https://app.compound.xyz/markets/{market}")
+        return _official("https://app.compound.xyz/")
+    if name == "Spark":
+        vault = _SPARK_SAVINGS.get(symbol)
+        if vault:
+            return _official(f"https://app.spark.finance/savings/{vault}")
+        return _official("https://app.spark.finance/savings")
+    if name == "SparkLend":
+        underlying = _AAVE_UNDERLYING.get(symbol)
+        if underlying:
+            return _official(
+                "https://app.spark.finance/reserve-overview/"
+                f"?underlyingAsset={underlying}&marketName=proto_spark_v3"
+            )
+        return _official("https://app.spark.finance/markets")
+    if name == "Fluid":
+        return _official("https://fluid.io/1/lending")
+    if name == "Fluid BNB":
+        return _official("https://fluid.io/")
+    if name == "Lido":
+        if symbol == "WSTETH":
+            return _official("https://stake.lido.fi/wrap")
+        return _official("https://stake.lido.fi/")
+    if name == "Sky":
+        if symbol == "STUSDS":
+            return _official("https://app.sky.money/stake")
+        if symbol in {"SUSDS", "USDS"}:
+            return _official("https://app.sky.money/savings")
+        return _official("https://app.sky.money/")
+    if name == "Rocket Pool":
+        return _official("https://stake.rocketpool.net/")
+    if name == "Maple":
+        return _official("https://maple.finance/")
+    return ""
+
+
+def with_official_url(idea: dict[str, Any]) -> dict[str, Any]:
+    row = dict(idea)
+    protocol = str(row.get("to_protocol") or "")
+    asset = str(row.get("to_asset") or "")
+    if not protocol:
+        protocol, asset = split_destination(str(row.get("to") or ""))
+    row["url"] = official_yield_url(protocol, asset)
+    return row
 
 
 def bucket(asset: str) -> str:
@@ -76,6 +175,7 @@ def mark_switch_hides(
     for idea in ideas:
         row = dict(idea)
         row["spread"] = switch_spread(row)
+        row["url"] = with_official_url(row)["url"]
         key = (row["owner"], row["from"], row["to"])
         remembered = saved.get(key)
         row["hidden"] = switch_is_hidden(
@@ -150,7 +250,10 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
                         "gas_usd": gas_usd,
                         "gross_year_usd": round(gross, 2),
                         "net_year_usd": round(net, 2),
+                        "to_protocol": dest["protocol"],
+                        "to_asset": dest["asset"],
                         "lead": f"{_owner_label(owner)}: {src['protocol']} {src['asset']} verso {dest['protocol']} {dest['asset']}",
+                        "url": official_yield_url(dest["protocol"], dest["asset"]),
                     }
                 )
     # Keep the best idea per source position

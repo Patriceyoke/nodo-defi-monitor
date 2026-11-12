@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.2.2"
+version: "0.2.3"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,9 +23,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.2.2: ogni suggerimento di switch ha Nascondi. Torna se il vantaggio
-  cresce di almeno un punto, se cambia la destinazione, o dopo 7 giorni.
-  Mostra nascosti lo riporta subito. Gli indirizzi restano.
+  0.2.3: ogni suggerimento di switch ha «Vai alla yield», un link
+  all'app ufficiale del protocollo di destinazione, sul mercato preciso
+  quando esiste. Si apre in una nuova scheda. Gli indirizzi restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

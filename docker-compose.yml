@@ -3,7 +3,7 @@
 services:
   web:
     build: .
-    image: nodo-defi-monitor:0.2.2
+    image: nodo-defi-monitor:0.2.3
     user: "1000:1000"
     init: true
     restart: unless-stopped

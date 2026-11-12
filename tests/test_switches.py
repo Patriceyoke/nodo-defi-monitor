@@ -1,5 +1,15 @@
 
-from app.switches import estimate_gas_usd, mark_switch_hides, suggest_switches, switch_is_hidden
+from urllib.parse import urlparse
+
+from app.protocols import USDC
+from app.switches import (
+    OFFICIAL_HOSTS,
+    estimate_gas_usd,
+    mark_switch_hides,
+    official_yield_url,
+    suggest_switches,
+    switch_is_hidden,
+)
 
 
 def _pos(owner, protocol, asset, usd, apy, risk=None):
@@ -96,6 +106,32 @@ def test_switch_hide_survives_restart(tmp_path, monkeypatch):
     db.init_db()
     assert db.list_evm()[0]["label"] == "Casa"
     assert db.list_switch_hides()[0]["spread"] == 1.6
+
+
+def test_yield_links_stay_on_official_apps():
+    aave = official_yield_url("Aave", "USDC")
+    assert "underlyingAsset=" + USDC in aave
+    assert "marketName=proto_mainnet_v3" in aave
+    assert official_yield_url("Compound", "WETH") == "https://app.compound.xyz/markets/weth-mainnet"
+    assert official_yield_url("Spark", "USDT") == "https://app.spark.finance/savings/spusdt"
+    assert "proto_spark_v3" in official_yield_url("SparkLend", "USDC")
+    assert official_yield_url("Lido", "wstETH") == "https://stake.lido.fi/wrap"
+    assert official_yield_url("Sky", "stUSDS") == "https://app.sky.money/stake"
+    assert official_yield_url("Fluid", "USDC") == "https://fluid.io/1/lending"
+    assert official_yield_url("Not a protocol", "USDC") == ""
+    for protocol, asset in (
+        ("Aave", "DAI"), ("Compound", "ETH"), ("Spark", "USDC"), ("SparkLend", "WETH"),
+        ("Fluid BNB", "USDT"), ("Lido", "stETH"), ("Sky", "sUSDS"),
+        ("Rocket Pool", "rETH"), ("Maple", "USDC"), ("Aave", "UNKNOWN"),
+    ):
+        url = official_yield_url(protocol, asset)
+        assert url.startswith("https://")
+        assert urlparse(url).hostname in OFFICIAL_HOSTS
+    ideas = suggest_switches([
+        _pos("io", "Aave", "USDT", 15_000, 3.6),
+        _pos("io", "Compound", "USDT", 1_000, 5.2),
+    ], gas_usd=10)
+    assert ideas[0]["url"] == "https://app.compound.xyz/markets/usdt-mainnet"
 
 
 def test_gas_estimate():
