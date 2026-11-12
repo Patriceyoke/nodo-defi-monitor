@@ -1,17 +1,25 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: 0.92, nfts: null, showHiddenNfts: false };
+const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false };
 const charts = {};
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
+function formatAmount(n) {
+  const abs = Math.abs(n);
+  const digits = abs >= 100 || abs === 0 ? 0 : 2;
+  return n.toLocaleString("th-TH", { minimumFractionDigits: 0, maximumFractionDigits: digits });
+}
 function money(usd, cur = state.currency) {
   const n0 = Number(usd);
   if (!Number.isFinite(n0)) return "n/d";
-  const n = cur === "EUR" ? n0 * (state.fx || 0.92) : n0;
-  return n.toLocaleString("it-IT", { maximumFractionDigits: 0 }) + (cur === "EUR" ? " €" : " $");
+  if (cur === "THB") {
+    if (!state.fx) return "n/d";
+    return "฿" + formatAmount(n0 * state.fx);
+  }
+  return formatAmount(n0) + " $";
 }
 function pct(n) {
   if (n == null || Number.isNaN(n)) return "—";
@@ -89,8 +97,42 @@ function renderMetrics(data) {
     metric("Moglie", money(t.moglie.total_usd), `DeFi ${money(t.moglie.defi_usd)} + BTC ${money(t.moglie.btc_usd)}`, "moglie"),
     metric("Combinato", money(t.tutti.total_usd), `DeFi ${money(t.tutti.defi_usd)} + BTC ${money(t.tutti.btc_usd)}`, "tutti"),
     metric("APY DeFi (" + OWNER_LABEL[state.owner] + ")", pct(view.wapy), ""),
-    metric("Reddito annuo DeFi", money(view.year_usd), "circa " + money(view.year_usd / 12) + " al mese, a APY fermi"),
   ].join("");
+  renderIncome(data);
+}
+function renderIncome(data) {
+  const box = $("#income-cards");
+  const body = $("#income-body");
+  if (!box || !body) return;
+  const inc = data.income;
+  if (!inc) {
+    box.innerHTML = "";
+    body.innerHTML = "";
+    return;
+  }
+  box.innerHTML = ["io", "moglie", "tutti"].map((key) => {
+    const row = inc[key] || {};
+    const selected = state.owner === key ? " selected" : "";
+    return `<div class="metric${selected}">
+      <div class="label">Reddito · ${OWNER_LABEL[key]}</div>
+      <div class="value">${money(row.month_usd)}</div>
+      <div class="detail">al mese · settimana ${money(row.week_usd)} · anno ${money(row.year_usd)}</div>
+      <div class="detail">${pct(row.apy_month)} al mese · ${pct(row.apy_year)} annuo</div>
+    </div>`;
+  }).join("");
+  const table = inc.by_protocol || {};
+  const rows = Array.isArray(table) ? table : (table[state.owner] || []);
+  body.innerHTML = rows.length ? rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.protocol)}</td>
+      <td class="num">${money(row.usd)}</td>
+      <td class="num">${pct(row.apy_month)}</td>
+      <td class="num">${pct(row.apy_year)}</td>
+      <td class="num">${money(row.week_usd)}</td>
+      <td class="num">${money(row.month_usd)}</td>
+      <td class="num">${money(row.year_usd)}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="7" class="mini">Nessun reddito stimato in questa vista. Serve un APY sulla posizione.</td></tr>`;
 }
 function metric(label, value, detail, klass) {
   return `<div class="metric ${klass || ""}"><div class="value">${value}</div><div class="label">${label}</div>${detail ? `<div class="detail">${detail}</div>` : ""}</div>`;
@@ -159,8 +201,8 @@ function renderHist(data) {
     byBucket.set(bucket, h);
   });
   const hist = [...byBucket.values()];
-  const unit = state.currency === "EUR" ? "€" : "$";
-  const fx = state.currency === "EUR" ? (state.fx || 0.92) : 1;
+  const unit = state.currency === "THB" ? "฿" : "$";
+  const fx = state.currency === "THB" ? (state.fx || 0) : 1;
   const labels = hist.map((h) => {
     const d = new Date(h.ts * 1000);
     return d.toLocaleDateString("it-IT", { day: "numeric", month: "short" });
@@ -439,7 +481,11 @@ function render() {
   data.security = data.security || [];
   data.btc_security = data.btc_security || [];
   try {
-    state.fx = data.fx_eur || 0.92;
+    if (data.currency === "USD" || data.currency === "THB") state.currency = data.currency;
+    state.fx = data.fx_thb || null;
+    document.querySelectorAll('[data-key="currency"] button').forEach((button) => {
+      button.classList.toggle("on", button.dataset.value === state.currency);
+    });
     $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.btc_wallets.length || data.wallet_count));
     renderMetrics(data);
     renderAlloc(data);
@@ -472,7 +518,7 @@ async function load(force) {
   try {
     const data = await api(path, opts);
     state.data = data;
-    if (data.fx_eur) state.fx = data.fx_eur;
+    if (data.fx_thb) state.fx = data.fx_thb;
     render();
     loadNfts();
   } catch (err) {

@@ -42,11 +42,37 @@
         </div>
         <div class="segmented" data-key="currency">
           <button data-value="USD" class="on" type="button">USD</button>
-          <button data-value="EUR" type="button">EUR</button>
+          <button data-value="THB" type="button">THB</button>
         </div>
       </div>
       <div class="metrics" id="metrics"></div>
       <p class="empty hidden" id="empty-state">Nessun indirizzo o xpub ancora. Apri Impostazioni e aggiungi solo chiavi pubbliche, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
+    </section>
+
+    <section class="card" id="income">
+      <div class="card-head">
+        <div>
+          <h2>Reddito</h2>
+          <p class="caption">Stima agli APY attuali. Il dollaro o il baht è l'anno diviso in settimana e mese. La percentuale mensile è (1+APY)<sup>1/12</sup>−1. Io, Moglie e Combinato restano visibili.</p>
+        </div>
+      </div>
+      <div class="metrics" id="income-cards"></div>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Protocollo</th>
+              <th class="num">Valore</th>
+              <th class="num">% mese</th>
+              <th class="num">APY</th>
+              <th class="num">Settimana</th>
+              <th class="num">Mese</th>
+              <th class="num">Anno</th>
+            </tr>
+          </thead>
+          <tbody id="income-body"></tbody>
+        </table>
+      </div>
     </section>
 
     <div class="grid two">

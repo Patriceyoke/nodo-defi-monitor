@@ -118,7 +118,7 @@ def init_db() -> None:
             "electrs_host": "",
             "electrs_port": "50001",
             "currency": "USD",
-            "fx_eur": "0.92",
+            "fx_thb": "",
             "gas_estimate_usd": "",
             "nft_api_provider": "",
             "nft_api_key": "",

@@ -80,7 +80,15 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
         "ts": int(time.time()),
         "rpc_ok": False,
         "errors": errors,
-        "fx_eur": 0.92,
+        "fx_thb": None,
+        "currency": "USD",
+        "income": {
+            "io": {"week_usd": 0.0, "month_usd": 0.0, "year_usd": 0.0, "apy_year": 0.0, "apy_month": 0.0},
+            "moglie": {"week_usd": 0.0, "month_usd": 0.0, "year_usd": 0.0, "apy_year": 0.0, "apy_month": 0.0},
+            "tutti": {"week_usd": 0.0, "month_usd": 0.0, "year_usd": 0.0, "apy_year": 0.0, "apy_month": 0.0},
+            "view": {"week_usd": 0.0, "month_usd": 0.0, "year_usd": 0.0, "apy_year": 0.0, "apy_month": 0.0},
+            "by_protocol": {"io": [], "moglie": [], "tutti": []},
+        },
         "gas_usd": 0.0,
         "eth_price_usd": 0.0,
         "btc_price_usd": None,
@@ -104,6 +112,56 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
 
 def filter_owner(owner: str, item_owner: str) -> bool:
     return owner == "tutti" or owner == item_owner
+
+
+def monthly_yield_pct(apy_pct: float) -> float:
+    """Compound monthly rate, in percent: (1+APY)^(1/12)-1."""
+    try:
+        apy = float(apy_pct)
+    except (TypeError, ValueError):
+        return 0.0
+    if apy <= -100:
+        return 0.0
+    return ((1.0 + apy / 100.0) ** (1.0 / 12.0) - 1.0) * 100.0
+
+
+def income_figures(positions: list[dict[str, Any]]) -> dict[str, float]:
+    """Dollar income is the annual APY split into a week, a month and a year."""
+    st = stats(positions)
+    year = float(st["year_usd"])
+    apy = float(st["wapy"])
+    return {
+        "week_usd": year / 52.0,
+        "month_usd": year / 12.0,
+        "year_usd": year,
+        "apy_year": apy,
+        "apy_month": monthly_yield_pct(apy),
+    }
+
+
+def income_by_protocol(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, float]] = {}
+    for row in positions:
+        if row.get("protocol") == "Wallet" or row.get("apy") is None or not row.get("usd"):
+            continue
+        bucket = grouped.setdefault(str(row["protocol"]), {"usd": 0.0, "year": 0.0})
+        usd = float(row["usd"])
+        bucket["usd"] += usd
+        bucket["year"] += usd * float(row["apy"]) / 100.0
+    out = []
+    for protocol, bucket in grouped.items():
+        apy = (bucket["year"] / bucket["usd"] * 100.0) if bucket["usd"] else 0.0
+        out.append({
+            "protocol": protocol,
+            "usd": bucket["usd"],
+            "week_usd": bucket["year"] / 52.0,
+            "month_usd": bucket["year"] / 12.0,
+            "year_usd": bucket["year"],
+            "apy_year": apy,
+            "apy_month": monthly_yield_pct(apy),
+        })
+    out.sort(key=lambda item: item["year_usd"], reverse=True)
+    return out
 
 
 def stats(positions: list[dict[str, Any]]) -> dict[str, float]:
@@ -326,7 +384,7 @@ async def refresh(force: bool = False) -> dict[str, Any]:
                 )
 
         btc_price = await markets.btc_price_usd()
-        fx = await markets.fx_eur()
+        fx = await markets.fx_thb()
         eth_price = 0.0
         for p in positions:
             if p.get("asset") == "ETH" and p.get("price_usd"):
@@ -402,7 +460,7 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             "btc_wallets": btc_scans,
             "btc_security": btc_checks,
             "btc_price_usd": btc_price,
-            "fx_eur": fx,
+            "fx_thb": fx,
             "gas_usd": gas_usd,
             "eth_price_usd": eth_price,
             "node": node,
@@ -448,7 +506,7 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
             "btc_wallets": [],
             "btc_security": [],
             "btc_price_usd": None,
-            "fx_eur": 0.92,
+            "fx_thb": None,
             "gas_usd": 0.0,
             "eth_price_usd": 0.0,
             "node": {"configured": False, "connected": False, "detail": str(exc)},
@@ -488,6 +546,22 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
             "year_usd": st["year_usd"],
         }
 
+    all_positions = data["positions"]
+    income = {
+        "io": income_figures([p for p in all_positions if filter_owner("io", p["owner"])]),
+        "moglie": income_figures([p for p in all_positions if filter_owner("moglie", p["owner"])]),
+        "tutti": income_figures(all_positions),
+        "view": income_figures(positions),
+        "by_protocol": {
+            "io": income_by_protocol([p for p in all_positions if filter_owner("io", p["owner"])]),
+            "moglie": income_by_protocol([p for p in all_positions if filter_owner("moglie", p["owner"])]),
+            "tutti": income_by_protocol(all_positions),
+        },
+    }
+    currency = (db.get_setting("currency") or "USD").upper()
+    if currency not in {"USD", "THB"}:
+        currency = "USD"
+
     history = db.get_history(owner, days=90)
     txs = []
     for w in btc:
@@ -500,7 +574,9 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
         "ts": data["ts"],
         "rpc_ok": data["rpc_ok"],
         "errors": data["errors"],
-        "fx_eur": data["fx_eur"],
+        "fx_thb": data.get("fx_thb"),
+        "currency": currency,
+        "income": income,
         "gas_usd": data["gas_usd"],
         "eth_price_usd": data["eth_price_usd"],
         "btc_price_usd": data["btc_price_usd"],

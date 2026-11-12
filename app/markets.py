@@ -158,23 +158,31 @@ async def btc_price_usd() -> float | None:
         return None
 
 
-async def fx_eur() -> float:
+async def fx_thb() -> float | None:
+    """Baht per 1 USD. Coinbase is cached for an hour; the last good rate is kept in SQLite."""
     stored = None
     try:
         from . import db
-        raw = db.get_setting("fx_eur")
+        raw = db.get_setting("fx_thb")
         if raw:
             stored = float(raw)
     except Exception:
         stored = None
     try:
         data = await _get_json(COINBASE_FX, 60 * 60)
-        eur = data.get("data", {}).get("rates", {}).get("EUR")
-        if eur:
-            return float(eur)
+        thb = (data.get("data") or {}).get("rates", {}).get("THB")
+        if thb:
+            rate = float(thb)
+            if rate > 0 and (stored is None or abs(rate - stored) > 0.0001):
+                try:
+                    from . import db
+                    db.set_setting("fx_thb", f"{rate}")
+                except Exception:
+                    log.warning("Could not store the THB rate")
+            return rate
     except Exception as exc:  # noqa: BLE001
-        log.warning("FX failed: %s", exc)
-    return stored or 0.92
+        log.warning("FX THB failed: %s", exc)
+    return stored
 
 
 async def protocol_health() -> list[dict[str, Any]]:

@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.1.5"
+version: "0.1.6"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,9 +23,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.1.5: puoi nascondere un NFT o un'intera collezione, e la scelta resta
-  dopo gli aggiornamenti. Le posizioni di liquidità (Uniswap, Pancake,
-  Aerodrome e simili) non ricevono un prezzo di vendita.
+  0.1.6: la carta Reddito mostra settimana, mese e anno per Io, Moglie e
+  Combinato, in dollari o in baht. L'euro non c'è più. La percentuale
+  mensile è (1+APY) elevato a 1/12, meno 1.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

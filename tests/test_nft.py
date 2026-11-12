@@ -69,7 +69,7 @@ def isolated_db(tmp_path, monkeypatch):
 def test_startup_never_wipes_wallets(isolated_db):
     assert "DROP TABLE" not in db.SCHEMA.upper()
     isolated_db.add_evm("tenuta", "0x000000000000000000000000000000000000dead", "io")
-    isolated_db.set_setting("currency", "EUR")
+    isolated_db.set_setting("currency", "THB")
     isolated_db.set_setting("nft_api_key", "local-only")
     before = isolated_db.list_evm()
     isolated_db.init_db()
@@ -78,7 +78,7 @@ def test_startup_never_wipes_wallets(isolated_db):
     assert len(after) == len(before) == 1
     assert after[0]["address"] == before[0]["address"]
     assert after[0]["label"] == "tenuta"
-    assert isolated_db.get_setting("currency") == "EUR"
+    assert isolated_db.get_setting("currency") == "THB"
     assert isolated_db.get_setting("nft_api_key") == "local-only"
 
 

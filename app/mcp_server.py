@@ -141,7 +141,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
     owner = normalize_owner(str(args.get("owner") or "tutti"), allow_all=True)
     if name == "get_portfolio":
         data = await snapshot(owner, force=bool(args.get("refresh")))
-        return _text({k: data[k] for k in ("owner", "ts", "totals", "positions", "btc_wallets", "switches", "errors", "node") if k in data})
+        return _text({k: data[k] for k in ("owner", "ts", "totals", "income", "positions", "btc_wallets", "switches", "errors", "node") if k in data})
     if name == "get_balances":
         data = await snapshot(owner)
         return _text({"owner": owner, "positions": data["positions"], "totals": data["totals"]})

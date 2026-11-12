@@ -50,7 +50,7 @@ def _install_mocks(monkeypatch):
     monkeypatch.setattr(evm, "eth_rpc", fake_rpc)
     monkeypatch.setattr(markets, "prices_usd", fake_prices)
     monkeypatch.setattr(markets, "btc_price_usd", fake_btc)
-    monkeypatch.setattr(markets, "fx_eur", fake_fx)
+    monkeypatch.setattr(markets, "fx_thb", fake_fx)
     monkeypatch.setattr(markets, "llama_pools", fake_pools)
     monkeypatch.setattr(markets, "protocol_health", fake_health)
 

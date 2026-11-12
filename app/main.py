@@ -59,7 +59,7 @@ class SettingsIn(BaseModel):
     electrs_host: str | None = None
     electrs_port: int | None = None
     currency: str | None = None
-    fx_eur: float | None = None
+    fx_thb: float | None = None
     gas_estimate_usd: float | None = None
     tor_enabled: bool | None = None
     nft_api_provider: str | None = None
@@ -107,8 +107,8 @@ async def get_settings() -> dict[str, Any]:
         "eth_rpc_url": raw.get("eth_rpc_url") or "",
         "electrs_host": raw.get("electrs_host") or "",
         "electrs_port": int(raw.get("electrs_port") or 50001),
-        "currency": raw.get("currency") or "USD",
-        "fx_eur": float(raw.get("fx_eur") or 0.92),
+        "currency": raw.get("currency") if raw.get("currency") in {"USD", "THB"} else "USD",
+        "fx_thb": float(raw["fx_thb"]) if raw.get("fx_thb") else None,
         "gas_estimate_usd": raw.get("gas_estimate_usd") or "",
         "tor_enabled": raw.get("tor_enabled") or "",
         "nft_api_provider": raw.get("nft_api_provider") or "",
@@ -130,11 +130,11 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         db.set_setting("electrs_port", str(int(body.electrs_port)))
     if body.currency is not None:
         cur = body.currency.upper()
-        if cur not in {"USD", "EUR"}:
+        if cur not in {"USD", "THB"}:
             raise HTTPException(400, "Valuta non valida")
         db.set_setting("currency", cur)
-    if body.fx_eur is not None:
-        db.set_setting("fx_eur", str(body.fx_eur))
+    if body.fx_thb is not None and body.fx_thb > 0:
+        db.set_setting("fx_thb", str(body.fx_thb))
     if body.gas_estimate_usd is not None:
         db.set_setting("gas_estimate_usd", "" if body.gas_estimate_usd <= 0 else str(body.gas_estimate_usd))
     if body.tor_enabled is not None:
