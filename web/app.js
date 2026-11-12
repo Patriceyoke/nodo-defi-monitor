@@ -751,6 +751,13 @@ async function loadNfts(force) {
   }
 }
 
+function keepPreviousSnapshot(previous, next) {
+  if (!previous || !totalsReady(previous)) return false;
+  if (!totalsReady(next)) return true;
+  const had = (previous.positions || []).length || Number(previous.totals.tutti.total_usd) || 0;
+  const got = (next.positions || []).length || Number(next.totals.tutti.total_usd) || 0;
+  return !!(had && !got && (next.saved === false || next.kept_previous));
+}
 function totalsReady(data) {
   const t = data && data.totals;
   return !!(t && t.io && t.moglie && t.tutti && t.view);
@@ -849,9 +856,16 @@ async function load(force, extra) {
   try {
     const data = await api(path, opts);
     if (gen !== loadGen) return;
+    if (keepPreviousSnapshot(state.data, data)) {
+      state.refreshing = false;
+      state.stale = true;
+      showBanner([...(data.errors || []), "Ricalcolo non riuscito: resta l'ultimo saldo."]);
+      paintFreshness(state.data);
+      return;
+    }
     state.data = data;
     state.refreshing = false;
-    state.stale = !force;
+    state.stale = !force || !!data.kept_previous;
     if (data.btc_progress) state.btcProgress = data.btc_progress;
     if (data.fx_thb) state.fx = data.fx_thb;
     render();

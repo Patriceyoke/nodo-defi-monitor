@@ -630,28 +630,37 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         _STATUS["last_ok"] = False
         _STATUS["last_error"] = str(exc)
         _STATUS["last_finished_at"] = time.time()
-        _STATUS["errors"] = [f"Ricalcolo non riuscito: {exc}"]
-        data = {
-            "ts": int(time.time()),
-            "rpc_ok": False,
-            "errors": [f"Ricalcolo non riuscito: {exc}"],
-            "positions": [],
-            "switches": [],
-            "security": [],
-            "btc_wallets": [],
-            "btc_security": [],
-            "btc_price_usd": None,
-            "fx_thb": None,
-            "gas_usd": 0.0,
-            "eth_price_usd": 0.0,
-            "node": {"configured": False, "connected": False, "detail": str(exc)},
-            "alternatives": [],
-            "evm_owners": [],
-            "wallet_count": 0,
-            "ens_names": [],
-            "ens_alerts": [],
-            "saved": False,
-        }
+        message = f"Ricalcolo non riuscito: {exc}. Resta l'ultimo saldo."
+        _STATUS["errors"] = [message]
+        previous = cached_snapshot()
+        if isinstance(previous, dict) and previous.get("positions") is not None:
+            data = dict(previous)
+            data["errors"] = list(previous.get("errors") or []) + [message]
+            data["kept_previous"] = True
+            data["saved"] = True
+        else:
+            data = {
+                "ts": int(time.time()),
+                "rpc_ok": False,
+                "errors": [message],
+                "positions": [],
+                "switches": [],
+                "security": [],
+                "btc_wallets": [],
+                "btc_security": [],
+                "btc_price_usd": None,
+                "fx_thb": None,
+                "gas_usd": 0.0,
+                "eth_price_usd": 0.0,
+                "node": {"configured": False, "connected": False, "detail": str(exc)},
+                "alternatives": [],
+                "evm_owners": [],
+                "wallet_count": 0,
+                "ens_names": [],
+                "ens_alerts": [],
+                "saved": False,
+                "kept_previous": False,
+            }
     positions = [p for p in data["positions"] if filter_owner(owner, p["owner"])]
     btc = [w for w in data["btc_wallets"] if filter_owner(owner, w["owner"])]
     ideas, released = switches.mark_switch_hides(
@@ -772,6 +781,7 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "ens_names": ens_names,
         "security_summary": _security_summary(owner),
         "saved": data.get("saved") is not False,
+        "kept_previous": bool(data.get("kept_previous")),
         "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item))
         + sum(1 for w in data.get("btc_wallets") or [] if filter_owner(owner, w.get("owner"))),
         "ok": not data.get("errors"),
