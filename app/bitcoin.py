@@ -5,15 +5,22 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import socket
 import ssl
+import time
 from typing import Any
 
-from embit import script
 from embit.descriptor import Descriptor
+from embit.descriptor.checksum import checksum as descriptor_checksum
 from embit.networks import NETWORKS
 
-from .config import DEFAULT_ELECTRS_HOST, DEFAULT_ELECTRS_PORT, DEFAULT_GAP_LIMIT
+from .config import (
+    DEFAULT_ELECTRS_HOST,
+    DEFAULT_ELECTRS_PORT,
+    DEFAULT_GAP_LIMIT,
+    ELECTRS_CANDIDATES,
+)
 from . import db
 from .validation import classify_btc_key, reject_if_secret
 
@@ -31,7 +38,22 @@ class ElectrsError(RuntimeError):
     pass
 
 
-def electrs_endpoint() -> tuple[str, int]:
+_INDEX_RE = re.compile(r"index|sync|not ready|waiting", re.IGNORECASE)
+_CHECKSUM_RE = re.compile(r"^[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{8}$")
+_DETECTED: tuple[str, int] | None = None
+_DETECTED_AT = 0.0
+
+
+def gap_limit() -> int:
+    raw = db.get_setting("btc_gap_limit") or str(DEFAULT_GAP_LIMIT)
+    try:
+        value = int(raw)
+    except ValueError:
+        value = DEFAULT_GAP_LIMIT
+    return max(1, min(value, 100))
+
+
+def _configured_endpoint() -> tuple[str, int]:
     host = (db.get_setting("electrs_host") or DEFAULT_ELECTRS_HOST or "").strip()
     port_raw = db.get_setting("electrs_port") or str(DEFAULT_ELECTRS_PORT)
     try:
@@ -41,6 +63,46 @@ def electrs_endpoint() -> tuple[str, int]:
     return host, port
 
 
+def _host_resolves(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        return True
+    except socket.gaierror:
+        return False
+
+
+def detect_electrs() -> tuple[str, int] | None:
+    """Find Umbrel Electrs when the user left the host empty. Cached for a minute."""
+    global _DETECTED, _DETECTED_AT
+    now = time.time()
+    if now - _DETECTED_AT < 60:
+        return _DETECTED
+    found: tuple[str, int] | None = None
+    for host, port in ELECTRS_CANDIDATES:
+        if not _host_resolves(host):
+            continue
+        try:
+            _electrum_request(host, port, "server.version", ["monitor-defi", "1.4"], timeout=1.5)
+            found = (host, port)
+            break
+        except Exception:
+            continue
+    _DETECTED = found
+    _DETECTED_AT = now
+    return found
+
+
+def electrs_endpoint() -> tuple[str, int, str]:
+    """Return host, port and how it was chosen: configured, detected or missing."""
+    host, port = _configured_endpoint()
+    if host:
+        return host, port, "configured"
+    detected = detect_electrs()
+    if detected:
+        return detected[0], detected[1], "detected"
+    return "", port, "missing"
+
+
 def mask_key(text: str) -> str:
     value = (text or "").strip()
     if len(value) <= 18:
@@ -48,48 +110,120 @@ def mask_key(text: str) -> str:
     return value[:8] + "…" + value[-8:]
 
 
-def _to_descriptor(raw: str) -> Descriptor:
-    reject_if_secret(raw)
-    kind = classify_btc_key(raw)
-    text = raw.strip()
-    if kind == "descriptor":
-        # Strip optional checksum suffix after #
-        return Descriptor.from_string(text)
-    # Convert an xpub/ypub/zpub into a standard single-sig descriptor.
-    # ypub -> sh(wpkh(...)), zpub -> wpkh(...), xpub -> pkh(...)
-    if kind == "zpub":
-        expr = f"wpkh({text}/<0;1>/*)"
+def descriptor_lines(raw: str) -> list[str]:
+    """One descriptor, or the external line plus the internal line."""
+    text = (raw or "").replace("\r\n", "\n").strip()
+    if not text:
+        return []
+    chunks: list[str] = []
+    buf = ""
+    depth = 0
+    for char in text:
+        if char == "\n" and depth == 0:
+            if buf.strip():
+                chunks.append(buf.strip())
+            buf = ""
+            continue
+        buf += char
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+    if buf.strip():
+        chunks.append(buf.strip())
+    merged: list[str] = []
+    for chunk in chunks:
+        if chunk.startswith("#") and merged:
+            merged[-1] += chunk
+        else:
+            merged.append(chunk)
+    return merged
+
+
+def verify_checksum(line: str) -> str:
+    body, sep, check = line.partition("#")
+    body = body.strip()
+    if not sep:
+        return body
+    check = check.strip()
+    if not _CHECKSUM_RE.match(check):
+        raise ValueError("Il checksum del descrittore non è valido. Copialo per intero, con i caratteri dopo #.")
+    try:
+        expect = descriptor_checksum(body)
+    except Exception:
+        raise ValueError("Il descrittore contiene un carattere che non entra nel checksum.") from None
+    if check != expect:
+        raise ValueError("Il checksum del descrittore non corrisponde. Controlla di aver copiato la riga per intero.")
+    return body
+
+
+def _chain_role(body: str) -> str | None:
+    if "<0;1>" in body or "{0,1}" in body:
+        return None
+    if "/0/*" in body or body.endswith("/0/*"):
+        return "receive"
+    if "/1/*" in body or body.endswith("/1/*"):
+        return "change"
+    return None
+
+
+def _parse_public(body: str, kind: str) -> Descriptor:
+    if kind in {"descriptor", "multisig"}:
+        expr = body
+    elif kind == "zpub":
+        expr = f"wpkh({body}/<0;1>/*)"
     elif kind == "ypub":
-        expr = f"sh(wpkh({text}/<0;1>/*))"
+        expr = f"sh(wpkh({body}/<0;1>/*))"
     else:
-        expr = f"pkh({text}/<0;1>/*)"
-    return Descriptor.from_string(expr)
+        expr = f"pkh({body}/<0;1>/*)"
+    try:
+        return Descriptor.from_string(expr)
+    except Exception:
+        raise ValueError(
+            "Descrittore non valido. Servono wpkh, sh(wpkh), tr oppure wsh(sortedmulti(2,…)), "
+            "con il percorso /0/*, /1/* o /<0;1>/*, e solo chiavi pubbliche."
+        ) from None
 
 
-def derive_addresses(raw: str, gap: int = DEFAULT_GAP_LIMIT) -> list[dict[str, Any]]:
-    """Derive receive (0) and change (1) addresses. Never touches private keys."""
-    desc = _to_descriptor(raw)
+def derive_addresses(raw: str, gap: int | None = None) -> list[dict[str, Any]]:
+    """Derive receive (/0) and change (/1) addresses. Never touches private keys."""
+    reject_if_secret(raw)
+    if gap is None:
+        gap = gap_limit()
+    gap = max(1, min(int(gap), 100))
+    lines = descriptor_lines(raw)
+    if not lines:
+        raise ValueError("Inserisci un xpub, uno zpub o un descrittore di sola osservazione.")
+    if len(lines) > 2:
+        raise ValueError("Incolla un solo descrittore, oppure la riga esterna (/0/*) e quella interna (/1/*).")
     out: list[dict[str, Any]] = []
-    n_branches = getattr(desc, "num_branches", 2) or 1
-    roles = {0: "receive", 1: "change"}
-    for branch in range(n_branches):
-        role = roles.get(branch, f"branch{branch}")
-        for index in range(gap):
-            try:
-                derived = desc.derive(index, branch)
-            except TypeError:
-                derived = desc.derive(index)
-            addr = derived.address(NETWORKS["main"])
-            scriptpubkey = derived.script_pubkey().data.hex()
-            out.append(
-                {
-                    "address": addr,
-                    "scriptpubkey": scriptpubkey,
-                    "branch": branch,
-                    "index": index,
-                    "role": role,
-                }
-            )
+    seen: set[str] = set()
+    for line in lines:
+        body = verify_checksum(line)
+        kind = classify_btc_key(body)
+        desc = _parse_public(body, kind)
+        forced = _chain_role(body) if kind in {"descriptor", "multisig"} else None
+        branches = getattr(desc, "num_branches", 1) or 1
+        for branch in range(branches):
+            role = forced if forced and branches == 1 else {0: "receive", 1: "change"}.get(branch, f"branch{branch}")
+            for index in range(gap):
+                try:
+                    derived = desc.derive(index, branch)
+                except TypeError:
+                    derived = desc.derive(index)
+                addr = derived.address(NETWORKS["main"])
+                if addr in seen:
+                    continue
+                seen.add(addr)
+                out.append(
+                    {
+                        "address": addr,
+                        "scriptpubkey": derived.script_pubkey().data.hex(),
+                        "branch": 1 if role == "change" else branch,
+                        "index": index,
+                        "role": role,
+                    }
+                )
     if not out:
         raise ValueError("Impossibile derivare indirizzi da questa chiave o da questo descrittore.")
     return out
@@ -136,63 +270,96 @@ def _electrum_request(host: str, port: int, method: str, params: list[Any], time
 
 
 async def electrs_call(method: str, params: list[Any]) -> Any:
-    host, port = electrs_endpoint()
+    host, port, source = electrs_endpoint()
     if not host:
-        raise ElectrsError("Indicizzatore Electrs/Fulcrum non configurato.")
-    return await asyncio.to_thread(_electrum_request, host, port, method, params)
+        raise ElectrsError(
+            "Electrs non è configurato e electrs_electrs_1:50001 non risponde. "
+            "Installa Electrs su Umbrel oppure indica host e porta in Impostazioni."
+        )
+    try:
+        return await asyncio.to_thread(_electrum_request, host, port, method, params)
+    except Exception as exc:
+        if source == "detected":
+            global _DETECTED_AT
+            _DETECTED_AT = 0.0
+        raise exc
 
 
 async def electrs_status() -> dict[str, Any]:
-    host, port = electrs_endpoint()
+    host, port, source = electrs_endpoint()
+    base = {
+        "configured": bool(host),
+        "detected": source == "detected",
+        "connected": False,
+        "indexing": False,
+        "host": host,
+        "port": port,
+        "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
+    }
     if not host:
         return {
-            "configured": False,
-            "connected": False,
-            "host": "",
-            "port": port,
-            "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
-            "detail": "Nessun host Electrs o Fulcrum impostato. In Impostazioni indica l'indirizzo locale del tuo indicizzatore.",
+            **base,
+            "detail": (
+                "Electrs non è raggiungibile. Su Umbrel l'host di solito è electrs_electrs_1 "
+                "e la porta 50001. Lascia l'host vuoto per cercarlo, oppure scrivilo in Impostazioni."
+            ),
         }
     try:
-        banner = await electrs_call("server.banner", [])
-        features = None
-        try:
-            features = await electrs_call("server.features", [])
-        except Exception:
-            features = None
+        await electrs_call("server.version", ["monitor-defi", "1.4"])
         height = None
-        if isinstance(features, dict):
-            height = (features.get("hosts") and None) or features.get("genesis_hash")
         try:
             headers = await electrs_call("blockchain.headers.subscribe", [])
             if isinstance(headers, dict):
-                height = headers.get("height", height)
-        except Exception:
-            pass
+                height = headers.get("height")
+        except Exception as exc:  # noqa: BLE001
+            if _INDEX_RE.search(str(exc)):
+                return {
+                    **base,
+                    "indexing": True,
+                    "height": height,
+                    "detail": "Electrs risponde ma sta ancora indicizzando la blockchain. I saldi arriveranno quando l'indice è pronto.",
+                }
+            raise
+        indexing = height in (None, 0)
+        if not indexing:
+            try:
+                await electrs_call("blockchain.scripthash.get_balance", ["00" * 32])
+            except Exception as exc:  # noqa: BLE001
+                if _INDEX_RE.search(str(exc)):
+                    indexing = True
+                else:
+                    raise
+        if indexing:
+            return {
+                **base,
+                "indexing": True,
+                "height": height,
+                "detail": "Electrs è collegato ma sta ancora indicizzando. I saldi possono essere incompleti finché l'indice non è pronto.",
+            }
+        where = f"{host}:{port}"
+        how = "rilevato da Umbrel" if source == "detected" else "impostato da te"
         return {
+            **base,
             "configured": True,
             "connected": True,
-            "host": host,
-            "port": port,
-            "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
-            "detail": "Connesso all'indicizzatore locale.",
-            "banner": banner if isinstance(banner, str) else None,
             "height": height,
+            "detail": f"Connesso a Electrs ({where}, {how}). Altezza blocco {height}.",
         }
     except Exception as exc:  # noqa: BLE001
         return {
-            "configured": True,
-            "connected": False,
-            "host": host,
-            "port": port,
-            "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
-            "detail": f"Indicizzatore non raggiungibile: {exc}",
+            **base,
+            "detail": f"Electrs non è raggiungibile su {host}:{port}. {exc}",
         }
 
 
-async def scan_wallet(wallet: dict[str, Any], gap: int = DEFAULT_GAP_LIMIT) -> dict[str, Any]:
-    addrs = derive_addresses(wallet["descriptor"], gap=gap)
+async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[str, Any]:
+    try:
+        addrs = derive_addresses(wallet["descriptor"], gap=gap)
+    except Exception as exc:
+        log.warning("Derivazione Bitcoin non riuscita (%s).", type(exc).__name__)
+        raise
     status = await electrs_status()
+    offline = "Electrs sta ancora indicizzando" if status.get("indexing") else "Electrs non raggiungibile"
     if not status["connected"]:
         return {
             "id": wallet["id"],
@@ -203,8 +370,9 @@ async def scan_wallet(wallet: dict[str, Any], gap: int = DEFAULT_GAP_LIMIT) -> d
             "key_masked": mask_key(wallet["descriptor"]),
             "btc": 0.0,
             "sats": 0,
-            "status": "Indicizzatore non collegato",
-            "last": "Nessun dato: Electrs/Fulcrum non è collegato.",
+            "utxo_count": 0,
+            "status": offline,
+            "last": status.get("detail") or "Nessun dato: Electrs non è collegato.",
             "connected": False,
             "addresses": [],
             "txs": [],
@@ -219,6 +387,7 @@ async def scan_wallet(wallet: dict[str, Any], gap: int = DEFAULT_GAP_LIMIT) -> d
     used: list[dict[str, Any]] = []
     txs: list[dict[str, Any]] = []
     total = 0
+    utxo_count = 0
     reuse: list[str] = []
     dust: list[dict[str, Any]] = []
 
@@ -227,9 +396,15 @@ async def scan_wallet(wallet: dict[str, Any], gap: int = DEFAULT_GAP_LIMIT) -> d
         try:
             raw_bal = await electrs_call("blockchain.scripthash.get_balance", [sh])
             hist = await electrs_call("blockchain.scripthash.get_history", [sh])
+            unspent = await electrs_call("blockchain.scripthash.listunspent", [sh])
         except Exception as exc:  # noqa: BLE001
-            log.warning("scripthash query failed: %s", exc)
+            if _INDEX_RE.search(str(exc)):
+                status = {**status, "indexing": True, "connected": False, "detail": str(exc)}
+                break
+            log.warning("Lettura Electrs non riuscita (%s).", type(exc).__name__)
             continue
+        if isinstance(unspent, list):
+            utxo_count += len(unspent)
         confirmed = int((raw_bal or {}).get("confirmed") or 0)
         unconfirmed = int((raw_bal or {}).get("unconfirmed") or 0)
         sats = confirmed + unconfirmed
@@ -303,7 +478,12 @@ async def scan_wallet(wallet: dict[str, Any], gap: int = DEFAULT_GAP_LIMIT) -> d
         if len(recent) >= 12:
             break
 
-    last = "Nessun movimento visto nell'intervallo di derivazione."
+    if status.get("indexing"):
+        total = 0
+        utxo_count = 0
+        used = []
+        recent = []
+    last = status.get("detail") if status.get("indexing") else "Nessun movimento visto nell'intervallo di derivazione."
     if recent:
         top = recent[0]
         btc = top["btc"]
@@ -318,9 +498,10 @@ async def scan_wallet(wallet: dict[str, Any], gap: int = DEFAULT_GAP_LIMIT) -> d
         "key_masked": mask_key(wallet["descriptor"]),
         "btc": total / 100_000_000,
         "sats": total,
-        "status": "Sincronizzato",
+        "utxo_count": utxo_count,
+        "status": "Electrs sta ancora indicizzando" if status.get("indexing") else "Sincronizzato",
         "last": last,
-        "connected": True,
+        "connected": not status.get("indexing"),
         "addresses": used,
         "txs": recent,
         "reuse": reuse,

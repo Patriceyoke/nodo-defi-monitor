@@ -28,7 +28,7 @@ Passi:
 2. Nel codice, sostituisci ogni `ghcr.io/patriceyoke/` e ogni `https://github.com/Patriceyoke/` con il tuo utente GitHub in minuscolo.
 3. Carica il codice dell'app nel primo repo. Nella cartella `umbrel-store/` trovi già il manifesto del negozio: il contenuto di `umbrel-store/` va nella radice del repo `nodo-app-store` (così `umbrel-app-store.yml` è in cima).
 4. Su GitHub, in **Settings > Actions > General**, consenti le Actions e la scrittura dei pacchetti. La prima pubblicazione di `ghcr.io/<tuo-utente>/nodo-defi-monitor` deve essere **public**.
-5. Lancia il workflow **Publish multi-arch image** (o crea il tag `v0.1.7`). Attendi che risultino le piattaforme `linux/amd64` e `linux/arm64`.
+5. Lancia il workflow **Publish multi-arch image** (o crea il tag `v0.1.8`). Attendi che risultino le piattaforme `linux/amd64` e `linux/arm64`.
 6. Aggiorna `umbrel-store/nodo-defi-monitor/docker-compose.yml` con il nome immagine vero, se non l'hai già fatto.
 7. Sul tuo Umbrel: **App Store → ⋯ → Community App Stores →** incolla l'URL del repo `nodo-app-store` (es. `https://github.com/<tuo-utente>/nodo-app-store`).
 8. Installa **Monitor DeFi**. Aprila dalla home. Vai a **Impostazioni**.
@@ -54,7 +54,7 @@ La prima costruzione sul dispositivo richiede qualche minuto. I dati restano in 
 
 1. Apri Monitor DeFi → **Impostazioni**.
 2. (Facoltativo) Inserisci l'URL del tuo RPC Ethereum locale. Se lo lasci vuoto, l'app usa un RPC pubblico.
-3. Per Bitcoin: host e porta di Electrs o Fulcrum sul tuo Umbrel (di solito porta `50001`). Su molte installazioni l'host interno è simile a `electrs_electrs_1`. Se non sei sicuro, prova prima dalla rete locale e, se non collega, controlla il nome del contenitore Electrs.
+3. Per Bitcoin: in Impostazioni incolla un descrittore di sola osservazione (Bitkey 2-di-3, wpkh, sh(wpkh) o tr), con etichetta e titolare. L'host Electrs può restare vuoto: l'app prova `electrs_electrs_1` sulla porta `50001`. Se non collega, scrivi tu host e porta.
 4. Aggiungi solo **indirizzi Ethereum pubblici** e **xpub / zpub / descrittori** di sola osservazione, indicando per ciascuno il titolare **Io** o **Moglie**. Puoi etichettare un conto Bitcoin come Cold storage, Multisig o Spesa e impostare le soglie di avviso.
 5. Se incolli una seed o una chiave privata, l'app la **rifiuta**. Non farlo.
 6. Premi **Aggiorna** nella dashboard. I selettori **Io / Moglie / Combinato** filtrano tutta la pagina.

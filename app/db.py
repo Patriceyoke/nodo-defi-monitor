@@ -122,6 +122,7 @@ def init_db() -> None:
             "eth_rpc_url": "",
             "electrs_host": "",
             "electrs_port": "50001",
+            "btc_gap_limit": "20",
             "currency": "USD",
             "fx_thb": "",
             "gas_estimate_usd": "",
@@ -254,6 +255,11 @@ def export_backup() -> dict[str, Any]:
         ],
         "settings": settings,
         "nft_hides": list_nft_hides(),
+        "warning": (
+            "Questo file contiene i descrittori Bitcoin di sola osservazione salvati su questo server. "
+            "Non sono chiavi private e non possono firmare, ma mostrano gli indirizzi del conto. "
+            "Tienilo solo sul tuo computer: non inviarlo in chat o per email."
+        ),
     }
 
 

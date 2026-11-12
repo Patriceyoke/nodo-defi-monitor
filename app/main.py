@@ -64,6 +64,7 @@ class SettingsIn(BaseModel):
     tor_enabled: bool | None = None
     nft_api_provider: str | None = None
     nft_api_key: str | None = None
+    btc_gap_limit: int | None = None
     rotate_token: bool = False
 
 
@@ -107,6 +108,7 @@ async def get_settings() -> dict[str, Any]:
         "eth_rpc_url": raw.get("eth_rpc_url") or "",
         "electrs_host": raw.get("electrs_host") or "",
         "electrs_port": int(raw.get("electrs_port") or 50001),
+        "btc_gap_limit": int(raw.get("btc_gap_limit") or 20),
         "currency": raw.get("currency") if raw.get("currency") in {"USD", "THB"} else "USD",
         "fx_thb": float(raw["fx_thb"]) if raw.get("fx_thb") else None,
         "gas_estimate_usd": raw.get("gas_estimate_usd") or "",
@@ -128,6 +130,11 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         db.set_setting("electrs_host", body.electrs_host.strip())
     if body.electrs_port is not None:
         db.set_setting("electrs_port", str(int(body.electrs_port)))
+    if body.btc_gap_limit is not None:
+        gap = int(body.btc_gap_limit)
+        if gap < 1 or gap > 100:
+            raise HTTPException(400, "Il gap limit deve essere tra 1 e 100.")
+        db.set_setting("btc_gap_limit", str(gap))
     if body.currency is not None:
         cur = body.currency.upper()
         if cur not in {"USD", "THB"}:

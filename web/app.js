@@ -135,6 +135,7 @@ function renderIncome(data) {
       <div class="value">${money(row.month_usd)}</div>
       <div class="detail">al mese · settimana ${money(row.week_usd)} · anno ${money(row.year_usd)}</div>
       <div class="detail">${pct(row.apy_month)} al mese · ${pct(row.apy_year)} annuo</div>
+      <div class="detail">Bitcoin ${btcFmt((data.totals[key] || {}).btc)} · ${money((data.totals[key] || {}).btc_usd)} · non fruttifero</div>
     </div>`;
   }).join("");
   const table = inc.by_protocol || {};
@@ -352,8 +353,14 @@ function renderRows(el, rows) {
 function renderBtc(data) {
   const node = data.node || {};
   const pill = $("#btc-node-pill");
-  pill.textContent = node.connected ? "nodo locale connesso" : (node.configured ? "indicizzatore non collegato" : "indicizzatore non configurato");
-  pill.className = "pill " + (node.connected ? "ok" : "warn");
+  pill.textContent = node.indexing
+    ? "Electrs sta indicizzando"
+    : node.connected
+      ? "nodo locale connesso"
+      : node.configured
+        ? "Electrs non raggiungibile"
+        : "indicizzatore non configurato";
+  pill.className = "pill " + (node.connected && !node.indexing ? "ok" : "warn");
   const price = data.btc_price_usd || 0;
   $("#btc-props").innerHTML = `
     <p><strong>Fonte dati:</strong> ${node.source || "Nodo Bitcoin Umbrel / Electrs (locale)"} ·
@@ -379,7 +386,7 @@ function renderBtc(data) {
       <div class="card-head"><h3>${w.label}</h3><span class="pill ${w.connected ? "ok" : "warn"}">${w.status}</span></div>
       <p class="mini">${OWNER_LABEL[w.owner]} · ${w.kind} · ${w.key_masked}</p>
       <div class="value" style="font-size:1.3rem;font-weight:800">${btcFmt(w.btc)}</div>
-      <p class="mini">${money((w.btc || 0) * price)}</p>
+      <p class="mini">${money(w.usd != null ? w.usd : (w.btc || 0) * price)}${w.utxo_count != null ? " · " + w.utxo_count + " UTXO" : ""}</p>
       <p class="mini">Ultimo movimento: ${w.last || "—"}</p>
     </div>`).join("") : `<p class="mini">Nessun xpub in questa vista. Aggiungilo in Impostazioni.</p>`;
 
@@ -631,6 +638,7 @@ async function loadSettings() {
   form.eth_rpc_url.value = s.eth_rpc_url || "";
   form.electrs_host.value = s.electrs_host || "";
   form.electrs_port.value = s.electrs_port || 50001;
+  if (form.btc_gap_limit) form.btc_gap_limit.value = s.btc_gap_limit || 20;
   if (form.nft_api_provider) form.nft_api_provider.value = s.nft_api_provider || "";
   if (form.nft_api_key) form.nft_api_key.value = "";
   const keyLine = $("#nft-key-line");
@@ -677,6 +685,7 @@ async function boot() {
       eth_rpc_url: f.eth_rpc_url,
       electrs_host: f.electrs_host,
       electrs_port: Number(f.electrs_port || 50001),
+      btc_gap_limit: Number(f.btc_gap_limit || 20),
       gas_estimate_usd: f.gas_estimate_usd === "" ? 0 : Number(f.gas_estimate_usd),
       tor_enabled: f.tor_enabled === "" ? null : f.tor_enabled === "1",
       nft_api_provider: f.nft_api_provider || "",
@@ -733,6 +742,8 @@ async function boot() {
   $("#btn-export").addEventListener("click", async () => {
     try {
       const data = await api("/api/backup");
+      const warning = data.warning || "Il file contiene i descrittori Bitcoin di sola osservazione. Non inviarlo.";
+      if (!window.confirm(warning + "\n\nScaricare il file?")) return;
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

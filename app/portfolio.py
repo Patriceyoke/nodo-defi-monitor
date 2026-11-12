@@ -625,6 +625,17 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
             "tutti": income_by_protocol(all_positions),
         },
     }
+    for key in ("io", "moglie", "tutti"):
+        row = totals(key)
+        income[key]["btc"] = row["btc"]
+        income[key]["btc_usd"] = row["btc_usd"]
+        income[key]["btc_apy"] = 0.0
+        income[key]["btc_note"] = "Bitcoin non produce rendimento"
+    view_btc = totals(owner)
+    income["view"]["btc"] = view_btc["btc"]
+    income["view"]["btc_usd"] = view_btc["btc_usd"]
+    income["view"]["btc_apy"] = 0.0
+    income["view"]["btc_note"] = "Bitcoin non produce rendimento"
     currency = (db.get_setting("currency") or "USD").upper()
     if currency not in {"USD", "THB"}:
         currency = "USD"
@@ -660,7 +671,15 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
         "switches": ideas,
         "security": security,
         "btc_wallets": [
-            {k: v for k, v in w.items() if k not in {"addresses"}} | {"address_count": len(w.get("addresses") or [])}
+            {
+                k: v
+                for k, v in w.items()
+                if k not in {"addresses", "descriptor"}
+            }
+            | {
+                "address_count": len(w.get("addresses") or []),
+                "usd": float(w.get("btc") or 0) * price,
+            }
             for w in btc
         ],
         "btc_security": btc_sec,

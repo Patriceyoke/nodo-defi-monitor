@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 APP_NAME = "Monitor DeFi"
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 DEFAULT_PORT = int(os.environ.get("PORT", "3847"))
 
 _DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data"
@@ -101,6 +101,11 @@ ensure_data_dir()
 DEFAULT_RPC = os.environ.get("ETH_RPC_URL", "https://ethereum.publicnode.com")
 DEFAULT_ELECTRS_HOST = os.environ.get("ELECTRS_HOST", "")
 DEFAULT_ELECTRS_PORT = int(os.environ.get("ELECTRS_PORT", "50001"))
+# Umbrel names the Electrs container electrs_electrs_1 and serves Electrum on 50001.
+ELECTRS_CANDIDATES = (
+    ("electrs_electrs_1", 50001),
+    ("fulcrum_fulcrum_1", 50001),
+)
 DEFAULT_BTC_PRICE_URL = os.environ.get(
     "BTC_PRICE_URL",
     "https://api.coinbase.com/v2/prices/BTC-USD/spot",
