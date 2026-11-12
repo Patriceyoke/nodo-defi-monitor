@@ -27,6 +27,7 @@
         <div>
           <h2>Panoramica</h2>
           <p class="caption">I totali Io, Moglie e Combinato restano sempre visibili. Il selettore filtra il resto della pagina, Bitcoin compreso. L'APY si riferisce solo alla DeFi della vista scelta.</p>
+          <p class="caption" id="source-line"></p>
         </div>
         <span class="pill muted" id="source-pill">in sola lettura</span>
       </div>
@@ -105,26 +106,29 @@
       <div class="chart-box tall"><canvas id="chart-hist"></canvas></div>
     </section>
 
-    <section class="card">
-      <div class="card-head">
-        <div>
+    <section class="card" id="positions">
+      <details id="positions-details">
+        <summary>
           <h2>Posizioni</h2>
+          <p class="caption" id="pos-summary">Le posizioni si aggiornano anche da chiuse.</p>
+        </summary>
+        <div class="card-head">
           <p class="caption">Ogni riga ha un titolare. Badge di rischio: verde basso, ambra medio, rosso alto.</p>
+          <div>
+            <span class="pill ok">Basso</span>
+            <span class="pill warn">Medio</span>
+            <span class="pill bad">Alto</span>
+          </div>
         </div>
-        <div>
-          <span class="pill ok">Basso</span>
-          <span class="pill warn">Medio</span>
-          <span class="pill bad">Alto</span>
+        <div style="overflow:auto">
+          <table>
+            <thead>
+              <tr><th>Titolare</th><th>Protocollo</th><th>Asset</th><th class="num">Valore</th><th class="num">APY</th><th class="num">vs media 30g</th><th>Rischio</th></tr>
+            </thead>
+            <tbody id="pos-body"></tbody>
+          </table>
         </div>
-      </div>
-      <div style="overflow:auto">
-        <table>
-          <thead>
-            <tr><th>Titolare</th><th>Protocollo</th><th>Asset</th><th class="num">Valore</th><th class="num">APY</th><th class="num">vs media 30g</th><th>Rischio</th></tr>
-          </thead>
-          <tbody id="pos-body"></tbody>
-        </table>
-      </div>
+      </details>
     </section>
 
     <div class="grid two">

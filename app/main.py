@@ -74,6 +74,7 @@ class SettingsIn(BaseModel):
     btc_gap_limit: int | None = None
     outflow_drop_pct: float | None = None
     outflow_usd: float | None = None
+    positions_open: bool | None = None
     rotate_token: bool = False
 
 
@@ -129,6 +130,7 @@ async def get_settings() -> dict[str, Any]:
         "nft_api_key_masked": _mask_secret(raw.get("nft_api_key") or ""),
         "mcp_token_masked": masked,
         "has_token": bool(token),
+        "positions_open": (raw.get("positions_open") or "1") != "0",
         "readonly": True,
     }
 
@@ -155,6 +157,8 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         if body.outflow_usd < 0:
             raise HTTPException(400, "La soglia in dollari non può essere negativa.")
         db.set_setting("outflow_usd", str(body.outflow_usd))
+    if body.positions_open is not None:
+        db.set_setting("positions_open", "1" if body.positions_open else "0")
     if body.currency is not None:
         cur = body.currency.upper()
         if cur not in {"USD", "THB"}:

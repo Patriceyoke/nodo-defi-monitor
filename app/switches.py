@@ -90,9 +90,11 @@ def official_yield_url(protocol: str, asset: str) -> str:
         return _official("https://stake.lido.fi/")
     if name == "Sky":
         if symbol == "STUSDS":
-            return _official("https://app.sky.money/stake")
+            return _official("https://app.sky.money/?widget=stusds")
         if symbol in {"SUSDS", "USDS"}:
-            return _official("https://app.sky.money/savings")
+            return _official("https://app.sky.money/?widget=savings")
+        if symbol == "SKY":
+            return _official("https://app.sky.money/stake")
         return _official("https://app.sky.money/")
     if name == "Rocket Pool":
         return _official("https://stake.rocketpool.net/")
@@ -120,8 +122,26 @@ def bucket(asset: str) -> str:
     return BUCKET_OTHER
 
 
-def risk_of(protocol: str) -> str:
+def risk_of(protocol: str, asset: str | None = None) -> str:
+    symbol = (asset or "").upper()
+    # stUSDS funds SKY-backed borrowing. It is not the same risk as Aave or sUSDS.
+    if symbol == "STUSDS":
+        return "medio"
     return PROTOCOL_RISK.get(protocol, "medio")
+
+
+def decision_apy(apy: float, apy30: float | None) -> tuple[float, bool]:
+    """Use the 30-day average when the live rate is more than twice that average."""
+    live = float(apy)
+    if apy30 is None:
+        return live, False
+    try:
+        base = float(apy30)
+    except (TypeError, ValueError):
+        return live, False
+    if base > 0 and live > 2 * base:
+        return base, True
+    return live, False
 
 
 def estimate_gas_usd(gas_price_wei: int, eth_price: float, override: float | None = None) -> float:
@@ -204,14 +224,19 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
         by_owner.setdefault(pos["owner"], []).append(pos)
 
     for owner, rows in by_owner.items():
+        held = {(row.get("protocol"), row.get("asset")) for row in rows}
         extras = []
         for row in rows:
-            extras.extend(row.get("alternatives") or [])
+            for alt in row.get("alternatives") or []:
+                if (alt.get("protocol"), alt.get("asset")) in held:
+                    continue
+                extras.append(alt)
         destinations = list(rows) + extras
         for src in rows:
             src_bucket = bucket(src["asset"])
-            src_risk = risk_of(src["protocol"])
-            src_apy = float(src["apy"])
+            src_risk = risk_of(src["protocol"], src.get("asset"))
+            src_live = float(src["apy"])
+            src_apy, src_spike = decision_apy(src_live, src.get("apy30"))
             for dest in destinations:
                 if dest is src:
                     continue
@@ -221,10 +246,11 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
                     continue
                 if dest.get("apy") is None:
                     continue
-                dest_risk = risk_of(dest["protocol"])
+                dest_risk = risk_of(dest["protocol"], dest.get("asset"))
                 if RISK_RANK[dest_risk] > RISK_RANK[src_risk]:
                     continue
-                dest_apy = float(dest["apy"])
+                dest_live = float(dest["apy"])
+                dest_apy, dest_spike = decision_apy(dest_live, dest.get("apy30"))
                 if dest_apy <= src_apy:
                     continue
                 # Same protocol+asset is not a switch
@@ -243,8 +269,15 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
                         "from": f"{src['protocol']} {src['asset']}",
                         "to": f"{dest['protocol']} {dest['asset']}",
                         "usd": usd,
-                        "from_apy": src_apy,
-                        "to_apy": dest_apy,
+                        "from_apy": src_live,
+                        "to_apy": dest_live,
+                        "from_apy30": src.get("apy30"),
+                        "to_apy30": dest.get("apy30"),
+                        "from_rate": src_apy,
+                        "to_rate": dest_apy,
+                        "unstable": bool(src_spike or dest_spike),
+                        "apy_source": "DefiLlama",
+                        "apy_at": int(time.time()),
                         "from_risk": src_risk,
                         "to_risk": dest_risk,
                         "gas_usd": gas_usd,
@@ -271,53 +304,61 @@ def _owner_label(owner: str) -> str:
     return {"io": "Io", "moglie": "Moglie"}.get(owner, owner)
 
 
-async def market_alternatives(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Attach same-bucket market yields (held assets only) as possible destinations."""
-    from .markets import llama_pools
+# Same project and symbol the positions table uses, so a suggestion cannot
+# quote a different DefiLlama pool than the row it came from.
+_SWITCH_MARKETS = (
+    ("aave-v3", "Aave", "USDC", "USDC"),
+    ("aave-v3", "Aave", "USDT", "USDT"),
+    ("aave-v3", "Aave", "DAI", "DAI"),
+    ("aave-v3", "Aave", "WETH", "WETH"),
+    ("compound-v3", "Compound", "USDC", "USDC"),
+    ("compound-v3", "Compound", "USDT", "USDT"),
+    ("compound-v3", "Compound", "WETH", "ETH"),
+    ("spark-savings", "Spark", "USDC", "USDC"),
+    ("spark-savings", "Spark", "USDT", "USDT"),
+    ("sparklend", "SparkLend", "USDC", "USDC"),
+    ("sparklend", "SparkLend", "USDT", "USDT"),
+    ("sky-lending", "Sky", "sUSDS", "SUSDS"),
+    ("sky-lending", "Sky", "stUSDS", "STUSDS"),
+    ("lido", "Lido", "stETH", "STETH"),
+    ("rocket-pool", "Rocket Pool", "rETH", "RETH"),
+    ("fluid-lending", "Fluid", "USDC", "USDC"),
+    ("fluid-lending", "Fluid", "USDT", "USDT"),
+    ("maple", "Maple", "USDC", "USDC"),
+    ("maple", "Maple", "USDT", "USDT"),
+)
 
-    wanted_projects = {
-        "aave-v3": ("Aave", "basso"),
-        "compound-v3": ("Compound", "basso"),
-        "spark-savings": ("Spark", "basso"),
-        "sparklend": ("SparkLend", "basso"),
-        "sky-lending": ("Sky", "basso"),
-        "lido": ("Lido", "basso"),
-        "rocket-pool": ("Rocket Pool", "basso"),
-        "fluid-lending": ("Fluid", "medio"),
-        "maple": ("Maple", "medio"),
-    }
+
+async def market_alternatives(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Same-bucket yields from the same pool matcher the positions table uses."""
+    from .markets import apy_for
+
     held_buckets = {bucket(p["asset"]) for p in positions if p.get("protocol") != "Wallet"}
     if not held_buckets:
         return []
-    pools = await llama_pools()
     alts: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for pool in pools:
-        project = (pool.get("project") or "").lower()
-        if project not in wanted_projects:
+    for project, protocol, asset, symbol in _SWITCH_MARKETS:
+        if bucket(asset) not in held_buckets:
             continue
-        if (pool.get("chain") or "").lower() not in {"ethereum", "eth"}:
-            continue
-        symbol = (pool.get("symbol") or "").split("-")[0].split("_")[0]
-        if bucket(symbol) not in held_buckets:
-            continue
-        protocol, _risk = wanted_projects[project]
-        key = (protocol, symbol.upper())
+        key = (protocol, asset)
         if key in seen:
             continue
-        apy = pool.get("apy")
+        apy, apy30, pool = await apy_for(project, symbol, "ethereum")
         if apy is None:
             continue
         seen.add(key)
         alts.append(
             {
                 "protocol": protocol,
-                "asset": symbol.upper(),
+                "asset": asset,
                 "apy": float(apy),
-                "apy30": float(pool.get("apyMean30d") or apy),
+                "apy30": float(apy30) if apy30 is not None else float(apy),
                 "usd": 0,
                 "owner": None,
                 "market_only": True,
+                "pool_id": (pool or {}).get("pool"),
+                "apy_source": "DefiLlama",
             }
         )
     return alts

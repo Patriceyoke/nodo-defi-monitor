@@ -1,7 +1,9 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false };
+const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
+let loadGen = 0;
+let applyingPositions = false;
 const charts = {};
 
 const $ = (sel) => document.querySelector(sel);
@@ -334,6 +336,21 @@ function riskBadge(risk) {
 }
 
 function renderPositions(data) {
+  const summary = $("#pos-summary");
+  const pack = data.position_summary || {};
+  if (summary) {
+    const io = pack.io || {};
+    const moglie = pack.moglie || {};
+    const count = (io.count || 0) + (moglie.count || 0);
+    summary.textContent = `${count} posizioni · Io ${money(io.usd || 0)} · Moglie ${money(moglie.usd || 0)}`;
+  }
+  const details = $("#positions-details");
+  if (details && !state.positionsOpenApplied && typeof data.positions_open === "boolean") {
+    applyingPositions = true;
+    details.open = data.positions_open;
+    applyingPositions = false;
+    state.positionsOpenApplied = true;
+  }
   const pos = data.positions;
   const body = $("#pos-body");
   if (!pos.length) {
@@ -375,19 +392,26 @@ function renderSwitches(data) {
       <p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
     return;
   }
-  box.innerHTML = items.map((s) => `
-    <div class="callout ${s.hidden ? "warn" : "warn"}">
+  box.innerHTML = items.map((s) => {
+    const unstable = s.unstable
+      ? `<p class="mini warn-text">APY instabile: il guadagno usa la media a 30 giorni (${pct(s.from_rate)} → ${pct(s.to_rate)}), non il picco.</p>`
+      : "";
+    const source = `<p class="mini">Fonte APY: ${escapeHtml(s.apy_source || "DefiLlama")}${s.apy_at ? " · " + updatedClock(s.apy_at) : ""}</p>`;
+    return `
+    <div class="callout warn">
       <strong>${escapeHtml(s.lead)}</strong>
-      Spostare ${money(s.usd)} da ${escapeHtml(s.from)} (${pct(s.from_apy)}, rischio ${escapeHtml(s.from_risk)}) a ${escapeHtml(s.to)} (${pct(s.to_apy)}, rischio ${escapeHtml(s.to_risk)}).
-      Stesso rischio o inferiore, rendimento più alto anche dopo il gas (${money(s.gas_usd)}): circa ${money(s.net_year_usd)} in più all'anno. È solo una proposta.
+      <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
+        ${metric("APY", pct(s.from_apy) + " → " + pct(s.to_apy))}
+        ${metric("Rischio", escapeHtml(s.from_risk) + " → " + escapeHtml(s.to_risk))}
+        ${metric("Guadagno dopo il gas", "+" + money(s.net_year_usd), "stima annua · " + OWNER_LABEL[s.owner])}
+      </div>
+      <p>Spostare ${money(s.usd)} da ${escapeHtml(s.from)} (${pct(s.from_apy)}, rischio ${escapeHtml(s.from_risk)}) a ${escapeHtml(s.to)} (${pct(s.to_apy)}, rischio ${escapeHtml(s.to_risk)}).
+      Stesso rischio o inferiore, rendimento più alto anche dopo il gas (${money(s.gas_usd)}): circa ${money(s.net_year_usd)} in più all'anno. È solo una proposta.</p>
+      ${unstable}
+      ${source}
       <p>${yieldLink(s.url)} <button class="btn" type="button" data-switch-${s.hidden ? "unhide" : "hide"} data-owner="${escapeHtml(s.owner || "")}" data-from="${escapeHtml(s.from || "")}" data-to="${escapeHtml(s.to || "")}" data-spread="${escapeHtml(s.spread)}">${s.hidden ? "Ripristina" : "Nascondi"}</button></p>
-    </div>
-    <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
-      ${metric("APY", pct(s.from_apy) + " → " + pct(s.to_apy))}
-      ${metric("Rischio", escapeHtml(s.from_risk) + " → " + escapeHtml(s.to_risk))}
-      ${metric("Guadagno dopo il gas", "+" + money(s.net_year_usd), "stima annua · " + OWNER_LABEL[s.owner])}
-    </div>
-  `).join("") + `<p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
+    </div>`;
+  }).join("") + `<p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
 }
 
 function renderRows(el, rows) {
@@ -713,13 +737,7 @@ function render() {
     }
     showBanner(banners, data.ens_alerts || []);
     renderSecuritySummary(liveSecuritySummary(data.security_summary));
-    const pill = $("#source-pill");
-    if (pill) {
-      const clock = data.saved === false ? "" : updatedClock(data.ts);
-      pill.textContent = clock
-        ? (state.refreshing ? `aggiornato alle ${clock} · aggiornamento…` : `aggiornato alle ${clock}`)
-        : "in sola lettura";
-    }
+    paintFreshness(data);
   } catch (err) {
     showBanner([...(data.errors || []), "Errore nel disegno della pagina: " + (err && err.message ? err.message : err)]);
   }
@@ -729,30 +747,69 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
-async function load(force) {
+function paintFreshness(data) {
+  const pill = $("#source-pill");
+  const clock = data && data.saved !== false ? updatedClock(data.ts) : "";
+  if (pill) {
+    if (!clock) {
+      pill.className = "pill muted";
+      pill.textContent = "in sola lettura";
+    } else if (state.refreshing || state.stale) {
+      pill.className = "pill warn";
+      pill.textContent = state.refreshing ? `dati del ${clock} · aggiornamento…` : `dati del ${clock}`;
+    } else {
+      pill.className = "pill muted";
+      pill.textContent = `aggiornato alle ${clock}`;
+    }
+  }
+  const line = $("#source-line");
+  if (!line) return;
+  const sources = (data && data.sources) || {};
+  const parts = Object.values(sources).map((item) => {
+    const when = item.at ? updatedClock(item.at) : "n/d";
+    const stale = !item.ok || state.stale || state.refreshing;
+    const text = `${item.label || ""} ${when}`.trim();
+    return stale ? `<span class="warn-text">${escapeHtml(text)}</span>` : escapeHtml(text);
+  });
+  line.innerHTML = parts.join(" · ");
+}
+
+async function load(force, extra) {
+  const gen = ++loadGen;
+  const full = !!(extra && extra.full);
   const button = $("#btn-refresh");
   if (force && button) button.disabled = true;
-  state.refreshing = !!force;
-  if (force && state.data) render();
+  if (force) state.refreshing = true;
+  else state.stale = true;
+  if (state.data) render();
   const owner = encodeURIComponent(state.owner);
   const path = force ? "/api/refresh?owner=" + owner : "/api/portfolio?owner=" + owner;
   const opts = force ? { method: "POST" } : {};
   try {
     const data = await api(path, opts);
+    if (gen !== loadGen) return;
     state.data = data;
     state.refreshing = false;
+    state.stale = !force;
     if (data.fx_thb) state.fx = data.fx_thb;
     render();
-  } catch (err) {
-    showBanner([err && err.message ? err.message : "Ricalcolo non riuscito."]);
-  } finally {
-    state.refreshing = false;
-    if (button) button.disabled = false;
-    const pill = $("#source-pill");
-    if (pill && state.data && state.data.saved !== false && state.data.ts) {
-      const clock = updatedClock(state.data.ts);
-      if (clock) pill.textContent = `aggiornato alle ${clock}`;
+    if (force) {
+      const nftOpen = $("#nft-details") && $("#nft-details").open;
+      const secOpen = $("#security-details") && $("#security-details").open;
+      state.nfts = null;
+      state.security = null;
+      if (full || nftOpen) loadNfts(true);
+      if (full || secOpen) loadSecurity(true);
     }
+  } catch (err) {
+    if (gen !== loadGen) return;
+    state.refreshing = false;
+    state.stale = true;
+    showBanner([err && err.message ? err.message : "Ricalcolo non riuscito."]);
+    if (state.data) render();
+  } finally {
+    if (gen !== loadGen) return;
+    if (button) button.disabled = false;
   }
 }
 
@@ -805,7 +862,7 @@ function numOrNull(v) {
 async function boot() {
   commonChart();
   bindSegmented();
-  $("#btn-refresh").addEventListener("click", () => load(true));
+  $("#btn-refresh").addEventListener("click", () => load(true, { full: true }));
   $("#btn-settings").addEventListener("click", async () => { await loadSettings(); openSettings(true); });
   $("#btn-close-settings").addEventListener("click", () => openSettings(false));
   $("#settings-backdrop").addEventListener("click", () => openSettings(false));
@@ -1008,6 +1065,16 @@ async function boot() {
       if (btc) { await api("/api/wallets/btc/" + btc.dataset.delBtc, { method: "DELETE" }); await loadSettings(); await load(true); }
     } catch (err) { alert(err.message); }
   });
+  const posDetails = $("#positions-details");
+  if (posDetails) {
+    posDetails.addEventListener("toggle", () => {
+      if (applyingPositions) return;
+      api("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ positions_open: posDetails.open }),
+      }).catch(() => {});
+    });
+  }
   await load(false);
   load(true);
 }

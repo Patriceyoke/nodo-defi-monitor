@@ -204,6 +204,15 @@ def _pos(value: Any) -> float | None:
     return number
 
 
+def invalidate_caches() -> None:
+    """Forget the NFT inventory so the next open reads it again. Hides stay in SQLite."""
+    _CACHE.clear()
+    try:
+        db.cache_delete_prefix("nfts:")
+    except Exception:  # noqa: BLE001
+        log.warning("Cache NFT non azzerata")
+
+
 def _cache_get(key: str) -> Any | None:
     hit = _CACHE.get(key)
     if hit and time.time() - hit[0] < CACHE_TTL:

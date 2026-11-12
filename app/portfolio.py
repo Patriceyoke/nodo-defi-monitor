@@ -6,8 +6,7 @@ import logging
 import time
 from typing import Any
 
-from . import btc_security, bitcoin, db, ens, evm, markets, switches
-from .config import PROTOCOL_RISK
+from . import btc_security, bitcoin, db, ens, evm, markets, nft, switches
 from .validation import normalize_owner
 
 log = logging.getLogger("monitor.portfolio")
@@ -219,6 +218,56 @@ def stats(positions: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
+def consistency_notes(
+    positions: list[dict[str, Any]],
+    totals: dict[str, dict[str, Any]],
+    income: dict[str, Any],
+) -> list[str]:
+    """Flag a view whose totals, weighted APY or income do not match the rows."""
+    notes: list[str] = []
+    io = float(totals["io"]["total_usd"])
+    moglie = float(totals["moglie"]["total_usd"])
+    tutti = float(totals["tutti"]["total_usd"])
+    if abs(io + moglie - tutti) > 0.05:
+        notes.append("I totali Io e Moglie non sommano al Combinato.")
+    summed = sum(float(p.get("usd") or 0) for p in positions)
+    btc_usd = float(totals["tutti"]["btc_usd"])
+    if abs(summed + btc_usd - tutti) > 0.05:
+        notes.append("La somma delle posizioni non coincide con il totale.")
+    st = stats(positions)
+    year = float(income["tutti"]["year_usd"])
+    if abs(year - float(st["year_usd"])) > 0.05:
+        notes.append("Il reddito annuo non coincide con saldo per APY.")
+    if abs(float(income["tutti"]["apy_year"]) - float(st["wapy"])) > 0.01:
+        notes.append("L'APY medio non è pesato sul valore.")
+    return notes
+
+
+def position_summary(positions: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    for owner in ("io", "moglie"):
+        rows = [p for p in positions if p.get("owner") == owner]
+        out[owner] = {
+            "count": len(rows),
+            "usd": sum(float(p.get("usd") or 0) for p in rows),
+        }
+    return out
+
+
+def _source_status(rpc_ok: bool, fx: float | None, btc_price: float | None) -> dict[str, Any]:
+    def pack(label: str, key: str, ok: bool) -> dict[str, Any]:
+        at = markets.fetched_at(key)
+        return {"label": label, "at": int(at) if at else None, "ok": bool(ok and at)}
+
+    return {
+        "balances": {"label": "Saldi on-chain", "at": int(time.time()), "ok": bool(rpc_ok)},
+        "apy": pack("APY DefiLlama", markets.LLAMA_POOLS, True),
+        "prices": pack("Prezzi", "source:prices", True),
+        "fx": pack("Cambio THB", "source:fx", fx is not None),
+        "btc": pack("Prezzo BTC", "source:btc", btc_price is not None),
+    }
+
+
 def _lookup_price(px: dict[str, float], row: dict[str, Any]) -> float:
     if row.get("valuation_ok") is False:
         return 0.0
@@ -282,7 +331,7 @@ async def _enrich(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], lis
             "apy": apy,
             "apy30": apy30 if apy30 is not None else apy,
             "apy_available": apy is not None if row.get("protocol") != "Wallet" else None,
-            "risk": PROTOCOL_RISK.get(row["protocol"], "medio"),
+            "risk": switches.risk_of(row["protocol"], row.get("asset")),
             "pool_id": (pool or {}).get("pool"),
         }
         if row.get("protocol") != "Wallet" and apy is None:
@@ -335,6 +384,8 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             return _empty_raw()
         _STATUS["last_started_at"] = time.time()
         _STATUS["last_ok"] = None
+        markets.invalidate()
+        nft.invalidate_caches()
         evm_wallets = db.list_evm()
         btc_wallets = db.list_btc()
         positions: list[dict[str, Any]] = []
@@ -417,7 +468,7 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 log.warning("Arricchimento prezzi/APY fallito: %s", exc)
                 errors.append(f"Prezzi o APY: {exc}. Le posizioni lette restano in elenco.")
-                positions = [{**p, "price_usd": None, "usd": None, "apy": None, "apy30": None, "risk": PROTOCOL_RISK.get(p["protocol"], "medio")} for p in positions]
+                positions = [{**p, "price_usd": None, "usd": None, "apy": None, "apy30": None, "risk": switches.risk_of(p["protocol"], p.get("asset"))} for p in positions]
 
         node = await bitcoin.electrs_status()
         btc_scans: list[dict[str, Any]] = []
@@ -545,6 +596,7 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             "wallet_count": len(evm_wallets) + len(btc_wallets),
             "ens_names": ens_names,
             "ens_alerts": ens_alerts,
+            "sources": _source_status(rpc_ok, fx, btc_price),
             "saved": True,
         }
         _SNAPSHOT = snapshot
@@ -674,11 +726,18 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
             txs.append(tx)
     txs.sort(key=lambda t: t.get("height") or 0, reverse=True)
 
+    built_totals = {
+        "io": totals("io"),
+        "moglie": totals("moglie"),
+        "tutti": totals("tutti"),
+        "view": totals(owner),
+    }
+    notes = consistency_notes(data["positions"], built_totals, income)
     return {
         "owner": owner,
         "ts": data["ts"],
         "rpc_ok": data["rpc_ok"],
-        "errors": data["errors"],
+        "errors": list(data["errors"]) + notes,
         "fx_thb": data.get("fx_thb"),
         "currency": currency,
         "income": income,
@@ -686,12 +745,10 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
         "eth_price_usd": data["eth_price_usd"],
         "btc_price_usd": data["btc_price_usd"],
         "node": data["node"],
-        "totals": {
-            "io": totals("io"),
-            "moglie": totals("moglie"),
-            "tutti": totals("tutti"),
-            "view": totals(owner),
-        },
+        "totals": built_totals,
+        "position_summary": position_summary(data["positions"]),
+        "positions_open": (db.get_setting("positions_open", "1") or "1") != "0",
+        "sources": data.get("sources") or {},
         "positions": positions,
         "switches": ideas,
         "security": security,

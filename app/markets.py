@@ -24,6 +24,16 @@ POOLS_TTL = 6 * 60 * 60
 PRICE_TTL = 15 * 60
 
 
+def invalidate() -> None:
+    """Drop price, APY and FX caches so the next refresh reads the network."""
+    _CACHE.clear()
+
+
+def fetched_at(url: str) -> float | None:
+    hit = _CACHE.get(url)
+    return hit[0] if hit else None
+
+
 async def _get_json(url: str, ttl: float) -> Any:
     now = time.time()
     hit = _CACHE.get(url)
@@ -145,6 +155,7 @@ async def prices_usd(tokens: list[str]) -> dict[str, float]:
         lookup = wanted.get(key, key)
         out[lookup] = float(price)
         out[key] = float(price)
+    _CACHE["source:prices"] = (_CACHE.get(url, (time.time(), None))[0], True)
     return out
 
 
@@ -152,6 +163,7 @@ async def btc_price_usd() -> float | None:
     try:
         data = await _get_json(COINBASE_BTC, PRICE_TTL)
         amount = data.get("data", {}).get("amount")
+        _CACHE["source:btc"] = (_CACHE.get(COINBASE_BTC, (time.time(), None))[0], True)
         return float(amount) if amount is not None else None
     except Exception as exc:  # noqa: BLE001
         log.warning("BTC price failed: %s", exc)
@@ -179,6 +191,7 @@ async def fx_thb() -> float | None:
                     db.set_setting("fx_thb", f"{rate}")
                 except Exception:
                     log.warning("Could not store the THB rate")
+            _CACHE["source:fx"] = (_CACHE.get(COINBASE_FX, (time.time(), None))[0], True)
             return rate
     except Exception as exc:  # noqa: BLE001
         log.warning("FX THB failed: %s", exc)

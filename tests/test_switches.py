@@ -7,21 +7,73 @@ from app.switches import (
     estimate_gas_usd,
     mark_switch_hides,
     official_yield_url,
+    risk_of,
     suggest_switches,
     switch_is_hidden,
 )
 
 
-def _pos(owner, protocol, asset, usd, apy, risk=None):
+def _pos(owner, protocol, asset, usd, apy, risk=None, apy30=None):
     return {
         "owner": owner,
         "protocol": protocol,
         "asset": asset,
         "usd": usd,
         "apy": apy,
+        "apy30": apy if apy30 is None else apy30,
         "risk": risk,
         "alternatives": [],
     }
+
+
+def test_suggestion_apy_matches_the_position_row():
+    rows = [
+        _pos("moglie", "Aave", "USDC", 20_000, 4.5, apy30=4.4),
+        _pos("moglie", "Compound", "USDC", 1_000, 6.0, apy30=5.8),
+    ]
+    idea = suggest_switches(rows, gas_usd=1)[0]
+    assert idea["from_apy"] == rows[0]["apy"] == 4.5
+    assert idea["to_apy"] == rows[1]["apy"] == 6.0
+    assert idea["unstable"] is False
+    assert idea["net_year_usd"] == round(20_000 * (6.0 - 4.5) / 100 - 1, 2)
+
+
+def test_stusds_is_medium_risk_and_not_a_switch_from_aave():
+    assert risk_of("Sky", "stUSDS") == "medio"
+    assert risk_of("Sky", "sUSDS") == "basso"
+    held = [
+        _pos("moglie", "Aave", "USDC", 20_000, 4.5),
+        _pos("moglie", "Sky", "stUSDS", 1_000, 11.6),
+    ]
+    assert suggest_switches(held, gas_usd=1) == []
+    src = _pos("moglie", "Aave", "USDC", 20_000, 3.2)
+    src["alternatives"] = [{"protocol": "Sky", "asset": "stUSDS", "apy": 11.6, "apy30": 11.0, "owner": None}]
+    assert suggest_switches([src], gas_usd=1) == []
+
+
+def test_susds_stays_available_and_a_spike_uses_the_thirty_day_rate():
+    src = _pos("io", "Aave", "USDC", 20_000, 4.0, apy30=4.0)
+    src["alternatives"] = [{"protocol": "Sky", "asset": "sUSDS", "apy": 12.0, "apy30": 5.0, "owner": None}]
+    idea = suggest_switches([src], gas_usd=1)[0]
+    assert idea["to"] == "Sky sUSDS"
+    assert idea["to_risk"] == "basso"
+    assert idea["from_apy"] == 4.0
+    assert idea["to_apy"] == 12.0
+    assert idea["unstable"] is True
+    assert idea["to_rate"] == 5.0
+    assert idea["net_year_usd"] == round(20_000 * (5.0 - 4.0) / 100 - 1, 2)
+    assert idea["url"] == "https://app.sky.money/?widget=savings"
+
+
+def test_held_row_apy_wins_over_a_different_market_quote():
+    rows = [
+        _pos("io", "Aave", "USDC", 20_000, 4.5),
+        _pos("io", "Sky", "sUSDS", 1_000, 5.0),
+    ]
+    rows[0]["alternatives"] = [{"protocol": "Sky", "asset": "sUSDS", "apy": 11.6, "apy30": 11.0, "owner": None}]
+    idea = suggest_switches(rows, gas_usd=1)[0]
+    assert idea["to_apy"] == 5.0
+    assert idea["from_apy"] == 4.5
 
 
 def test_suggests_higher_yield_same_risk_after_gas():
@@ -116,7 +168,9 @@ def test_yield_links_stay_on_official_apps():
     assert official_yield_url("Spark", "USDT") == "https://app.spark.finance/savings/spusdt"
     assert "proto_spark_v3" in official_yield_url("SparkLend", "USDC")
     assert official_yield_url("Lido", "wstETH") == "https://stake.lido.fi/wrap"
-    assert official_yield_url("Sky", "stUSDS") == "https://app.sky.money/stake"
+    assert official_yield_url("Sky", "stUSDS") == "https://app.sky.money/?widget=stusds"
+    assert official_yield_url("Sky", "sUSDS") == "https://app.sky.money/?widget=savings"
+    assert official_yield_url("Sky", "SKY") == "https://app.sky.money/stake"
     assert official_yield_url("Fluid", "USDC") == "https://fluid.io/1/lending"
     assert official_yield_url("Not a protocol", "USDC") == ""
     for protocol, asset in (
