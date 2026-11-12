@@ -11,6 +11,7 @@ import ssl
 import time
 from typing import Any
 
+from embit import base58
 from embit.descriptor import Descriptor
 from embit.descriptor.checksum import checksum as descriptor_checksum
 from embit.networks import NETWORKS
@@ -40,6 +41,41 @@ class ElectrsError(RuntimeError):
 
 _INDEX_RE = re.compile(r"index|sync|not ready|waiting", re.IGNORECASE)
 _CHECKSUM_RE = re.compile(r"^[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{8}$")
+_INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+# Bitkey writes "External:" / "Internal:" in front of the descriptor. Also one pasted line.
+_LABEL_RE = re.compile(
+    r"""(?ix)
+    (?:
+        \A
+        |
+        [\r\n]+
+        |
+        (?<=[\s\)])
+    )
+    [^\S\r\n]*
+    (?:[-*•·]\s*|\d+[.)]\s*)?
+    [`"'“”‘’]*
+    (?:external|internal|receive|receiving|change)
+    [`"'“”‘’]*
+    \s*:\s*
+    """
+)
+_UNKNOWN_LABEL_RE = re.compile(r"(?i)^(?:[-*•·]\s*)?[`\"'“”‘’]*[a-z]{3,24}[`\"'“”‘’]*:")
+_EXTPUB_RE = re.compile(r"(?i)[xtyzuv]pub[1-9A-HJ-NP-Za-km-z]{20,}")
+# SLIP-132 public versions. The key material is what matters; embit derives from xpub/tpub.
+_PUB_VERSIONS = {
+    bytes.fromhex("0488b21e"): "main",  # xpub
+    bytes.fromhex("049d7cb2"): "main",  # ypub
+    bytes.fromhex("04b24746"): "main",  # zpub
+    bytes.fromhex("0295b43f"): "main",  # Ypub
+    bytes.fromhex("02aa7ed3"): "main",  # Zpub
+    bytes.fromhex("043587cf"): "test",  # tpub
+    bytes.fromhex("044a5262"): "test",  # upub
+    bytes.fromhex("045f1cf6"): "test",  # vpub
+    bytes.fromhex("024289ef"): "test",  # Upub
+    bytes.fromhex("02575483"): "test",  # Vpub
+}
+_CANON_VERSION = {"main": bytes.fromhex("0488b21e"), "test": bytes.fromhex("043587cf")}
 _DETECTED: tuple[str, int] | None = None
 _DETECTED_AT = 0.0
 
@@ -110,18 +146,26 @@ def mask_key(text: str) -> str:
     return value[:8] + "…" + value[-8:]
 
 
-def descriptor_lines(raw: str) -> list[str]:
-    """One descriptor, or the external line plus the internal line."""
-    text = (raw or "").replace("\r\n", "\n").strip()
-    if not text:
-        return []
+def _sanitize(raw: str) -> str:
+    text = (raw or "").replace("\u00a0", " ").replace("\u202f", " ")
+    text = _INVISIBLE_RE.sub("", text)
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _compact(chunk: str) -> str:
+    text = chunk.strip().strip("`\"'“”‘’")
+    return re.sub(r"\s+", "", text)
+
+
+def _split_depth(text: str) -> list[str]:
+    """Keep a newline between two descriptors. Do not split inside parentheses."""
     chunks: list[str] = []
     buf = ""
     depth = 0
     for char in text:
         if char == "\n" and depth == 0:
             if buf.strip():
-                chunks.append(buf.strip())
+                chunks.append(buf)
             buf = ""
             continue
         buf += char
@@ -130,14 +174,30 @@ def descriptor_lines(raw: str) -> list[str]:
         elif char == ")":
             depth = max(0, depth - 1)
     if buf.strip():
-        chunks.append(buf.strip())
-    merged: list[str] = []
-    for chunk in chunks:
-        if chunk.startswith("#") and merged:
-            merged[-1] += chunk
-        else:
-            merged.append(chunk)
-    return merged
+        chunks.append(buf)
+    return chunks
+
+
+def descriptor_lines(raw: str) -> list[str]:
+    """One descriptor, or External plus Internal, even on a single pasted line."""
+    text = _sanitize(raw)
+    if not text:
+        return []
+    lines: list[str] = []
+    for part in _LABEL_RE.split(text):
+        for piece in _split_depth(part):
+            chunk = _compact(piece)
+            if not chunk:
+                continue
+            if chunk.startswith("#") and lines:
+                lines[-1] += chunk
+                continue
+            if _UNKNOWN_LABEL_RE.match(chunk):
+                raise ValueError(
+                    "Etichetta: non riconosciuta. Prima del descrittore puoi scrivere External, Internal, Receive o Change, poi i due punti."
+                )
+            lines.append(chunk)
+    return lines
 
 
 def verify_checksum(line: str) -> str:
@@ -147,14 +207,42 @@ def verify_checksum(line: str) -> str:
         return body
     check = check.strip()
     if not _CHECKSUM_RE.match(check):
-        raise ValueError("Il checksum del descrittore non è valido. Copialo per intero, con i caratteri dopo #.")
+        raise ValueError("Checksum: il codice dopo # non è nel formato atteso.")
     try:
         expect = descriptor_checksum(body)
     except Exception:
-        raise ValueError("Il descrittore contiene un carattere che non entra nel checksum.") from None
+        raise ValueError("Checksum: la riga contiene un carattere che non entra nel codice di controllo.") from None
     if check != expect:
-        raise ValueError("Il checksum del descrittore non corrisponde. Controlla di aver copiato la riga per intero.")
+        raise ValueError("Checksum: il codice dopo # non corrisponde. Controlla di aver copiato la riga per intero.")
     return body
+
+
+def _canon_extpub(token: str) -> str:
+    try:
+        raw = base58.decode_check(token)
+    except Exception:
+        return token
+    if len(raw) != 78 or raw[:4] not in _PUB_VERSIONS:
+        return token
+    target = _CANON_VERSION[_PUB_VERSIONS[raw[:4]]]
+    if raw[:4] == target:
+        return token
+    return base58.encode_check(target + raw[4:])
+
+
+def _canon_extpubs(body: str) -> str:
+    return _EXTPUB_RE.sub(lambda match: _canon_extpub(match.group(0)), body)
+
+
+def _parse_failure(exc: Exception) -> ValueError:
+    low = str(exc).lower()
+    if any(word in low for word in ("hardened", "derivation", "wildcard", "range", "index")):
+        return ValueError(
+            "Percorso: usa /0/* per la ricezione, /1/* per il resto, o /<0;1>/*, con ' oppure h per gli indici hardened."
+        )
+    if any(word in low for word in ("key", "base58", "version", "pubkey", "checksum", "xpub")):
+        return ValueError("Chiave: serve una chiave pubblica xpub, Zpub o Vpub. Una chiave privata non è accettata.")
+    return ValueError("Descrittore: formato non valido. Controlla etichetta, chiave, percorso o checksum.")
 
 
 def _chain_role(body: str) -> str | None:
@@ -178,24 +266,35 @@ def _parse_public(body: str, kind: str) -> Descriptor:
         expr = f"pkh({body}/<0;1>/*)"
     try:
         return Descriptor.from_string(expr)
-    except Exception:
-        raise ValueError(
-            "Descrittore non valido. Servono wpkh, sh(wpkh), tr oppure wsh(sortedmulti(2,…)), "
-            "con il percorso /0/*, /1/* o /<0;1>/*, e solo chiavi pubbliche."
-        ) from None
+    except Exception as exc:
+        raise _parse_failure(exc) from None
+
+
+def prepare_watch_descriptor(raw: str) -> str:
+    """Normalize a Bitkey export or a plain descriptor. The result has no labels and no private keys."""
+    text = _sanitize(raw)
+    reject_if_secret(text)
+    lines = descriptor_lines(text)
+    if not lines:
+        raise ValueError("Etichetta: incolla il descrittore, oppure la riga External e la riga Internal.")
+    if len(lines) > 2:
+        raise ValueError("Etichetta: tieni solo la riga External e la riga Internal.")
+    cleaned: list[str] = []
+    for line in lines:
+        body = _canon_extpubs(verify_checksum(line))
+        kind = classify_btc_key(body)
+        _parse_public(body, kind)
+        cleaned.append(body)
+    return "\n".join(cleaned)
 
 
 def derive_addresses(raw: str, gap: int | None = None) -> list[dict[str, Any]]:
     """Derive receive (/0) and change (/1) addresses. Never touches private keys."""
-    reject_if_secret(raw)
+    prepared = prepare_watch_descriptor(raw)
     if gap is None:
         gap = gap_limit()
     gap = max(1, min(int(gap), 100))
-    lines = descriptor_lines(raw)
-    if not lines:
-        raise ValueError("Inserisci un xpub, uno zpub o un descrittore di sola osservazione.")
-    if len(lines) > 2:
-        raise ValueError("Incolla un solo descrittore, oppure la riga esterna (/0/*) e quella interna (/1/*).")
+    lines = prepared.split("\n")
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for line in lines:

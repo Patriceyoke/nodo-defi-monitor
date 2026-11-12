@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.1.8"
+version: "0.1.9"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,11 +23,10 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.1.8: in Impostazioni si importa un descrittore Bitcoin di sola
-  osservazione, anche Bitkey 2-di-3 con le righe /0/* e /1/* o la forma
-  <0;1>/*, più wpkh, sh(wpkh) e tr. Una chiave privata viene rifiutata.
-  I saldi arrivano da Electrs (electrs_electrs_1 se l'host è vuoto) e il
-  Bitcoin entra nei totali senza rendimento.
+  0.1.9: l'esportazione Bitkey si incolla così com'è, con External e
+  Internal, anche senza checksum e anche su una sola riga. Se non va,
+  il messaggio dice se è l'etichetta, la chiave, il percorso o il checksum,
+  senza ripetere il descrittore.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

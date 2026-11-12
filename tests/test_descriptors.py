@@ -41,6 +41,82 @@ def test_bitkey_lines_match_multipath():
     assert external not in masked
 
 
+def _child_xpub(index: int) -> str:
+    from embit.bip32 import HDKey
+
+    return HDKey.from_base58(XPUB).child(index).to_base58()
+
+
+def _swap_version(xpub: str, version: bytes) -> str:
+    from embit import base58
+
+    raw = base58.decode_check(xpub)
+    return base58.encode_check(version + raw[4:])
+
+
+def _bitkey_pair(keys: list[str], mark: str = "'") -> tuple[str, str]:
+    fps = ("11111111", "22222222", "33333333")
+
+    def line(branch: str) -> str:
+        parts = [f"[{fp}/84{mark}/0{mark}/0{mark}]{key}/{branch}/*" for fp, key in zip(fps, keys)]
+        return "wsh(sortedmulti(2," + ",".join(parts) + "))"
+
+    return line("0"), line("1")
+
+
+def test_bitkey_export_with_labels_and_variants():
+    keys = [XPUB, _child_xpub(0), _child_xpub(1)]
+    external, internal = _bitkey_pair(keys)
+    expected = [item["address"] for item in derive_addresses(f"{external}\n{internal}", gap=1)]
+    assert len(expected) == 2
+    assert expected[0].startswith("bc1q")
+
+    def same(text: str) -> None:
+        found = derive_addresses(text, gap=1)
+        assert [item["address"] for item in found] == expected
+        assert {item["role"] for item in found} == {"receive", "change"}
+
+    same(f"External: {external}\nInternal: {internal}")
+    same(f"External: {external}\r\nInternal: {internal}\r\n")
+    same(f"  External: {external}  \n  Internal: {internal}  ")
+    same(f"External: {external.replace(',', ', ')}\nInternal: {internal.replace(',', ', ')}")
+    same("External: " + external.replace("xpub", "xpub\u200b") + "\u00a0\nInternal: " + internal)
+    same(f"External: {external} Internal: {internal}")
+    same(f"- External: {external}\n* Internal: {internal}")
+    same(f"• External: {external}\n1. Internal: {internal}")
+    same(f'"External": {external}\n`Internal`: {internal}')
+    same(f"Receive: {external}\nChange: {internal}")
+    hardened = _bitkey_pair(keys, mark="h")
+    same(f"External: {hardened[0]}\nInternal: {hardened[1]}")
+    zpub = _swap_version(keys[0], bytes.fromhex("02aa7ed3"))
+    vpub = _swap_version(keys[1], bytes.fromhex("02575483"))
+    mixed = [zpub, vpub, keys[2]]
+    external_z, internal_z = _bitkey_pair(mixed)
+    same(f"External: {external_z}\nInternal: {internal_z}")
+
+
+def test_failure_names_the_part_without_the_descriptor():
+    external, _internal = _bitkey_pair([XPUB, _child_xpub(0), _child_xpub(1)])
+    broken = "External: " + external + ("p" if not external.endswith("p") else "q")
+    # No checksum on this line, so add a wrong one.
+    broken = f"External: {external}#qqqqqqqq"
+    with pytest.raises(ValueError, match="Checksum") as checksum_error:
+        derive_addresses(broken, gap=1)
+    assert XPUB not in str(checksum_error.value)
+    assert "wsh" not in str(checksum_error.value)
+
+    labelled = f"Wallet: {external}"
+    with pytest.raises(ValueError, match="Etichetta") as label_error:
+        derive_addresses(labelled, gap=1)
+    assert XPUB not in str(label_error.value)
+
+    bad_path = external.replace("/0/*", "/0h/*")
+    with pytest.raises(ValueError, match="Percorso") as path_error:
+        derive_addresses(f"External: {bad_path}", gap=1)
+    assert XPUB not in str(path_error.value)
+    assert "/0h" not in str(path_error.value)
+
+
 def test_single_sig_forms_and_checksum():
     wpkh = add_checksum(f"wpkh({XPUB}/<0;1>/*)")
     nested = add_checksum(f"sh(wpkh({XPUB}/0/*))")
@@ -49,7 +125,7 @@ def test_single_sig_forms_and_checksum():
     assert derive_addresses(nested, gap=1)[0]["address"].startswith("3")
     assert derive_addresses(taproot, gap=1)[0]["address"].startswith("bc1p")
     broken = wpkh[:-1] + ("p" if wpkh[-1] != "p" else "q")
-    with pytest.raises(ValueError, match="checksum"):
+    with pytest.raises(ValueError, match="(?i)checksum"):
         derive_addresses(broken, gap=1)
 
 

@@ -252,13 +252,13 @@ def _clean_backup(body: dict[str, Any]) -> dict[str, Any]:
     for row in body.get("btc") or []:
         if not isinstance(row, dict):
             continue
-        descriptor = str(row.get("descriptor") or "")
+        descriptor = bitcoin.prepare_watch_descriptor(str(row.get("descriptor") or ""))
         kind = classify_btc_key(descriptor)
         bitcoin.derive_addresses(descriptor, gap=1)
         btc_rows.append(
             {
                 "label": str(row.get("label") or "Importato")[:80],
-                "descriptor": descriptor.strip(),
+                "descriptor": descriptor,
                 "owner": normalize_owner(str(row.get("owner") or "")),
                 "kind": kind,
                 "role": str(row.get("role") or "watch"),
@@ -301,9 +301,9 @@ async def add_evm_wallet(body: EvmIn) -> dict[str, Any]:
 async def add_btc_wallet(body: BtcIn) -> dict[str, Any]:
     try:
         owner = normalize_owner(body.owner)
-        kind = classify_btc_key(body.descriptor)
-        # Prove we can derive at least one address before saving.
-        bitcoin.derive_addresses(body.descriptor, gap=1)
+        descriptor = bitcoin.prepare_watch_descriptor(body.descriptor)
+        kind = classify_btc_key(descriptor)
+        bitcoin.derive_addresses(descriptor, gap=1)
     except Exception as exc:
         raise _http_secret(exc) from exc
     role = (body.role or "watch").strip().lower()
@@ -313,7 +313,7 @@ async def add_btc_wallet(body: BtcIn) -> dict[str, Any]:
         wid = db.add_btc(
             body.label.strip(),
             kind,
-            body.descriptor.strip(),
+            descriptor,
             owner,
             role=role,
             alert_out_btc=body.alert_out_btc,

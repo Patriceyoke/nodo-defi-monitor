@@ -299,8 +299,8 @@
         <div><label>Soglia «troppo sulla Spesa» (BTC)</label><input name="hot_threshold_btc" type="number" step="0.00000001" /></div>
       </div>
       <label>Descrittore di sola osservazione, xpub o zpub</label>
-      <textarea name="descriptor" required rows="4" autocomplete="off" spellcheck="false" placeholder="wpkh(xpub…/&lt;0;1&gt;/*)#checksum&#10;Bitkey, due righe: wsh(sortedmulti(2,[impronta/percorso]xpub…/0/*,…))#… e la riga /1/*"></textarea>
-      <p class="mini">Accetta wpkh, sh(wpkh), tr e il multisig 2-di-3 di Bitkey, con checksum. La riga /0/* è la ricezione, la /1/* è il resto; vale anche la forma unica /&lt;0;1&gt;/*. Una chiave privata (xprv, tprv, WIF) viene rifiutata e non è salvata. Qui vedi solo una maschera.</p>
+      <textarea name="descriptor" required rows="4" autocomplete="off" spellcheck="false" placeholder="External: wsh(sortedmulti(2,[impronta/84'/0'/0']xpub…/0/*,…))&#10;Internal: wsh(sortedmulti(2,[impronta/84'/0'/0']xpub…/1/*,…))"></textarea>
+      <p class="mini">Puoi incollare l'esportazione Bitkey così com'è, con External e Internal, anche senza checksum. Vanno bene anche wpkh, sh(wpkh), tr e la forma /&lt;0;1&gt;/*. Una chiave privata viene rifiutata. Se qualcosa non va, il messaggio dice se è l'etichetta, la chiave, il percorso o il checksum, senza ripetere il descrittore.</p>
       <button class="btn primary" type="submit">Aggiungi conto Bitcoin</button>
     </form>
     <div id="btc-list"></div>
