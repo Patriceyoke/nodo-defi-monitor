@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from . import btc_security, bitcoin, db, ens, evm, markets, nft, switches
+from . import db, ens, evm, markets, nft, switches
 from .validation import normalize_owner
 
 log = logging.getLogger("monitor.portfolio")
@@ -28,38 +28,6 @@ _STATUS: dict[str, Any] = {
     "position_count": 0,
     "wallet_count": 0,
 }
-
-
-def _apply_btc_update(scans: list[dict[str, Any]], node: dict[str, Any]) -> None:
-    """Replace Bitcoin rows in the snapshot the dashboard already returned."""
-    global _SNAPSHOT
-    if not isinstance(_SNAPSHOT, dict):
-        return
-    _SNAPSHOT["btc_wallets"] = scans
-    _SNAPSHOT["node"] = node
-    tor_raw = db.get_setting("tor_enabled")
-    tor_flag = None if tor_raw == "" else tor_raw in {"1", "true", "yes", "on"}
-    _SNAPSHOT["btc_security"] = btc_security.evaluate(scans, node, tor_flag)
-
-
-def _sync_remembered_btc(data: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Use the finished background scan when the refresh snapshot still has the preview."""
-    if not isinstance(data, dict):
-        return data
-    latest = bitcoin.remembered_scans()
-    if not isinstance(latest, dict) or not latest.get("wallets"):
-        return data
-    current_ids = {item.get("id") for item in data.get("btc_wallets") or []}
-    latest_ids = {item.get("id") for item in latest["wallets"]}
-    if not current_ids or current_ids != latest_ids:
-        return data
-    node = latest.get("node") if isinstance(latest.get("node"), dict) else data.get("node") or {}
-    data["btc_wallets"] = latest["wallets"]
-    data["node"] = node
-    tor_raw = db.get_setting("tor_enabled")
-    tor_flag = None if tor_raw == "" else tor_raw in {"1", "true", "yes", "on"}
-    data["btc_security"] = btc_security.evaluate(latest["wallets"], node, tor_flag)
-    return data
 
 
 def cached_snapshot() -> dict[str, Any] | None:
@@ -274,8 +242,7 @@ def consistency_notes(
     if abs(io + moglie - tutti) > 0.05:
         notes.append("I totali Io e Moglie non sommano al Combinato.")
     summed = sum(float(p.get("usd") or 0) for p in positions)
-    btc_usd = float(totals["tutti"]["btc_usd"])
-    if abs(summed + btc_usd - tutti) > 0.05:
+    if abs(summed - tutti) > 0.05:
         notes.append("La somma delle posizioni non coincide con il totale.")
     st = stats(positions)
     year = float(income["tutti"]["year_usd"])
@@ -297,7 +264,7 @@ def position_summary(positions: list[dict[str, Any]]) -> dict[str, dict[str, flo
     return out
 
 
-def _source_status(rpc_ok: bool, fx: float | None, btc_price: float | None) -> dict[str, Any]:
+def _source_status(rpc_ok: bool, fx: float | None) -> dict[str, Any]:
     def pack(label: str, key: str, ok: bool) -> dict[str, Any]:
         at = markets.fetched_at(key)
         return {"label": label, "at": int(at) if at else None, "ok": bool(ok and at)}
@@ -307,7 +274,6 @@ def _source_status(rpc_ok: bool, fx: float | None, btc_price: float | None) -> d
         "apy": pack("APY DefiLlama", markets.LLAMA_POOLS, True),
         "prices": pack("Prezzi", "source:prices", True),
         "fx": pack("Cambio THB", "source:fx", fx is not None),
-        "btc": pack("Prezzo BTC", "source:btc", btc_price is not None),
     }
 
 
@@ -423,7 +389,7 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
         if not force:
             cached_snapshot()
             if _SNAPSHOT:
-                return _sync_remembered_btc(_SNAPSHOT)
+                return _SNAPSHOT
             return _empty_raw()
         _STATUS["last_started_at"] = time.time()
         _STATUS["last_ok"] = None
@@ -433,7 +399,6 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
         if fresh_nfts:
             nft.invalidate_caches()
         evm_wallets = db.list_evm()
-        btc_wallets = db.list_btc()
         positions: list[dict[str, Any]] = []
         errors: list[str] = []
         chains_ok: dict[str, bool] = {}
@@ -516,12 +481,6 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                 errors.append(f"Prezzi o APY: {exc}. Le posizioni lette restano in elenco.")
                 positions = [{**p, "price_usd": None, "usd": None, "apy": None, "apy30": None, "risk": switches.risk_of(p["protocol"], p.get("asset"))} for p in positions]
 
-        node = bitcoin.cached_node(bool(btc_wallets))
-        btc_scans = [bitcoin.preview_wallet(w) for w in btc_wallets]
-        bitcoin.set_scan_callback(_apply_btc_update)
-        bitcoin.schedule_scans(btc_wallets)
-
-        btc_price = await markets.btc_price_usd()
         fx = await markets.fx_thb()
         eth_price = 0.0
         for p in positions:
@@ -568,24 +527,14 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                 errors.append(f"Scadenze ENS non lette: {exc}")
         ens_alerts = ens.alerts_for(ens_names)
 
-        tor_raw = db.get_setting("tor_enabled")
-        tor_flag = None if tor_raw == "" else tor_raw in {"1", "true", "yes", "on"}
-        btc_checks = btc_security.evaluate(btc_scans, node, tor_flag)
-
-        # Persist a compact history point per owner + combined
         def hist_payload(owner: str) -> dict[str, Any]:
             pos = [p for p in positions if filter_owner(owner, p["owner"])]
-            btc = [w for w in btc_scans if filter_owner(owner, w["owner"])]
             s = stats(pos)
-            btc_amt = sum(float(w.get("btc") or 0) for w in btc)
-            btc_usd = btc_amt * (btc_price or 0)
             return {
                 "defi_usd": s["defi_usd"] + s["wallet_usd"],
                 "year_usd": s["year_usd"],
                 "wapy": s["wapy"],
-                "btc": btc_amt,
-                "btc_usd": btc_usd,
-                "total_usd": s["total_usd"] + btc_usd,
+                "total_usd": s["total_usd"],
             }
 
         if evm_wallets and not positions:
@@ -604,22 +553,18 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
             "positions": positions,
             "switches": ideas,
             "security": health,
-            "btc_wallets": btc_scans,
-            "btc_security": btc_checks,
-            "btc_price_usd": btc_price,
             "fx_thb": fx,
             "gas_usd": gas_usd,
             "eth_price_usd": eth_price,
-            "node": node,
             "alternatives": alts,
             "evm_owners": [w["owner"] for w in evm_wallets],
-            "wallet_count": len(evm_wallets) + len(btc_wallets),
+            "wallet_count": len(evm_wallets),
             "ens_names": ens_names,
             "ens_alerts": ens_alerts,
-            "sources": _source_status(rpc_ok, fx, btc_price),
+            "sources": _source_status(rpc_ok, fx),
             "saved": True,
         }
-        _SNAPSHOT = _sync_remembered_btc(snapshot)
+        _SNAPSHOT = snapshot
         _SNAPSHOT_AT = now
         try:
             db.cache_set("portfolio", snapshot)
@@ -635,7 +580,7 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                 "wallets": wallet_reports,
                 "errors": list(errors),
                 "position_count": len(positions),
-                "wallet_count": len(evm_wallets) + len(btc_wallets),
+                "wallet_count": len(evm_wallets),
             }
         )
         return snapshot
@@ -682,7 +627,6 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
                 "kept_previous": False,
             }
     positions = [p for p in data["positions"] if filter_owner(owner, p["owner"])]
-    btc = [w for w in data["btc_wallets"] if filter_owner(owner, w["owner"])]
     ideas, released = switches.mark_switch_hides(
         [s for s in data["switches"] if filter_owner(owner, s["owner"])],
         db.list_switch_hides(),
@@ -696,24 +640,13 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         c for c in data["security"]
         if c.get("protocol") in held or (c.get("protocol") in {"USDC", "USDT", "DAI", "USDS"} and any(p.get("asset") == c.get("protocol") for p in positions))
     ]
-    btc_sec = [c for c in data["btc_security"] if c.get("owner") == "tutti" or filter_owner(owner, c["owner"])]
-    price = data.get("btc_price_usd") or 0
-    s = stats(positions)
-    btc_amt = sum(float(w.get("btc") or 0) for w in btc)
-    btc_usd = btc_amt * price
-    # Always include Io/Moglie/Combinato totals
     def totals(filt: str) -> dict[str, Any]:
         pos = [p for p in data["positions"] if filter_owner(filt, p["owner"])]
-        bw = [w for w in data["btc_wallets"] if filter_owner(filt, w["owner"])]
         st = stats(pos)
-        amt = sum(float(w.get("btc") or 0) for w in bw)
-        usd = amt * price
         return {
             "owner": filt,
             "defi_usd": st["defi_usd"] + st["wallet_usd"],
-            "btc": amt,
-            "btc_usd": usd,
-            "total_usd": st["total_usd"] + usd,
+            "total_usd": st["total_usd"],
             "wapy": st["wapy"],
             "wapy30": st["wapy30"],
             "year_usd": st["year_usd"],
@@ -731,17 +664,6 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
             "tutti": income_by_protocol(all_positions),
         },
     }
-    for key in ("io", "moglie", "tutti"):
-        row = totals(key)
-        income[key]["btc"] = row["btc"]
-        income[key]["btc_usd"] = row["btc_usd"]
-        income[key]["btc_apy"] = 0.0
-        income[key]["btc_note"] = "Bitcoin non produce rendimento"
-    view_btc = totals(owner)
-    income["view"]["btc"] = view_btc["btc"]
-    income["view"]["btc_usd"] = view_btc["btc_usd"]
-    income["view"]["btc_apy"] = 0.0
-    income["view"]["btc_note"] = "Bitcoin non produce rendimento"
     currency = (db.get_setting("currency") or "USD").upper()
     if currency not in {"USD", "THB"}:
         currency = "USD"
@@ -749,11 +671,6 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
     ens_alerts = [a for a in (data.get("ens_alerts") or []) if filter_owner(owner, a.get("owner"))]
     ens_names = [a for a in (data.get("ens_names") or []) if filter_owner(owner, a.get("owner"))]
     history = db.get_history(owner, days=90)
-    txs = []
-    for w in btc:
-        for tx in w.get("txs") or []:
-            txs.append(tx)
-    txs.sort(key=lambda t: t.get("height") or 0, reverse=True)
 
     built_totals = {
         "io": totals("io"),
@@ -772,37 +689,19 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "income": income,
         "gas_usd": data["gas_usd"],
         "eth_price_usd": data["eth_price_usd"],
-        "btc_price_usd": data["btc_price_usd"],
-        "node": data["node"],
         "totals": built_totals,
         "position_summary": position_summary(data["positions"]),
         "positions_open": (db.get_setting("positions_open", "1") or "1") != "0",
-        "btc_progress": bitcoin.progress_view(),
         "sources": data.get("sources") or {},
         "positions": positions,
         "switches": ideas,
         "security": security,
-        "btc_wallets": [
-            {
-                k: v
-                for k, v in w.items()
-                if k not in {"addresses", "descriptor"}
-            }
-            | {
-                "address_count": len(w.get("addresses") or []),
-                "usd": float(w.get("btc") or 0) * price,
-            }
-            for w in btc
-        ],
-        "btc_security": btc_sec,
-        "btc_moves": txs[:40],
         "history": history,
         "ens_alerts": ens_alerts,
         "ens_names": ens_names,
         "security_summary": _security_summary(owner),
         "saved": data.get("saved") is not False,
         "kept_previous": bool(data.get("kept_previous")),
-        "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item))
-        + sum(1 for w in data.get("btc_wallets") or [] if filter_owner(owner, w.get("owner"))),
+        "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item)),
         "ok": not data.get("errors"),
     }

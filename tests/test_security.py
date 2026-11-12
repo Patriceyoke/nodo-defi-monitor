@@ -4,10 +4,13 @@ from __future__ import annotations
 import time
 
 from app.security import (
+    PERMIT2,
     aave_frozen_paused,
     annotate_hidden,
+    annotate_risk,
     approval_flags,
     approval_severity,
+    classify_approval,
     compare_balance,
     dedupe_approvals,
     is_unlimited,
@@ -21,10 +24,92 @@ from app.security import (
     security_summary,
 )
 
+AAVE_POOL = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
+OLD_ROUTER = "0x7a250d5630b4cf539739df2c5dacb4c659f2488d"
+
 WALLET = "0x" + "11" * 20
 SPENDER = "0x" + "22" * 20
 TOKEN = "0x" + "33" * 20
 NOW = 1_700_000_000
+
+
+def _row(**extra):
+    base = {
+        "owner": "io",
+        "wallet": WALLET,
+        "chain": "ethereum",
+        "token": TOKEN,
+        "spender": SPENDER,
+        "allowance": "unlimited",
+        "flags": ["unlimited"],
+        "symbol": "USDC",
+        "value_at_risk_usd": 0,
+    }
+    base.update(extra)
+    return base
+
+
+def test_known_protocol_in_use_is_normal_and_the_rest_is_a_revoke():
+    positions = [{"owner": "io", "protocol": "Aave", "asset": "USDC", "usd": 1000}]
+    kind, reason = classify_approval(_row(spender=AAVE_POOL), positions)
+    assert kind == "normale"
+    assert "Aave" in reason
+    kind, reason = classify_approval(_row(spender=AAVE_POOL, owner="moglie"), positions)
+    assert kind == "rischiosa"
+    assert "non risulta in uso" in reason
+    kind, reason = classify_approval(_row(spender=PERMIT2, value_at_risk_usd=80), [])
+    assert kind == "normale"
+    assert "Uniswap" in reason
+    kind, reason = classify_approval(_row(flags=["unlimited", "eoa"]), positions)
+    assert kind == "rischiosa"
+    assert "indirizzo semplice" in reason
+    kind, reason = classify_approval(_row(flags=["exploited"], allowance="10"), [])
+    assert kind == "rischiosa"
+    kind, reason = classify_approval(_row(spender=OLD_ROUTER), positions)
+    assert kind == "rischiosa"
+    assert "router vecchio" in reason
+    kind, _reason = classify_approval(_row(flags=["unverified"], allowance="10", value_at_risk_usd=0), [])
+    assert kind == "rischiosa"
+    kind, _reason = classify_approval(
+        _row(flags=[], allowance="5", value_at_risk_usd=0),
+        [],
+    )
+    assert kind == "normale"
+    ordered = annotate_risk([
+        _row(symbol="AAA", allowance="5", flags=[], value_at_risk_usd=0),
+        _row(symbol="ZZZ", spender=OLD_ROUTER),
+    ], positions)
+    assert [row["symbol"] for row in ordered] == ["ZZZ", "AAA"]
+    assert ordered[0]["risk_class"] == "rischiosa"
+
+
+def test_only_risky_approvals_count_as_todo(tmp_path, monkeypatch):
+    from app import config, db
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "monitor.db")
+    monkeypatch.setattr(config, "_READY", True)
+    monkeypatch.setattr(config, "DATA_PERSISTENT", True)
+    db.init_db()
+    db.cache_set("portfolio", {"positions": [{"owner": "io", "protocol": "Aave", "asset": "USDC", "usd": 500}]})
+    db.cache_set("security", {
+        "scanned_at": 1,
+        "approvals": [
+            _row(spender=AAVE_POOL, symbol="USDC"),
+            _row(spender=SPENDER, symbol="DAI", token="0x" + "44" * 20),
+        ],
+        "incidents": [],
+        "outflows": [],
+        "alerts": [],
+        "errors": [],
+    })
+    summary = security_summary("io")
+    assert summary["approvals"] == 1
+    assert summary["visible"] == 1
+    view = public_report("io")
+    assert [row["risk_class"] for row in view["approvals"]] == ["rischiosa", "normale"]
+    assert view["approvals"][0]["risk_reason"]
+    assert view["summary"]["approvals"] == 1
 
 
 def test_unlimited_allowance_is_capped_by_the_balance():

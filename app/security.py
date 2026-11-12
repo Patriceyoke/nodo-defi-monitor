@@ -25,6 +25,8 @@ DAY = 86400
 STALE_SECONDS = 180 * DAY
 CACHE_TTL = DAY
 UNLIMITED_RAW = 2**255
+MEANINGFUL_USD = 50.0
+VERY_LARGE_USD = 1_000.0
 APPROVAL_TOPIC = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
 APPROVAL_FOR_ALL_TOPIC = "0x17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31"
 AAVE_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
@@ -55,6 +57,37 @@ PROTOCOL_NAMES = {
 
 _SCAN: asyncio.Task | None = None
 _GOPLUS_BAD = ("phishing_activities", "stealing_attack", "honeypot_related_address", "cybercrime", "financial_crime", "gas_abuse")
+
+# Spenders the app treats as current protocol contracts. Addresses are public
+# deployments, compared in lowercase. A deprecated router stays in the list so
+# an unlimited approval to it is called out instead of treated as normal.
+PERMIT2 = "0x000000000022d473030f116ddee9f6b43ac78ba3"
+_SPENDER_BOOK: dict[str, dict[str, Any]] = {
+    # Aave v3 Pool (Ethereum).
+    "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": {"protocol": "Aave", "active": True},
+    # Compound v3 Comets (Ethereum): USDC, USDT, WETH.
+    "0xc3d688b66703497daa19211eedff47f25384cdc3": {"protocol": "Compound", "active": True},
+    "0x3afdc9bca9213a35503b077a6072f3d0d5ab0840": {"protocol": "Compound", "active": True},
+    "0xa17581a9e3356d9a858b789d68b4d866e593ae94": {"protocol": "Compound", "active": True},
+    # Lido: wstETH wrapper and the withdrawal queue.
+    "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0": {"protocol": "Lido", "active": True},
+    "0x889edc2edab5f40e902b864ad4d7ade8e412f9b1": {"protocol": "Lido", "active": True},
+    # SparkLend pool and Spark savings USDC.
+    "0xc13e21b648a5ee794902342038ff3adab66be987": {"protocol": "Spark", "active": True},
+    "0x28b3a8fb53b741a8fd78c0fb9a6b2393d896a43d": {"protocol": "Spark", "active": True},
+    # Sky savings and staking vaults.
+    "0xa3931d71877c0e7a3148cb7eb4463524fec27fbd": {"protocol": "Sky", "active": True},
+    "0x99cd4ec3f88a45940936f469e4bb72a2a701eeb9": {"protocol": "Sky", "active": True},
+    # Fluid liquidity layer.
+    "0x52aa899454998be5b000ad077a46bbe360f4e497": {"protocol": "Fluid", "active": True},
+    # Uniswap Permit2 (same address on the chains this app watches) and the current routers.
+    PERMIT2: {"protocol": "Uniswap", "active": True, "permit2": True},
+    "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad": {"protocol": "Uniswap", "active": True},
+    "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": {"protocol": "Uniswap", "active": True},
+    # Older routers. An approval here is not "in use" even though the contract is famous.
+    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d": {"protocol": "Uniswap", "active": False, "deprecated": True},
+    "0xe592427a0aece92de3edee1f18e0157c05861564": {"protocol": "Uniswap", "active": False, "deprecated": True},
+}
 
 
 def is_unlimited(raw: int) -> bool:
@@ -102,6 +135,114 @@ def approval_severity(flags: list[str]) -> str:
     if flags:
         return "warning"
     return "ok"
+
+
+def known_spender(address: str) -> dict[str, Any] | None:
+    return _SPENDER_BOOK.get((address or "").lower())
+
+
+def _uses_protocol(positions: list[dict[str, Any]] | None, owner: str | None, protocol: str) -> bool:
+    for row in positions or []:
+        if owner and row.get("owner") not in (None, "", owner):
+            continue
+        if row.get("protocol") != protocol:
+            continue
+        try:
+            if float(row.get("usd") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _allowance_is_broad(row: dict[str, Any]) -> bool:
+    flags = row.get("flags") or []
+    if "unlimited" in flags or row.get("allowance") == "unlimited":
+        return True
+    risk = row.get("value_at_risk_usd")
+    try:
+        if risk is not None and float(risk) >= VERY_LARGE_USD:
+            return True
+    except (TypeError, ValueError):
+        pass
+    allowance = row.get("allowance")
+    try:
+        if int(allowance) >= 10**30:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def _holds_meaningful_value(row: dict[str, Any]) -> bool:
+    risk = row.get("value_at_risk_usd")
+    try:
+        if risk is not None and float(risk) >= MEANINGFUL_USD:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def classify_approval(row: dict[str, Any], positions: list[dict[str, Any]] | None = None) -> tuple[str, str]:
+    """Return ``rischiosa`` or ``normale``, and a short Italian reason.
+
+    A known, current protocol contract is normal when the user is actually
+    using that protocol, or when the spender is Permit2 and the token still
+    has value. Anything unlimited or large toward another spender, or any
+    spender that is an EOA, unverified, flagged or a retired router, is a
+    revoke.
+    """
+    flags = list(row.get("flags") or [])
+    book = known_spender(str(row.get("spender") or ""))
+    owner = row.get("owner")
+    broad = _allowance_is_broad(row)
+    holds = _holds_meaningful_value(row)
+    if "exploited" in flags:
+        return "rischiosa", "Lo spender risulta segnalato o coinvolto in un exploit."
+    if "eoa" in flags:
+        return "rischiosa", "Lo spender è un indirizzo semplice, non un contratto di protocollo."
+    if "unverified" in flags:
+        return "rischiosa", "Lo spender non è un contratto verificato."
+    if book and book.get("deprecated"):
+        return "rischiosa", "È un router vecchio, non quello che i protocolli usano ora."
+    in_use = bool(book and book.get("active") and _uses_protocol(positions, owner, str(book.get("protocol") or "")))
+    permit2_in_use = bool(book and book.get("permit2") and (holds or in_use or broad))
+    if book and book.get("active") and (in_use or permit2_in_use):
+        return "normale", f"Contratto attivo di {book.get('protocol')} per un token che stai usando."
+    if broad and not (book and book.get("active") and in_use):
+        if book and book.get("active"):
+            return "rischiosa", f"Permesso ampio verso {book.get('protocol')}, ma quel protocollo non risulta in uso."
+        return "rischiosa", "Permesso ampio verso un contratto che non è un protocollo che stai usando."
+    if holds and not (book and book.get("active") and in_use):
+        return "rischiosa", "Tieni ancora questo token e lo spender non è un protocollo attivo che stai usando."
+    if book and book.get("active"):
+        return "normale", f"Contratto attivo di {book.get('protocol')}."
+    return "normale", "Permesso piccolo, senza un segnale di rischio."
+
+
+def annotate_risk(rows: list[dict[str, Any]], positions: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Attach the revoke class. Rischiose come first; hidden rows stay in the list."""
+    labelled: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        kind, reason = classify_approval(item, positions)
+        item["risk_class"] = kind
+        item["risk_reason"] = reason
+        item["severity"] = "danger" if kind == "rischiosa" else "ok"
+        labelled.append(item)
+    labelled.sort(key=lambda item: (0 if item.get("risk_class") == "rischiosa" else 1, item.get("symbol") or ""))
+    return labelled
+
+
+def _portfolio_positions() -> list[dict[str, Any]]:
+    stored = db.cache_get("portfolio") or {}
+    positions = stored.get("positions") if isinstance(stored, dict) else None
+    return list(positions or [])
+
+
+def _risky_visible(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if row.get("risk_class") == "rischiosa" and not row.get("hidden")]
 
 
 def revoke_url(wallet: str, chain_id: int) -> str:
@@ -369,15 +510,18 @@ def annotate_hidden(rows: list[dict[str, Any]], hides: list[dict[str, Any]] | No
 def security_summary(owner: str = "tutti") -> dict[str, int]:
     owner = normalize_owner(owner, allow_all=True)
     report = cached_report() or {}
-    approvals = annotate_hidden(dedupe_approvals(filter_owner_rows(list(report.get("approvals") or []), owner)))
+    approvals = annotate_risk(
+        annotate_hidden(dedupe_approvals(filter_owner_rows(list(report.get("approvals") or []), owner))),
+        _portfolio_positions(),
+    )
     incidents = list(report.get("incidents") or [])
     outflows = filter_owner_rows(list(report.get("outflows") or []), owner)
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
-    visible_approvals = [row for row in approvals if not row.get("hidden")]
+    visible_approvals = _risky_visible(approvals)
     return {
         "approvals": len(visible_approvals),
-        "hidden": len(approvals) - len(visible_approvals),
+        "hidden": sum(1 for row in approvals if row.get("hidden")),
         "incidents": len(incidents),
         "outflows": len(outflows),
         "visible": len(visible_approvals) + len(incidents) + len(outflows),
@@ -418,7 +562,9 @@ def cached_alerts(owner: str = "tutti") -> list[dict[str, Any]]:
 
 
 def _alert_from_approval(row: dict[str, Any]) -> dict[str, Any] | None:
-    if row.get("severity") not in {"warning", "danger"}:
+    if row.get("risk_class") != "rischiosa" and row.get("severity") not in {"warning", "danger"}:
+        return None
+    if row.get("risk_class") == "normale":
         return None
     flags = row.get("flags") or []
     bits = []
@@ -434,12 +580,13 @@ def _alert_from_approval(row: dict[str, Any]) -> dict[str, Any] | None:
         bits.append("non aggiornata da oltre 180 giorni")
     risk = row.get("value_at_risk_usd")
     extra = f" Valore a rischio circa {risk:.0f} USD." if isinstance(risk, (int, float)) and risk else ""
+    reason = row.get("risk_reason") or (", ".join(bits) if bits else "da revocare")
     return {
         "owner": row.get("owner"),
-        "level": row["severity"],
+        "level": "danger",
         "kind": "approval",
-        "title": f"Approvazione {row.get('symbol') or 'token'}",
-        "text": f"{row.get('label') or 'Portafoglio'}: {', '.join(bits) or 'da controllare'}.{extra} La revoca si firma sul tuo hardware, non qui.",
+        "title": f"Revoca {row.get('symbol') or 'token'}",
+        "text": f"{row.get('label') or 'Portafoglio'}: {reason}{extra} La revoca si firma sul tuo hardware, non qui.",
         "href": row.get("revoke_url"),
     }
 
@@ -752,8 +899,7 @@ async def scan_and_store() -> dict[str, Any]:
                     now=now,
                     exploited=spender_bad.get(bad_key, False),
                 )
-                # A contract we could not classify stays "unknown" only when it is not an EOA.
-                approvals.append({
+                draft = {
                     "owner": wallet["owner"],
                     "label": wallet["label"],
                     "wallet": address,
@@ -770,7 +916,12 @@ async def scan_and_store() -> dict[str, Any]:
                     "approved_at": item.get("approved_at"),
                     "revoke_url": revoke_url(address, WATCH_CHAINS[chain]["id"]),
                     "tx_url": tx_url(chain, item.get("tx_hash")),
-                })
+                }
+                risk_class, risk_reason = classify_approval(draft, positions)
+                draft["risk_class"] = risk_class
+                draft["risk_reason"] = risk_reason
+                draft["severity"] = "danger" if risk_class == "rischiosa" else "ok"
+                approvals.append(draft)
     hacks = await _hacks()
     incidents = match_hacks(held, hacks, now)
     incidents.extend(match_hacks(held, await _official_notes(held), now))
@@ -787,7 +938,7 @@ async def scan_and_store() -> dict[str, Any]:
     for row in updates:
         db.upsert_balance_mark(row["wallet"], row["chain"], row["token"], row["owner"], row["symbol"], row["amount"], row["usd"])
     alerts: list[dict[str, Any]] = []
-    approvals = dedupe_approvals(approvals)
+    approvals = annotate_risk(dedupe_approvals(approvals), positions)
     alerts.extend(item for item in (_alert_from_approval(row) for row in approvals) if item)
     for incident in incidents:
         owners = sorted({pos.get("owner") for pos in positions if pos.get("protocol") == incident.get("protocol")})
@@ -832,16 +983,20 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
             "summary": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
             "counts": {"io": 0, "moglie": 0, "tutti": 0},
         }
-    approvals = annotate_hidden(dedupe_approvals(filter_owner_rows(list(report.get("approvals") or []), owner)))
+    approvals = annotate_risk(
+        annotate_hidden(dedupe_approvals(filter_owner_rows(list(report.get("approvals") or []), owner))),
+        _portfolio_positions(),
+    )
     outflows = filter_owner_rows(list(report.get("outflows") or []), owner)
     alerts = [row for row in filter_owner_rows(list(report.get("alerts") or []), owner) if row.get("kind") != "approval"]
+    alerts.extend(item for item in (_alert_from_approval(row) for row in approvals if not row.get("hidden")) if item)
     incidents = list(report.get("incidents") or [])
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
-    visible_approvals = [row for row in approvals if not row.get("hidden")]
+    visible_approvals = _risky_visible(approvals)
     summary = {
         "approvals": len(visible_approvals),
-        "hidden": len(approvals) - len(visible_approvals),
+        "hidden": sum(1 for row in approvals if row.get("hidden")),
         "incidents": len(incidents),
         "outflows": len(outflows),
         "visible": len(visible_approvals) + len(incidents) + len(outflows),

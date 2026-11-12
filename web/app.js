@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
+const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
 let loadGen = 0;
 let applyingPositions = false;
 const charts = {};
@@ -26,9 +26,6 @@ function money(usd, cur = state.currency) {
 function pct(n) {
   if (n == null || Number.isNaN(n)) return "—";
   return Number(n).toLocaleString("it-IT", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
-}
-function btcFmt(n) {
-  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 8 }) + " BTC";
 }
 function toneClass(tone) {
   return tone === "success" ? "ok" : tone === "danger" ? "bad" : tone === "warning" ? "warn" : "info";
@@ -65,17 +62,17 @@ function showBanner(list, ensAlerts) {
 function securityLine(summary) {
   const approvals = Number(summary.approvals || 0);
   const other = Number(summary.incidents || 0) + Number(summary.outflows || 0);
-  const approvazioni = approvals === 1 ? "1 approvazione" : `${approvals} approvazioni`;
+  const approvazioni = approvals === 1 ? "1 approvazione da fare" : `${approvals} approvazioni da fare`;
   const avvisi = other === 1 ? "1 avviso" : `${other} avvisi`;
   if (approvals && other) return `${approvazioni} e ${avvisi} da controllare`;
-  if (approvals) return `${approvazioni} da controllare`;
+  if (approvals) return approvazioni;
   return `${avvisi} da controllare`;
 }
 
 function liveSecuritySummary(fallback) {
   const data = state.security;
   if (data && data.ready) {
-    const approvals = securityRows(data.approvals).filter((row) => !row.hidden);
+    const approvals = securityRows(data.approvals).filter((row) => !row.hidden && row.risk_class === "rischiosa");
     const outflows = securityRows(data.outflows);
     const incidents = (data.incidents || []).filter((row) => state.owner === "tutti" || (row.owners || []).includes(state.owner));
     return { approvals: approvals.length, incidents: incidents.length, outflows: outflows.length, visible: approvals.length + incidents.length + outflows.length };
@@ -155,9 +152,9 @@ function renderMetrics(data) {
   const t = data.totals;
   const view = t.view;
   $("#metrics").innerHTML = [
-    metric("Io", money(t.io.total_usd), `DeFi ${money(t.io.defi_usd)} + BTC ${money(t.io.btc_usd)}`, "io"),
-    metric("Moglie", money(t.moglie.total_usd), `DeFi ${money(t.moglie.defi_usd)} + BTC ${money(t.moglie.btc_usd)}`, "moglie"),
-    metric("Combinato", money(t.tutti.total_usd), `DeFi ${money(t.tutti.defi_usd)} + BTC ${money(t.tutti.btc_usd)}`, "tutti"),
+    metric("Io", money(t.io.total_usd), `DeFi ${money(t.io.defi_usd)}`, "io"),
+    metric("Moglie", money(t.moglie.total_usd), `DeFi ${money(t.moglie.defi_usd)}`, "moglie"),
+    metric("Combinato", money(t.tutti.total_usd), `DeFi ${money(t.tutti.defi_usd)}`, "tutti"),
     metric("APY DeFi (" + OWNER_LABEL[state.owner] + ")", pct(view.wapy), ""),
   ].join("");
   renderIncome(data);
@@ -180,7 +177,6 @@ function renderIncome(data) {
       <div class="value">${money(row.month_usd)}</div>
       <div class="detail">al mese · settimana ${money(row.week_usd)} · anno ${money(row.year_usd)}</div>
       <div class="detail">${pct(row.apy_month)} al mese · ${pct(row.apy_year)} annuo</div>
-      <div class="detail">Bitcoin ${btcFmt((data.totals[key] || {}).btc)} · ${money((data.totals[key] || {}).btc_usd)} · non fruttifero</div>
     </div>`;
   }).join("");
   const table = inc.by_protocol || {};
@@ -423,175 +419,18 @@ function renderSwitches(data) {
   }).join("") + `<p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
 }
 
-function electrsDiagnostic(row) {
-  const attempts = row.attempts || [];
-  const net = row.network || {};
-  if (!attempts.length && !(net.ips || net.networks || net.gateway)) return "";
-  const lines = attempts.map((item) => {
-    const result = item.ok ? "TCP e server.version ok" : (item.error || "errore");
-    const elapsed = item.ms != null ? ` · ${item.ms} ms` : "";
-    return `<li><code>${escapeHtml(item.host)}:${escapeHtml(item.port)}</code> — ${escapeHtml(result)}${elapsed}</li>`;
-  }).join("");
-  const steps = (row.steps || []).map((step) => {
-    const outcome = step.ok ? (step.detail || "ok") : (step.detail || step.error || "errore");
-    const elapsed = step.ms != null ? `${step.ms} ms` : "n/d";
-    return `<li>${escapeHtml(step.name)} — ${escapeHtml(outcome)} · ${escapeHtml(elapsed)}</li>`;
-  }).join("");
-  const ips = (net.ips || []).join(", ") || "n/d";
-  const networks = (net.networks || []).join(", ") || "n/d";
-  const gateway = net.gateway || "n/d";
-  const domain = net.domain ? ` · Dominio: ${escapeHtml(net.domain)}` : "";
-  const injected = net.electrs_ip ? ` · APP_ELECTRS_NODE_IP: ${escapeHtml(net.electrs_ip)}:${escapeHtml(net.electrs_port || "")}` : "";
-  return `<details class="electrs-diag"><summary>Diagnostica Electrs</summary>
-    <p class="mini">IP del contenitore: ${escapeHtml(ips)} · Reti: ${escapeHtml(networks)} · Gateway: ${escapeHtml(gateway)}${domain}${injected}</p>
-    <ul>${lines}</ul>
-    ${steps ? `<p class="mini">Passi sul server scelto</p><ul>${steps}</ul>` : ""}
-    </details>`;
-}
 function renderRows(el, rows) {
+  if (!el) return;
   if (!rows.length) {
     el.innerHTML = `<p class="mini">Nessun elemento in questa vista.</p>`;
     return;
   }
   el.innerHTML = rows.map((s) => `
     <div class="rowitem">
-      <div><div class="title">${escapeHtml(s.title || s.protocol)}</div><div class="detail">${escapeHtml(s.detail || "")}${electrsDiagnostic(s)}</div></div>
+      <div><div class="title">${escapeHtml(s.title || s.protocol)}</div><div class="detail">${escapeHtml(s.detail || "")}</div></div>
       <span class="pill ${toneClass(s.tone)}">${escapeHtml(s.label || "")}</span>
     </div>`).join("");
 }
-
-function btcProgressLine(wallet) {
-  const rows = (state.btcProgress && state.btcProgress.wallets) || [];
-  const row = rows.find((item) => item.id === wallet.id);
-  if (!row || row.status !== "In scansione") return "";
-  const branch = row.branch === "change" ? "Resto" : row.branch === "receive" ? "Ricezione" : "Avvio";
-  return `<p class="mini">Scansione ${branch} · indice ${row.index ?? 0} · ${row.checked ?? 0} indirizzi</p>`;
-}
-function branchLine(label, row) {
-  const item = row || {};
-  const last = item.last_used == null ? "nessuno" : "#" + item.last_used;
-  const first = item.first_address || "non disponibile";
-  return `${label}: ${item.scanned || 0} indirizzi, ultimo usato ${last}, primo ${first}`;
-}
-function btcCardAmount(wallet) {
-  if (!wallet || wallet.balance_known === false || wallet.btc == null) return "—";
-  return btcFmt(wallet.btc);
-}
-function scanDetail(wallet) {
-  const scan = (wallet && wallet.scan) || {};
-  const rows = (state.btcProgress && state.btcProgress.wallets) || [];
-  const progress = rows.find((item) => wallet && item.id === wallet.id);
-  let stateText = scan.state || (wallet && wallet.status) || "In attesa";
-  if (progress && progress.status === "In scansione") {
-    const branch = progress.branch === "change" ? "Resto" : progress.branch === "receive" ? "Ricezione" : "Avvio";
-    stateText = `In scansione · ${branch} · indice ${progress.index ?? 0} · ${progress.checked ?? 0} indirizzi`;
-  }
-  const confirmed = btcFmt((scan.confirmed_sats || 0) / 100000000);
-  const unconfirmed = btcFmt((scan.unconfirmed_sats || 0) / 100000000);
-  const error = scan.error ? String(scan.error) : "nessuno";
-  return `<details class="electrs-diag scan-detail"><summary>Dettaglio scansione</summary>
-    <p class="mini">Stato: ${escapeHtml(stateText)}</p>
-    <p class="mini">${escapeHtml(branchLine("Ricezione", scan.receive))}</p>
-    <p class="mini">${escapeHtml(branchLine("Resto", scan.change))}</p>
-    <p class="mini">${scan.utxo_count || 0} UTXO · confermati ${confirmed} · non confermati ${unconfirmed}</p>
-    <p class="mini">Ultimo errore: ${escapeHtml(error)}</p>
-  </details>`;
-}
-function renderBtc(data) {
-  const node = data.node || {};
-  const pill = $("#btc-node-pill");
-  pill.textContent = node.indexing
-    ? "Electrs sta indicizzando"
-    : node.connected
-      ? "nodo locale connesso"
-      : node.configured
-        ? "Electrs non raggiungibile"
-        : "indicizzatore non configurato";
-  pill.className = "pill " + (node.connected && !node.indexing ? "ok" : "warn");
-  const price = data.btc_price_usd || 0;
-  $("#btc-props").innerHTML = `
-    <p><strong>Fonte dati:</strong> ${node.source || "Nodo Bitcoin Umbrel / Electrs (locale)"} ·
-    <strong>Stato:</strong> ${node.detail || "—"} ·
-    <strong>Prezzo usato:</strong> ${price ? money(price) + " / BTC" : "non disponibile"} ·
-    <strong>Vista:</strong> ${OWNER_LABEL[state.owner]}</p>`;
-  const wallets = data.btc_wallets || [];
-  const btcAmt = wallets.reduce((s, w) => s + (w.btc || 0), 0);
-  const btcUsd = btcAmt * price;
-  const view = data.totals.view;
-  const portUsd = view.total_usd;
-  const share = portUsd ? (btcUsd / portUsd) * 100 : 0;
-  $("#btc-metrics").innerHTML = [
-    metric("Totale Bitcoin (" + OWNER_LABEL[state.owner] + ")", btcFmt(btcAmt)),
-    metric("Valore fiat", money(btcUsd)),
-    metric("Quota sul portafoglio", pct(share), `DeFi ${money(view.defi_usd)} + Bitcoin ${money(btcUsd)} = ${money(portUsd)}`),
-    metric("Bitcoin di Io", btcFmt(data.totals.io.btc), money(data.totals.io.btc_usd)),
-    metric("Bitcoin della Moglie", btcFmt(data.totals.moglie.btc), money(data.totals.moglie.btc_usd)),
-  ].join("");
-
-  $("#btc-cards").innerHTML = wallets.length ? wallets.map((w) => `
-    <div class="card wallet-card">
-      <div class="card-head"><h3>${w.label}</h3><span class="pill ${w.connected ? "ok" : "warn"}">${w.status}</span></div>
-      <p class="mini">${OWNER_LABEL[w.owner]} · ${w.kind} · ${w.key_masked}</p>
-      <div class="value" style="font-size:1.3rem;font-weight:800">${btcCardAmount(w)}</div>
-      <p class="mini">${w.balance_known === false || w.btc == null ? "saldo non ancora letto" : money(w.usd != null ? w.usd : (w.btc || 0) * price)}${w.utxo_count != null ? " · " + w.utxo_count + " UTXO" : ""}</p>
-      <p class="mini">Ultimo movimento: ${escapeHtml(w.last || "—")}</p>
-      ${btcProgressLine(w)}
-      ${w.stale && w.scanned_at ? `<p class="mini warn-text">dati del ${updatedClock(w.scanned_at)}</p>` : (w.balance_known === false || w.stale ? `<p class="mini warn-text">${escapeHtml(w.status || "Scansione non completata")}</p>` : "")}
-      ${scanDetail(w)}
-    </div>`).join("") : `<p class="mini">Nessun xpub in questa vista. Aggiungilo in Impostazioni.</p>`;
-
-  paintChart("chart-btc", {
-    type: "doughnut",
-    data: {
-      labels: wallets.map((w) => w.label + " · " + OWNER_LABEL[w.owner]),
-      datasets: [{ data: wallets.map((w) => w.btc || 0), backgroundColor: PALETTE, borderWidth: 0 }],
-    },
-    options: { plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: (c) => ` ${c.label}: ${btcFmt(c.raw)}` } } }, cutout: "62%" },
-  });
-
-  let portParts, portTitle, portTotal;
-  if (state.owner === "tutti") {
-    portParts = [{ label: "Io", value: data.totals.io.total_usd }, { label: "Moglie", value: data.totals.moglie.total_usd }];
-    portTitle = "Portafoglio per titolare";
-    portTotal = data.totals.tutti.total_usd;
-  } else {
-    portParts = [{ label: "Bitcoin", value: btcUsd }, { label: "DeFi", value: view.defi_usd }];
-    portTitle = "Bitcoin nel portafoglio";
-    portTotal = portUsd;
-  }
-  $("#port-title").textContent = portTitle;
-  paintChart("chart-port", {
-    type: "doughnut",
-    data: {
-      labels: portParts.map((p) => p.label),
-      datasets: [{ data: portParts.map((p) => p.value), backgroundColor: PALETTE, borderWidth: 0 }],
-    },
-    options: { plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: (c) => ` ${c.label}: ${money(c.raw)}` } } }, cutout: "62%" },
-  });
-
-  const tabs = $("#btc-tabs");
-  const opts = [{ id: "all", label: "Tutti" }, ...wallets.map((w) => ({ id: String(w.id), label: w.label }))];
-  if (!opts.some((o) => o.id === state.btcTab)) state.btcTab = "all";
-  tabs.innerHTML = opts.map((o) => `<button type="button" data-value="${o.id}" class="${state.btcTab === o.id ? "on" : ""}">${o.label}</button>`).join("");
-  tabs.onclick = (ev) => {
-    const btn = ev.target.closest("button[data-value]");
-    if (!btn) return;
-    state.btcTab = btn.dataset.value;
-    render();
-  };
-  const moves = (data.btc_moves || []).filter((m) => state.btcTab === "all" || String(m.wallet_id) === state.btcTab);
-  $("#btc-moves").innerHTML = moves.length ? moves.map((m) => `
-    <tr>
-      <td>${OWNER_LABEL[m.owner] || m.owner}</td>
-      <td>${m.wallet || ""}</td>
-      <td>${m.height || "—"}</td>
-      <td><span class="pill ${m.kind === "Ricevuto" ? "ok" : "muted"}">${m.kind}</span></td>
-      <td class="num">${(m.kind === "Inviato" ? "−" : "+")}${btcFmt(m.btc || 0)}</td>
-    </tr>`).join("") : `<tr><td colspan="5" class="mini">Nessun movimento in questa vista. Se l'indicizzatore non è collegato, i movimenti restano vuoti.</td></tr>`;
-
-  renderRows($("#btc-security"), data.btc_security || []);
-}
-
 function moneyOrMissing(usd) {
   if (usd == null || Number.isNaN(Number(usd))) return "prezzo non disponibile";
   return money(usd);
@@ -694,7 +533,7 @@ function renderSecurity() {
     box.innerHTML = `<p class="mini">${escapeHtml(data.note || "Nessun controllo ancora.")}</p>`;
     return;
   }
-  const allApprovals = securityRows(data.approvals);
+  const allApprovals = securityRows(data.approvals).slice().sort((a, b) => (a.risk_class === "rischiosa" ? 0 : 1) - (b.risk_class === "rischiosa" ? 0 : 1));
   const hiddenApprovals = allApprovals.filter((row) => row.hidden);
   const approvals = state.showHiddenApprovals ? allApprovals : allApprovals.filter((row) => !row.hidden);
   const hiddenBtn = $("#btn-sec-hidden");
@@ -706,8 +545,8 @@ function renderSecurity() {
   }[flag] || flag)).join(", ");
   const approvalHtml = approvals.length ? approvals.map((row) => `
     <article class="nft-card">
-      <h3>${escapeHtml(row.symbol || "Token")} · ${escapeHtml(row.chain || "")}</h3>
-      <p class="mini">${escapeHtml(row.label || "")} · ${OWNER_LABEL[row.owner] || ""} · ${escapeHtml(flagText(row.flags) || "nessun segnale")}</p>
+      <h3>${escapeHtml(row.symbol || "Token")} · ${escapeHtml(row.chain || "")} <span class="pill ${row.risk_class === "rischiosa" ? "bad" : "ok"}">${row.risk_class === "rischiosa" ? "Rischiosa" : "Normale"}</span></h3>
+      <p class="mini">${escapeHtml(row.label || "")} · ${OWNER_LABEL[row.owner] || ""} · ${escapeHtml(row.risk_reason || flagText(row.flags) || "nessun segnale")}</p>
       <p class="mini">A rischio: ${row.value_at_risk_usd == null ? "n/d" : money(row.value_at_risk_usd)}</p>
       <p><a href="${escapeHtml(row.revoke_url || "#")}" target="_blank" rel="noopener">Apri su revoke.cash</a> <span class="mini">La firma resta tua, per esempio su OneKey.</span></p>
       <p><button class="btn" type="button" data-approval-${row.hidden ? "unhide" : "hide"} data-wallet="${escapeHtml(row.wallet || "")}" data-chain="${escapeHtml(row.chain || "")}" data-token="${escapeHtml(row.token || "")}" data-spender="${escapeHtml(row.spender || "")}" data-allowance="${escapeHtml(row.allowance)}">${row.hidden ? "Ripristina" : "Nascondi"}</button></p>
@@ -786,18 +625,16 @@ function render() {
     return;
   }
   data.positions = data.positions || [];
-  data.btc_wallets = data.btc_wallets || [];
   data.errors = data.errors || [];
   data.history = data.history || [];
   data.security = data.security || [];
-  data.btc_security = data.btc_security || [];
   try {
     if (data.currency === "USD" || data.currency === "THB") state.currency = data.currency;
     state.fx = data.fx_thb || null;
     document.querySelectorAll('[data-key="currency"] button').forEach((button) => {
       button.classList.toggle("on", button.dataset.value === state.currency);
     });
-    $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.btc_wallets.length || data.wallet_count));
+    $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.wallet_count));
     renderMetrics(data);
     renderAlloc(data);
     renderApy(data);
@@ -811,9 +648,8 @@ function render() {
       label: item.level === "danger" ? "scaduto" : "in scadenza",
     }));
     renderRows($("#security"), ensRows.concat(data.security));
-    renderBtc(data);
     const banners = [...data.errors];
-    if ((data.wallet_count || 0) > 0 && !data.positions.length && !data.btc_wallets.length && !state.refreshing) {
+    if ((data.wallet_count || 0) > 0 && !data.positions.length && !state.refreshing) {
       banners.unshift("I portafogli sono salvati, ma questo ricalcolo non ha prodotto posizioni.");
     }
     showBanner(banners, data.ens_alerts || []);
@@ -881,10 +717,8 @@ async function load(force, extra) {
     state.data = data;
     state.refreshing = false;
     state.stale = !force || !!data.kept_previous;
-    if (data.btc_progress) state.btcProgress = data.btc_progress;
     if (data.fx_thb) state.fx = data.fx_thb;
     render();
-    if (data.btc_progress) watchBtc(data.btc_progress);
     if (force) {
       const nftOpen = $("#nft-details") && $("#nft-details").open;
       const secOpen = $("#security-details") && $("#security-details").open;
@@ -909,66 +743,15 @@ async function load(force, extra) {
   }
 }
 
-let btcWatch = 0;
-async function watchBtc(progress) {
-  state.btcProgress = progress;
-  if (!progress || !progress.running) return;
-  const watch = ++btcWatch;
-  while (watch === btcWatch) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    if (watch !== btcWatch) return;
-    try {
-      const next = await api("/api/btc/progress");
-      state.btcProgress = next;
-      if (state.data) renderBtc(state.data);
-      if (!next.running) {
-        const owner = encodeURIComponent(state.owner);
-        const fresh = await api("/api/portfolio?owner=" + owner);
-        if (state.data && fresh) {
-          state.data.btc_wallets = fresh.btc_wallets || [];
-          state.data.totals = fresh.totals || state.data.totals;
-          state.data.btc_moves = fresh.btc_moves || state.data.btc_moves;
-          state.data.node = fresh.node || state.data.node;
-          state.data.btc_security = fresh.btc_security || state.data.btc_security;
-          render();
-        }
-        return;
-      }
-    } catch (err) {
-      return;
-    }
-  }
-}
-
 function openSettings(open) {
   $("#settings").classList.toggle("hidden", !open);
   $("#settings-backdrop").classList.toggle("hidden", !open);
-}
-
-function electrsHint(host) {
-  const name = String(host || "").trim().toLowerCase().replace(/\.$/, "");
-  if (name === "umbrel.local" || (name.endsWith(".local") && name)) {
-    return "Questo nome .local non si risolve dentro l'app. Su Umbrel l'host è electrs_electrs_1 e la porta 50001. Puoi lasciarlo così: l'app prova da sola i contenitori Electrs e Fulcrum.";
-  }
-  return "";
-}
-function showElectrsHint(serverText) {
-  const el = $("#electrs-hint");
-  const form = $("#form-settings");
-  if (!el || !form) return;
-  const text = electrsHint(form.electrs_host.value) || serverText || "";
-  el.textContent = text;
-  el.classList.toggle("hidden", !text);
 }
 
 async function loadSettings() {
   const s = await api("/api/settings");
   const form = $("#form-settings");
   form.eth_rpc_url.value = s.eth_rpc_url || "";
-  form.electrs_host.value = s.electrs_host || "";
-  form.electrs_port.value = s.electrs_port || 50001;
-  showElectrsHint(s.electrs_hint);
-  if (form.btc_gap_limit) form.btc_gap_limit.value = s.btc_gap_limit || 50;
   if (form.outflow_drop_pct) form.outflow_drop_pct.value = s.outflow_drop_pct ?? 5;
   if (form.outflow_usd) form.outflow_usd.value = s.outflow_usd ?? 500;
   if (form.nft_api_provider) form.nft_api_provider.value = s.nft_api_provider || "";
@@ -980,7 +763,6 @@ async function loadSettings() {
       : "Chiave NFT: non impostata. Senza chiave la lista funziona lo stesso e il prezzo può restare non disponibile.";
   }
   form.gas_estimate_usd.value = s.gas_estimate_usd || "";
-  form.tor_enabled.value = s.tor_enabled || "";
   $("#token-line").textContent = "Token MCP (mascherato): " + (s.mcp_token_masked || "—") + ". Lo vedi per intero solo quando lo generi di nuovo.";
   if (s.mcp_token) {
     $("#token-line").textContent = "Nuovo token MCP (copialo ora): " + s.mcp_token;
@@ -989,18 +771,10 @@ async function loadSettings() {
   $("#evm-list").innerHTML = (wallets.evm || []).map((w) =>
     `<p class="mini">${escapeHtml(w.label)} · ${OWNER_LABEL[w.owner]} · ${escapeHtml(w.address)} <button class="btn" data-del-evm="${w.id}" type="button">Rimuovi</button></p>`
   ).join("") || `<p class="mini">Nessun indirizzo Ethereum.</p>`;
-  $("#btc-list").innerHTML = (wallets.btc || []).map((w) =>
-    `<p class="mini">${escapeHtml(w.label)} · ${OWNER_LABEL[w.owner]} · ${escapeHtml(w.kind)} · ${escapeHtml(w.descriptor_masked)} <button class="btn" data-del-btc="${w.id}" type="button">Rimuovi</button></p>`
-  ).join("") || `<p class="mini">Nessun conto Bitcoin.</p>`;
 }
 
 function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
-}
-function numOrNull(v) {
-  if (v === "" || v == null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
 }
 
 async function boot() {
@@ -1008,8 +782,6 @@ async function boot() {
   bindSegmented();
   $("#btn-refresh").addEventListener("click", () => load(true, { full: true }));
   $("#btn-settings").addEventListener("click", async () => { await loadSettings(); openSettings(true); });
-  const electrsHost = document.querySelector("#form-settings [name=electrs_host]");
-  if (electrsHost) electrsHost.addEventListener("input", () => showElectrsHint(""));
   $("#btn-close-settings").addEventListener("click", () => openSettings(false));
   $("#settings-backdrop").addEventListener("click", () => openSettings(false));
   $("#form-settings").addEventListener("submit", async (ev) => {
@@ -1017,13 +789,9 @@ async function boot() {
     const f = formData(ev.target);
     const body = {
       eth_rpc_url: f.eth_rpc_url,
-      electrs_host: f.electrs_host,
-      electrs_port: Number(f.electrs_port || 50001),
-      btc_gap_limit: Number(f.btc_gap_limit || 50),
       outflow_drop_pct: Number(f.outflow_drop_pct || 5),
       outflow_usd: Number(f.outflow_usd || 0),
       gas_estimate_usd: f.gas_estimate_usd === "" ? 0 : Number(f.gas_estimate_usd),
-      tor_enabled: f.tor_enabled === "" ? null : f.tor_enabled === "1",
       nft_api_provider: f.nft_api_provider || "",
     };
     if (f.nft_api_key) body.nft_api_key = f.nft_api_key;
@@ -1146,7 +914,7 @@ async function boot() {
   $("#btn-export").addEventListener("click", async () => {
     try {
       const data = await api("/api/backup");
-      const warning = data.warning || "Il file contiene i descrittori Bitcoin di sola osservazione. Non inviarlo.";
+      const warning = data.warning || "Il file contiene gli indirizzi Ethereum pubblici. Non inviarlo se non ti serve.";
       if (!window.confirm(warning + "\n\nScaricare il file?")) return;
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -1164,7 +932,7 @@ async function boot() {
       const text = await file.text();
       const body = JSON.parse(text);
       const result = await api("/api/backup", { method: "POST", body: JSON.stringify(body) });
-      alert(`Importati ${result.evm_added} indirizzi e ${result.btc_added} conti Bitcoin. I portafogli già presenti non sono stati cancellati.`);
+      alert(`Importati ${result.evm_added} indirizzi. I portafogli già presenti non sono stati cancellati.`);
       await loadSettings();
       await load(true);
     } catch (err) { alert(err.message); }
@@ -1187,28 +955,13 @@ async function boot() {
       await load(true);
     } catch (err) { alert(err.message); }
   });
-  $("#form-btc").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const f = formData(ev.target);
-    const body = {
-      label: f.label, owner: f.owner, descriptor: f.descriptor, role: f.role,
-      alert_out_btc: numOrNull(f.alert_out_btc),
-      alert_min_btc: numOrNull(f.alert_min_btc),
-      hot_threshold_btc: numOrNull(f.hot_threshold_btc),
-    };
-    try {
-      await api("/api/wallets/btc", { method: "POST", body: JSON.stringify(body) });
-      ev.target.reset();
-      await loadSettings();
-      await load(true);
-    } catch (err) { alert(err.message); }
-  });
   document.addEventListener("click", async (ev) => {
     const evm = ev.target.closest("[data-del-evm]");
-    const btc = ev.target.closest("[data-del-btc]");
+    if (!evm) return;
     try {
-      if (evm) { await api("/api/wallets/evm/" + evm.dataset.delEvm, { method: "DELETE" }); await loadSettings(); await load(true); }
-      if (btc) { await api("/api/wallets/btc/" + btc.dataset.delBtc, { method: "DELETE" }); await loadSettings(); await load(true); }
+      await api("/api/wallets/evm/" + evm.dataset.delEvm, { method: "DELETE" });
+      await loadSettings();
+      await load(true);
     } catch (err) { alert(err.message); }
   });
   const posDetails = $("#positions-details");

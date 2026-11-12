@@ -1,6 +1,6 @@
 # Monitor DeFi
 
-Read-only dashboard for Ethereum DeFi positions (Lido, Aave v3, Compound, Fluid, Spark/Sky) and Bitcoin watch-only accounts (xpub / zpub / descriptors via a local Electrs or Fulcrum indexer). Every address or xpub has an owner tag (`io` or `moglie`). A read-only MCP server lets an agent such as Hermes query the portfolio. The app never accepts seed phrases or private keys. It never signs or sends transactions.
+Read-only dashboard for Ethereum DeFi positions (Lido, Aave v3, Compound, Fluid, Spark/Sky). Every address has an owner tag (`io` or `moglie`). A read-only MCP server lets an agent such as Hermes query the portfolio. The app never accepts seed phrases or private keys. It never signs or sends transactions. Bitcoin accounts are not part of this app.
 
 This repository contains **no personal data, no wallet addresses, and no extended keys**. You add those locally in the Settings UI.
 
@@ -13,7 +13,7 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --host 127.0.0.1 --port 3847
 ```
 
-Open http://127.0.0.1:3847 — then add only public Ethereum addresses and watch-only Bitcoin keys.
+Open http://127.0.0.1:3847 — then add only public Ethereum addresses.
 
 ## HTTP routes
 

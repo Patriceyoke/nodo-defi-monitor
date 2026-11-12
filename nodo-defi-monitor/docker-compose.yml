@@ -9,7 +9,7 @@ services:
       PROXY_AUTH_WHITELIST: "/mcp*"
 
   web:
-    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.3.3
+    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.4.0
     user: "1000:1000"
     init: true
     restart: on-failure
@@ -17,14 +17,6 @@ services:
     environment:
       DATA_DIR: /data
       PORT: "3847"
-      # Present only when Umbrel sources the Electrs (or Fulcrum) exports.
-      APP_ELECTRS_NODE_IP: ${APP_ELECTRS_NODE_IP:-}
-      APP_ELECTRS_NODE_PORT: ${APP_ELECTRS_NODE_PORT:-50001}
-      APP_FULCRUM_NODE_IP: ${APP_FULCRUM_NODE_IP:-}
-      APP_FULCRUM_NODE_PORT: ${APP_FULCRUM_NODE_PORT:-50002}
-      DEVICE_DOMAIN_NAME: ${DEVICE_DOMAIN_NAME:-}
-      DEVICE_HOSTNAME: ${DEVICE_HOSTNAME:-}
-      GATEWAY_IP: ${GATEWAY_IP:-}
     networks:
       - default
     extra_hosts:
@@ -34,8 +26,7 @@ services:
       # as uid 1000 and then removes .gitkeep, so Docker does not create /data as root.
       - ${APP_DATA_DIR}/data:/data
 
-# Electrs and Fulcrum live on Umbrel's shared network. Container names such as
-# electrs_electrs_1 resolve only from there, not from a private app network.
+# Umbrel's app proxy reaches this container on the shared network.
 networks:
   default:
     external: true

@@ -35,9 +35,6 @@ def _install_mocks(monkeypatch):
     async def fake_prices(tokens):
         return {"ETH": 2500.0, f"ethereum:{WETH.lower()}": 2500.0}
 
-    async def fake_btc():
-        return None
-
     async def fake_fx():
         return 1.0
 
@@ -49,7 +46,6 @@ def _install_mocks(monkeypatch):
 
     monkeypatch.setattr(evm, "eth_rpc", fake_rpc)
     monkeypatch.setattr(markets, "prices_usd", fake_prices)
-    monkeypatch.setattr(markets, "btc_price_usd", fake_btc)
     monkeypatch.setattr(markets, "fx_thb", fake_fx)
     monkeypatch.setattr(markets, "llama_pools", fake_pools)
     async def fake_ens(_wallets):

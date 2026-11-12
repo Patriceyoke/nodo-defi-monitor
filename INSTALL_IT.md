@@ -9,9 +9,8 @@ Sostituisci sempre `patriceyoke` con il tuo utente GitHub in minuscolo, quando p
 ## Prima di partire
 
 - Umbrel aggiornato (umbrelOS 2.0 o successivo, per gli agenti MCP).
-- Per il modulo Bitcoin: app **Bitcoin** e **Electrs** (o Fulcrum) installate e sincronizzate. Non sono un requisito obbligatorio: senza di esse la DeFi funziona lo stesso, i saldi Bitcoin restano vuoti.
 - Hermes Agent già installato se vuoi farlo interrogare l'app.
-- Nessun dato personale è presente in questo codice. Gli indirizzi e gli xpub li inserisci tu, solo sul tuo server.
+- Nessun dato personale è presente in questo codice. Gli indirizzi Ethereum li inserisci tu, solo sul tuo server.
 
 ## Strada A — Community App Store (consigliata, richiede GitHub)
 
@@ -28,7 +27,7 @@ Passi:
 2. Nel codice, sostituisci ogni `ghcr.io/patriceyoke/` e ogni `https://github.com/Patriceyoke/` con il tuo utente GitHub in minuscolo.
 3. Carica il codice dell'app nel primo repo. Nella cartella `umbrel-store/` trovi già il manifesto del negozio: il contenuto di `umbrel-store/` va nella radice del repo `nodo-app-store` (così `umbrel-app-store.yml` è in cima).
 4. Su GitHub, in **Settings > Actions > General**, consenti le Actions e la scrittura dei pacchetti. La prima pubblicazione di `ghcr.io/<tuo-utente>/nodo-defi-monitor` deve essere **public**.
-5. Lancia il workflow **Publish multi-arch image** (o crea il tag `v0.3.3`). Attendi che risultino le piattaforme `linux/amd64` e `linux/arm64`.
+5. Lancia il workflow **Publish multi-arch image** (o crea il tag `v0.4.0`). Attendi che risultino le piattaforme `linux/amd64` e `linux/arm64`.
 6. Aggiorna `umbrel-store/nodo-defi-monitor/docker-compose.yml` con il nome immagine vero, se non l'hai già fatto.
 7. Sul tuo Umbrel: **App Store → ⋯ → Community App Stores →** incolla l'URL del repo `nodo-app-store` (es. `https://github.com/<tuo-utente>/nodo-app-store`).
 8. Installa **Monitor DeFi**. Aprila dalla home. Vai a **Impostazioni**.
@@ -54,10 +53,9 @@ La prima costruzione sul dispositivo richiede qualche minuto. I dati restano in 
 
 1. Apri Monitor DeFi → **Impostazioni**.
 2. (Facoltativo) Inserisci l'URL del tuo RPC Ethereum locale. Se lo lasci vuoto, l'app usa un RPC pubblico.
-3. Per Bitcoin: in Impostazioni incolla un descrittore di sola osservazione (Bitkey 2-di-3, wpkh, sh(wpkh) o tr), con etichetta e titolare. L'host Electrs può restare vuoto: l'app prova `electrs_electrs_1` sulla porta `50001`. `umbrel.local` non si risolve dentro l'app; se lo incolli, l'app usa da sola il contenitore. Se non collega, scrivi tu host e porta.
-4. Aggiungi solo **indirizzi Ethereum pubblici** e **xpub / zpub / descrittori** di sola osservazione, indicando per ciascuno il titolare **Io** o **Moglie**. Puoi etichettare un conto Bitcoin come Cold storage, Multisig o Spesa e impostare le soglie di avviso.
-5. Se incolli una seed o una chiave privata, l'app la **rifiuta**. Non farlo.
-6. Premi **Aggiorna** nella dashboard. I selettori **Io / Moglie / Combinato** filtrano tutta la pagina.
+3. Aggiungi solo **indirizzi Ethereum pubblici**, indicando per ciascuno il titolare **Io** o **Moglie**.
+4. Se incolli una seed o una chiave privata, l'app la **rifiuta**. Non farlo.
+5. Premi **Aggiorna** nella dashboard. I selettori **Io / Moglie / Combinato** filtrano tutta la pagina.
 
 ## Collegare Hermes tramite MCP
 
@@ -70,7 +68,7 @@ Ci sono due livelli, distinti:
 3. Segui i passi per **Hermes**. Copia il token: umbrelOS lo mostra **una sola volta**.
 4. L'endpoint è `http://umbrel.local/mcp` (HTTP in chiaro, anche se apri umbrelOS in HTTPS).
 5. Concedi all'agente l'accesso all'app **Monitor DeFi**. Puoi revocarlo in qualsiasi momento.
-6. Questo accesso permette a Hermes di usare gli strumenti di umbrelOS sull'app (stato, dati, riavvio, ecc.). Non è automatico che umbrelOS pubblichi anche i tool interni dell'app (`get_portfolio`, `get_btc_wallets`, …). Per quelli serve il punto 2.
+6. Questo accesso permette a Hermes di usare gli strumenti di umbrelOS sull'app (stato, dati, riavvio, ecc.). Non è automatico che umbrelOS pubblichi anche i tool interni dell'app (`get_portfolio`, `get_balances`, …). Per quelli serve il punto 2.
 
 ### 2. Server MCP dell'app (i tool di portafoglio)
 
@@ -84,7 +82,7 @@ Ci sono due livelli, distinti:
 I tool disponibili, tutti con filtro `owner=io|moglie|tutti`, sono:
 
 - `get_portfolio`, `get_balances`, `get_apys`, `check_switch`
-- `get_alerts`, `get_history`, `get_btc_wallets`, `get_btc_security`
+- `get_alerts`, `get_history`, `get_nfts`, `get_security`
 
 Non esistono tool di firma, invio o trasferimento.
 
@@ -92,7 +90,7 @@ Non esistono tool di firma, invio o trasferimento.
 
 - La scritta **sola lettura** è visibile.
 - I totali Io, Moglie e Combinato restano in alto anche quando filtri la vista.
-- Se Electrs è spento, le carte Bitcoin lo dicono chiaramente e i controlli di sicurezza restano in sola osservazione (incluso il promemoria sul backup della seed, che fai tu, offline).
+- Le approvazioni in Sicurezza restano in sola lettura: la revoca, se vorrai farla, la firmi tu.
 - Lo storico si accumula in SQLite, solo sul tuo server.
 
 ## Aggiornamenti

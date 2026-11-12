@@ -2,16 +2,15 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.3.3"
-tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
+version: "0.4.0"
+tagline: "Tieni d'occhio la DeFi in sola lettura, divisa tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
   Monitor DeFi è un'app in sola lettura per seguire posizioni DeFi su Ethereum
   (Lido, Rocket Pool, Aave v3, Compound v3, Fluid, Spark, SparkLend, Sky, Maple)
-  e Fluid fUSDT su BNB Chain, più conti Bitcoin osservati da
-  xpub, zpub o descrittori, letti dal tuo nodo / Electrs o Fulcrum locale.
+  e Fluid fUSDT su BNB Chain.
 
-  Ogni indirizzo o xpub ha un titolare, Io o Moglie. Tutte le viste e i tool
+  Ogni indirizzo ha un titolare, Io o Moglie. Tutte le viste e i tool
   MCP accettano il filtro io / moglie / tutti. L'app suggerisce uno switch
   solo se il rendimento sale a rischio uguale o inferiore, dopo il gas.
   Nessuna transazione parte da qui: la firma resta tua, sul tuo portafoglio
@@ -19,20 +18,19 @@ description: >-
 
   L'app non accetta e non deve mai vedere seed o chiavi private. Espone un
   server MCP in sola lettura (get_portfolio, get_balances, get_apys,
-  check_switch, get_alerts, get_history, get_btc_wallets, get_btc_security)
+  check_switch, get_alerts, get_history, get_nfts, get_security)
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.3.3: il saldo Bitcoin non diventa 0 se la scansione non finisce.
-  Resta l'ultimo saldo, in ambra. La ricezione è derivata come prima
-  e il resto si aggiunge. Su ogni conto, in Bitcoin, c'è Dettaglio
-  scansione: stato, indirizzi letti, ultimo indice, primo indirizzo
-  di ricezione e di resto, UTXO, confermati e non confermati, ultimo
-  errore. I descrittori salvati non cambiano.
+  0.4.0: solo DeFi. Via la sezione Bitcoin, i conti, Electrs e i
+  controlli del nodo. Restano indirizzi Ethereum, Io e Moglie,
+  suggerimenti, NFT e impostazioni. Un conto Bitcoin già salvato
+  resta nel database e non viene mostrato. In Sicurezza ogni
+  approvazione è Rischiosa o Normale: in alto conta solo «da fare»
+  per quelle da revocare. L'elenco completo resta, con Nascondi.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
-dependencies:
-  - electrs
+dependencies: []
 repo: https://github.com/Patriceyoke/nodo-defi-monitor
 support: https://github.com/Patriceyoke/nodo-defi-monitor/issues
 port: 3847

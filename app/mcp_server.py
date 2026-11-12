@@ -20,7 +20,7 @@ SERVER_INFO = {"name": "monitor-defi", "version": APP_VERSION}
 TOOLS = [
     {
         "name": "get_portfolio",
-        "description": "Panoramica del portafoglio (DeFi + Bitcoin) filtrata per titolare io/moglie/tutti.",
+        "description": "Panoramica del portafoglio DeFi filtrata per titolare io/moglie/tutti.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -66,7 +66,7 @@ TOOLS = [
     },
     {
         "name": "get_alerts",
-        "description": "Avvisi di sicurezza sui protocolli in possesso, sulle approvazioni e sui conti Bitcoin osservati.",
+        "description": "Avvisi di sicurezza sui protocolli in possesso e sulle approvazioni.",
         "inputSchema": {
             "type": "object",
             "properties": {"owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"}},
@@ -84,14 +84,6 @@ TOOLS = [
         },
     },
     {
-        "name": "get_btc_wallets",
-        "description": "Conti Bitcoin in sola osservazione (saldo, ultimo movimento, stato dell'indicizzatore locale).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"}},
-        },
-    },
-    {
         "name": "get_nfts",
         "description": "NFT in sola lettura dei portafogli salvati, con spam nascosto e un prezzo suggerito. Non mette in vendita e non firma.",
         "inputSchema": {
@@ -100,14 +92,6 @@ TOOLS = [
                 "owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"},
                 "include_hidden": {"type": "boolean", "default": False},
             },
-        },
-    },
-    {
-        "name": "get_btc_security",
-        "description": "Controlli di sicurezza Bitcoin in sola osservazione. Non chiede mai la seed.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"}},
         },
     },
 ]
@@ -153,7 +137,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
     owner = normalize_owner(str(args.get("owner") or "tutti"), allow_all=True)
     if name == "get_portfolio":
         data = await snapshot(owner, force=bool(args.get("refresh")))
-        payload = {k: data[k] for k in ("owner", "ts", "totals", "income", "positions", "btc_wallets", "errors", "node") if k in data}
+        payload = {k: data[k] for k in ("owner", "ts", "totals", "income", "positions", "errors") if k in data}
         payload["switches"] = [item for item in data.get("switches") or [] if not item.get("hidden")]
         return _text(payload)
     if name == "get_balances":
@@ -189,7 +173,6 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
         return _text({
             "owner": owner,
             "protocol_security": data["security"],
-            "btc_security": data["btc_security"],
             "ens": data.get("ens_alerts") or [],
             "security_summary": data.get("security_summary") or security_checks.security_summary(owner),
         })
@@ -205,9 +188,6 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
         cutoff = data["ts"] - days * 86400
         hist = [h for h in data["history"] if int(h.get("ts") or 0) >= cutoff]
         return _text({"owner": owner, "days": days, "history": hist})
-    if name == "get_btc_wallets":
-        data = await snapshot(owner)
-        return _text({"owner": owner, "node": data["node"], "btc_price_usd": data["btc_price_usd"], "wallets": data["btc_wallets"], "moves": data["btc_moves"]})
     if name == "get_nfts":
         data = await collect_nfts(owner)
         include_hidden = bool(args.get("include_hidden"))
@@ -256,9 +236,6 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
                 ],
             }
         )
-    if name == "get_btc_security":
-        data = await snapshot(owner)
-        return _text({"owner": owner, "node": data["node"], "checks": data["btc_security"]})
     return {
         "content": [{"type": "text", "text": f"Strumento sconosciuto: {name}"}],
         "isError": True,

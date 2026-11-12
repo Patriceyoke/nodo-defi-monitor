@@ -9,13 +9,11 @@ def test_health(client):
     assert res.json()["readonly"] is True
 
 
-def test_reject_seed_on_evm_and_btc(client):
+def test_reject_seed_on_evm(client):
     seed = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
     r = client.post("/api/wallets/evm", json={"label": "x", "address": seed, "owner": "io"})
     assert r.status_code == 400
     assert "seed" in r.json()["detail"].lower() or "chiave" in r.json()["detail"].lower()
-    r = client.post("/api/wallets/btc", json={"label": "x", "descriptor": seed, "owner": "io"})
-    assert r.status_code == 400
 
 
 def test_add_public_eth_and_owner_filter(client):
@@ -46,7 +44,7 @@ def test_mcp_initialize_and_tools(client):
     names = {t["name"] for t in r.json()["result"]["tools"]}
     assert names == {
         "get_portfolio", "get_balances", "get_apys", "check_switch",
-        "get_alerts", "get_history", "get_btc_wallets", "get_btc_security", "get_nfts", "get_security",
+        "get_alerts", "get_history", "get_nfts", "get_security",
     }
     assert "sign" not in names and "send" not in names
 

@@ -257,8 +257,9 @@ def delete_evm(wallet_id: int) -> bool:
         return cur.rowcount > 0
 
 
-# Settings that are local secrets or regenerated. They stay out of a backup file.
-_BACKUP_SKIP_SETTINGS = {"mcp_token"}
+# Settings that are local secrets, regenerated, or leftover Bitcoin options.
+# Bitcoin rows stay in the database and are never exported, imported, or shown.
+_BACKUP_SKIP_SETTINGS = {"mcp_token", "electrs_host", "electrs_port", "btc_gap_limit", "tor_enabled"}
 
 
 def export_backup() -> dict[str, Any]:
@@ -272,26 +273,15 @@ def export_backup() -> dict[str, Any]:
             {"label": w["label"], "address": w["address"], "owner": w["owner"]}
             for w in list_evm()
         ],
-        "btc": [
-            {
-                "label": w["label"],
-                "descriptor": w["descriptor"],
-                "owner": w["owner"],
-                "role": w.get("role") or "watch",
-                "alert_out_btc": w.get("alert_out_btc"),
-                "alert_min_btc": w.get("alert_min_btc"),
-                "hot_threshold_btc": w.get("hot_threshold_btc"),
-            }
-            for w in list_btc()
-        ],
+        "btc": [],
         "settings": settings,
         "nft_hides": list_nft_hides(),
         "approval_hides": list_approval_hides(),
         "switch_hides": list_switch_hides(),
         "warning": (
-            "Questo file contiene i descrittori Bitcoin di sola osservazione salvati su questo server. "
-            "Non sono chiavi private e non possono firmare, ma mostrano gli indirizzi del conto. "
-            "Tienilo solo sul tuo computer: non inviarlo in chat o per email."
+            "Questo file contiene gli indirizzi Ethereum pubblici salvati su questo server "
+            "e, se l'hai impostata, la chiave API NFT. Non contiene il token MCP. "
+            "Tienilo solo sul tuo computer."
         ),
     }
 
@@ -301,9 +291,7 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
     if not isinstance(payload, dict):
         raise ValueError("Il file non è un oggetto JSON.")
     added_evm = 0
-    added_btc = 0
     existing_evm = {(w["address"].lower(), w["owner"]) for w in list_evm()}
-    existing_btc = {(w["descriptor"].strip(), w["owner"]) for w in list_btc()}
     for row in payload.get("evm") or []:
         if not isinstance(row, dict):
             continue
@@ -313,25 +301,6 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
         add_evm(str(row.get("label") or "Importato"), key[0], key[1])
         existing_evm.add(key)
         added_evm += 1
-    for row in payload.get("btc") or []:
-        if not isinstance(row, dict):
-            continue
-        descriptor = str(row.get("descriptor") or "").strip()
-        owner = str(row.get("owner") or "")
-        if not descriptor or (descriptor, owner) in existing_btc:
-            continue
-        add_btc(
-            str(row.get("label") or "Importato"),
-            str(row.get("kind") or "xpub"),
-            descriptor,
-            owner,
-            role=str(row.get("role") or "watch"),
-            alert_out_btc=row.get("alert_out_btc"),
-            alert_min_btc=row.get("alert_min_btc"),
-            hot_threshold_btc=row.get("hot_threshold_btc"),
-        )
-        existing_btc.add((descriptor, owner))
-        added_btc += 1
     updated = 0
     settings = payload.get("settings") or {}
     if isinstance(settings, dict):
@@ -371,7 +340,7 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
             approvals_added += 1
     return {
         "evm_added": added_evm,
-        "btc_added": added_btc,
+        "btc_added": 0,
         "settings_updated": updated,
         "nft_hides_added": hides_added,
         "approval_hides_added": approvals_added,

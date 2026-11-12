@@ -72,12 +72,12 @@ def reject_if_secret(text: str) -> None:
     if _has_extended_private(text) or _has_wif(text) or PRIVATE_RE.match((text or "").strip()):
         raise RejectedSecretError(
             "Questa riga contiene una chiave privata (xprv, tprv o WIF). "
-            "L'app accetta solo xpub, ypub, zpub o un descrittore di sola osservazione. "
+            "L'app accetta solo indirizzi Ethereum pubblici. "
             "La chiave privata non viene salvata e non va mai incollata qui."
         )
     raise RejectedSecretError(
         "Sembra una chiave privata o una seed. Questa app è in sola lettura: "
-        "incolla solo un indirizzo Ethereum pubblico, un xpub, uno zpub o un descrittore di sola osservazione. "
+        "incolla solo un indirizzo Ethereum pubblico. "
         "Non incollare mai seed o chiavi private."
     )
 

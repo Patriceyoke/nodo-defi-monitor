@@ -26,7 +26,7 @@
       <div class="card-head">
         <div>
           <h2>Panoramica</h2>
-          <p class="caption">I totali Io, Moglie e Combinato restano sempre visibili. Il selettore filtra il resto della pagina, Bitcoin compreso. L'APY si riferisce solo alla DeFi della vista scelta.</p>
+          <p class="caption">I totali Io, Moglie e Combinato restano sempre visibili. Il selettore filtra il resto della pagina. L'APY si riferisce alla DeFi della vista scelta.</p>
           <p class="caption" id="source-line"></p>
         </div>
         <span class="pill muted" id="source-pill" aria-live="polite">in sola lettura</span>
@@ -48,7 +48,7 @@
         </div>
       </div>
       <div class="metrics" id="metrics"></div>
-      <p class="empty hidden" id="empty-state">Nessun indirizzo o xpub ancora. Apri Impostazioni e aggiungi solo chiavi pubbliche, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
+      <p class="empty hidden" id="empty-state">Nessun indirizzo ancora. Apri Impostazioni e aggiungi solo indirizzi Ethereum pubblici, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
     </section>
 
     <section class="card" id="income">
@@ -185,40 +185,6 @@
       </details>
     </section>
 
-    <section class="card" id="btc">
-      <div class="card-head">
-        <div>
-          <h2>Bitcoin in sola osservazione</h2>
-          <p class="caption">Ogni xpub, zpub o descrittore ha un titolare. Nessuna chiave privata, nessuna spesa da qui. I dati arrivano dal nodo locale quando è collegato.</p>
-        </div>
-        <span class="pill muted" id="btc-node-pill">indicizzatore</span>
-      </div>
-      <dl class="mini" id="btc-props"></dl>
-      <div class="metrics" id="btc-metrics"></div>
-      <div class="grid three" id="btc-cards"></div>
-      <div class="grid two">
-        <div>
-          <h3>Come si dividono i bitcoin</h3>
-          <div class="chart-box"><canvas id="chart-btc"></canvas></div>
-        </div>
-        <div>
-          <h3 id="port-title">Bitcoin nel portafoglio</h3>
-          <div class="chart-box"><canvas id="chart-port"></canvas></div>
-        </div>
-      </div>
-      <h3>Movimenti recenti</h3>
-      <div class="segmented" id="btc-tabs"></div>
-      <div style="overflow:auto">
-        <table>
-          <thead><tr><th>Titolare</th><th>Conto</th><th>Altezza</th><th>Tipo</th><th class="num">Importo</th></tr></thead>
-          <tbody id="btc-moves"></tbody>
-        </table>
-      </div>
-      <h3>Consigli sicurezza Bitcoin</h3>
-      <p class="caption">Controlli automatici in sola osservazione. L'app non chiede e non deve mai vedere seed o chiavi private.</p>
-      <div class="rows" id="btc-security"></div>
-    </section>
-
     <p class="footer-note">Monitor DeFi è in sola lettura. Se un giorno vorrai spostare fondi, la transazione la firmi tu sul tuo portafoglio hardware (per esempio OneKey). I dati restano su questo server.</p>
   </main>
 
@@ -227,25 +193,10 @@
       <h2>Impostazioni</h2>
       <button class="btn ghost" id="btn-close-settings" type="button">Chiudi</button>
     </div>
-    <p class="caption">Inserisci solo indirizzi Ethereum pubblici e xpub, zpub o descrittori Bitcoin, con titolare Io o Moglie. Non incollare mai una seed o una chiave privata: verranno rifiutate.</p>
+    <p class="caption">Inserisci solo indirizzi Ethereum pubblici, con titolare Io o Moglie. Non incollare mai una seed o una chiave privata: verranno rifiutate.</p>
     <form id="form-settings">
       <label>RPC Ethereum (facoltativo, altrimenti un RPC pubblico)</label>
       <input name="eth_rpc_url" placeholder="https://… o il tuo nodo locale" />
-      <div class="row">
-        <div>
-          <label>Host Electrs / Fulcrum (locale)</label>
-          <input name="electrs_host" placeholder="vuoto = electrs_electrs_1" />
-          <p class="mini warn-text hidden" id="electrs-hint"></p>
-        </div>
-        <div>
-          <label>Porta Electrs</label>
-          <input name="electrs_port" type="number" value="50001" />
-        </div>
-        <div>
-          <label>Gap limit indirizzi</label>
-          <input name="btc_gap_limit" type="number" min="1" max="500" value="50" />
-        </div>
-      </div>
       <div class="row">
         <div>
           <label>Stima gas fissa in $ (vuoto = stima automatica)</label>
@@ -258,14 +209,6 @@
         <div>
           <label>Avvisa se l'uscita supera ($)</label>
           <input name="outflow_usd" type="number" min="0" step="1" value="500" />
-        </div>
-        <div>
-          <label>Tor sul nodo Bitcoin</label>
-          <select name="tor_enabled">
-            <option value="">Non dichiarato</option>
-            <option value="1">Attivo (dichiarato da te)</option>
-            <option value="0">Non attivo</option>
-          </select>
         </div>
       </div>
       <label>Chiave API NFT (facoltativa, Alchemy oppure OpenSea)</label>
@@ -291,7 +234,7 @@
     </form>
 
     <h3 style="margin-top:22px">Copia di indirizzi e impostazioni</h3>
-    <p class="caption">Il file resta sul tuo computer. Contiene gli indirizzi pubblici, i descrittori Bitcoin di sola osservazione e, se l'hai salvata, la chiave API NFT. Non contiene il token MCP e non contiene chiavi private. Un descrittore non firma, ma rivela gli indirizzi: non inviarlo. L'importazione aggiunge, non cancella.</p>
+    <p class="caption">Il file resta sul tuo computer. Contiene gli indirizzi Ethereum pubblici e, se l'hai salvata, la chiave API NFT. Non contiene il token MCP e non contiene chiavi private. L'importazione aggiunge, non cancella.</p>
     <button class="btn" type="button" id="btn-export">Esporta JSON</button>
     <label>Importa JSON</label>
     <input id="import-file" type="file" accept="application/json,.json" />
@@ -309,38 +252,6 @@
       <button class="btn primary" type="submit">Aggiungi indirizzo</button>
     </form>
     <div id="evm-list"></div>
-
-    <h3 style="margin-top:22px">Bitcoin in sola osservazione</h3>
-    <form id="form-btc">
-      <div class="row">
-        <div><label>Etichetta</label><input name="label" required placeholder="es. Cold storage" /></div>
-        <div>
-          <label>Titolare</label>
-          <select name="owner"><option value="io">Io</option><option value="moglie">Moglie</option></select>
-        </div>
-      </div>
-      <div class="row">
-        <div>
-          <label>Ruolo</label>
-          <select name="role">
-            <option value="watch">Osservazione</option>
-            <option value="cold">Cold storage</option>
-            <option value="multisig">Multisig</option>
-            <option value="spesa">Spesa / hot</option>
-          </select>
-        </div>
-        <div><label>Avvisa se esce più di (BTC)</label><input name="alert_out_btc" type="number" step="0.00000001" /></div>
-      </div>
-      <div class="row">
-        <div><label>Avvisa se il saldo scende sotto (BTC)</label><input name="alert_min_btc" type="number" step="0.00000001" /></div>
-        <div><label>Soglia «troppo sulla Spesa» (BTC)</label><input name="hot_threshold_btc" type="number" step="0.00000001" /></div>
-      </div>
-      <label>Descrittore di sola osservazione, xpub o zpub</label>
-      <textarea name="descriptor" required rows="4" autocomplete="off" spellcheck="false" placeholder="External: wsh(sortedmulti(2,[impronta/84'/0'/0']xpub…/0/*,…))&#10;Internal: wsh(sortedmulti(2,[impronta/84'/0'/0']xpub…/1/*,…))"></textarea>
-      <p class="mini">Puoi incollare l'esportazione Bitkey così com'è, con External e Internal, anche senza checksum. Vanno bene anche wpkh, sh(wpkh), tr e la forma /&lt;0;1&gt;/*. Una chiave privata viene rifiutata. Se qualcosa non va, il messaggio dice se è l'etichetta, la chiave, il percorso o il checksum, senza ripetere il descrittore.</p>
-      <button class="btn primary" type="submit">Aggiungi conto Bitcoin</button>
-    </form>
-    <div id="btc-list"></div>
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
