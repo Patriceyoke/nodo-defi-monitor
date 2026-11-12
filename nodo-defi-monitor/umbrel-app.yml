@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.1.9"
+version: "0.2.0"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,10 +23,10 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.1.9: l'esportazione Bitkey si incolla così com'è, con External e
-  Internal, anche senza checksum e anche su una sola riga. Se non va,
-  il messaggio dice se è l'etichetta, la chiave, il percorso o il checksum,
-  senza ripetere il descrittore.
+  0.2.0: sezione Sicurezza, separata per Io, Moglie e Combinato.
+  Approvazioni token con link a revoke.cash (firmi tu), incidenti sui
+  protocolli che possiedi, e uscite sopra la soglia. Il controllo è in
+  cache e non rallenta l'apertura.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

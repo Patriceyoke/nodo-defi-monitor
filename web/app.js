@@ -47,7 +47,7 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function showBanner(list, ensAlerts) {
+function showBanner(list, ensAlerts, securityAlerts) {
   const box = $("#errors");
   if (!box) return;
   const errs = (list || []).map((item) => String(item || "")).filter(Boolean);
@@ -56,8 +56,14 @@ function showBanner(list, ensAlerts) {
     const who = OWNER_LABEL[item.owner] || item.label || "";
     return `<div class="callout ${tone}"><strong>${escapeHtml(item.name || "ENS")}</strong> ${escapeHtml(item.text || "")}${who ? " · " + escapeHtml(who) : ""}</div>`;
   }).join("");
+  const secHtml = (securityAlerts || []).filter((item) => state.owner === "tutti" || item.owner === state.owner).map((item) => {
+    const tone = item.level === "danger" ? "bad" : "warn";
+    const who = OWNER_LABEL[item.owner] || "";
+    const link = item.href ? ` <a href="${escapeHtml(item.href)}" target="_blank" rel="noopener">apri</a>` : "";
+    return `<div class="callout ${tone}"><strong>${escapeHtml(item.title || "Sicurezza")}</strong> ${escapeHtml(item.text || "")}${who ? " · " + escapeHtml(who) : ""}${link}</div>`;
+  }).join("");
   const errHtml = errs.length ? `<div class="errbar">${errs.map((e) => escapeHtml(e)).join("<br>")}</div>` : "";
-  box.innerHTML = ensHtml + errHtml;
+  box.innerHTML = secHtml + ensHtml + errHtml;
 }
 
 function updatedClock(ts) {
@@ -82,6 +88,8 @@ function bindSegmented() {
         state.nfts = null;
         const details = $("#nft-details");
         if (details && details.open) loadNfts(false);
+        const sec = $("#security-details");
+        if (sec && sec.open) renderSecurity();
       }
     });
   });
@@ -521,6 +529,75 @@ function renderNfts() {
   box.innerHTML = grid + lp;
 }
 
+function securityRows(rows) {
+  return (rows || []).filter((row) => state.owner === "tutti" || row.owner === state.owner);
+}
+function renderSecurity() {
+  const box = $("#sec-list");
+  const status = $("#sec-status");
+  if (!box) return;
+  const data = state.security;
+  if (!data) {
+    box.innerHTML = `<p class="mini">Apri la sezione per vedere l'ultimo controllo.</p>`;
+    return;
+  }
+  if (status) {
+    const clock = updatedClock(data.scanned_at);
+    const counts = data.counts || {};
+    status.textContent = data.running
+      ? "Controllo in corso…"
+      : (clock ? `Controllato alle ${clock}. ` : "") + `Avvisi: Io ${counts.io || 0}, Moglie ${counts.moglie || 0}, combinato ${counts.tutti || 0}.`;
+  }
+  if (!data.ready) {
+    box.innerHTML = `<p class="mini">${escapeHtml(data.note || "Nessun controllo ancora.")}</p>`;
+    return;
+  }
+  const approvals = securityRows(data.approvals);
+  const outflows = securityRows(data.outflows);
+  const incidents = (data.incidents || []).filter((row) => state.owner === "tutti" || (row.owners || []).includes(state.owner));
+  const flagText = (flags) => (flags || []).map((flag) => ({
+    unlimited: "illimitata", eoa: "indirizzo semplice", unverified: "non verificato", unknown: "spender sconosciuto", stale: "oltre 180 giorni", exploited: "spender segnalato",
+  }[flag] || flag)).join(", ");
+  const approvalHtml = approvals.length ? approvals.map((row) => `
+    <article class="nft-card">
+      <h3>${escapeHtml(row.symbol || "Token")} · ${escapeHtml(row.chain || "")}</h3>
+      <p class="mini">${escapeHtml(row.label || "")} · ${OWNER_LABEL[row.owner] || ""} · ${escapeHtml(flagText(row.flags) || "nessun segnale")}</p>
+      <p class="mini">A rischio: ${row.value_at_risk_usd == null ? "n/d" : money(row.value_at_risk_usd)}</p>
+      <p><a href="${escapeHtml(row.revoke_url || "#")}" target="_blank" rel="noopener">Apri su revoke.cash</a> <span class="mini">La firma resta tua, per esempio su OneKey.</span></p>
+    </article>`).join("") : `<p class="mini">Nessuna approvazione segnalata in questa vista.</p>`;
+  const incidentHtml = incidents.length ? incidents.map((row) => `
+    <p class="mini"><span class="pill ${row.severity === "danger" ? "bad" : "warn"}">${escapeHtml(row.protocol || "")}</span> ${escapeHtml(row.detail || row.name || "")}</p>
+  `).join("") : `<p class="mini">Nessun incidente recente sui protocolli in possesso.</p>`;
+  const outflowHtml = outflows.length ? outflows.map((row) => `
+    <p class="mini">${escapeHtml(row.symbol || "")} · ${OWNER_LABEL[row.owner] || ""} · da ${escapeHtml(row.previous)} a ${escapeHtml(row.amount)}
+      ${row.tx_url ? `<a href="${escapeHtml(row.tx_url)}" target="_blank" rel="noopener">transazione</a>` : ""}</p>
+  `).join("") : `<p class="mini">Nessuna uscita sopra la soglia dall'ultimo controllo.</p>`;
+  const windowNote = data.partial ? `<p class="mini">La finestra dei log è limitata: un'approvazione molto vecchia può non comparire.</p>` : "";
+  box.innerHTML = `<h3>Approvazioni</h3>${approvalHtml}<h3>Protocolli</h3>${incidentHtml}<h3>Uscite</h3>${outflowHtml}${windowNote}<p class="mini">${escapeHtml(data.note || "")}</p>`;
+}
+async function loadSecurity(force) {
+  const box = $("#sec-list");
+  const status = $("#sec-status");
+  if (state.security && !force) {
+    renderSecurity();
+    return;
+  }
+  if (status) status.textContent = force ? "Controllo in corso…" : "Caricamento…";
+  if (box && force) box.innerHTML = `<p class="mini">Caricamento controlli…</p>`;
+  try {
+    if (force) await api("/api/security/refresh", { method: "POST" });
+    let data = await api("/api/security?owner=tutti");
+    for (let i = 0; i < 40 && data.running; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      data = await api("/api/security?owner=tutti");
+    }
+    state.security = data;
+    renderSecurity();
+  } catch (err) {
+    if (status) status.textContent = "";
+    if (box) box.innerHTML = `<p class="mini">${escapeHtml(err.message)}</p>`;
+  }
+}
 async function loadNfts(force) {
   const box = $("#nft-list");
   const status = $("#nft-status");
@@ -583,7 +660,7 @@ function render() {
     if ((data.wallet_count || 0) > 0 && !data.positions.length && !data.btc_wallets.length && !state.refreshing) {
       banners.unshift("I portafogli sono salvati, ma questo ricalcolo non ha prodotto posizioni.");
     }
-    showBanner(banners, data.ens_alerts || []);
+    showBanner(banners, data.ens_alerts || [], data.security_alerts || []);
     const pill = $("#source-pill");
     if (pill) {
       const clock = data.saved === false ? "" : updatedClock(data.ts);
@@ -639,6 +716,8 @@ async function loadSettings() {
   form.electrs_host.value = s.electrs_host || "";
   form.electrs_port.value = s.electrs_port || 50001;
   if (form.btc_gap_limit) form.btc_gap_limit.value = s.btc_gap_limit || 20;
+  if (form.outflow_drop_pct) form.outflow_drop_pct.value = s.outflow_drop_pct ?? 5;
+  if (form.outflow_usd) form.outflow_usd.value = s.outflow_usd ?? 500;
   if (form.nft_api_provider) form.nft_api_provider.value = s.nft_api_provider || "";
   if (form.nft_api_key) form.nft_api_key.value = "";
   const keyLine = $("#nft-key-line");
@@ -686,6 +765,8 @@ async function boot() {
       electrs_host: f.electrs_host,
       electrs_port: Number(f.electrs_port || 50001),
       btc_gap_limit: Number(f.btc_gap_limit || 20),
+      outflow_drop_pct: Number(f.outflow_drop_pct || 5),
+      outflow_usd: Number(f.outflow_usd || 0),
       gas_estimate_usd: f.gas_estimate_usd === "" ? 0 : Number(f.gas_estimate_usd),
       tor_enabled: f.tor_enabled === "" ? null : f.tor_enabled === "1",
       nft_api_provider: f.nft_api_provider || "",
@@ -697,6 +778,14 @@ async function boot() {
       await loadSettings();
     } catch (err) { alert(err.message); }
   });
+  const secDetails = $("#security-details");
+  if (secDetails) {
+    secDetails.addEventListener("toggle", () => {
+      if (secDetails.open) loadSecurity(false);
+    });
+  }
+  const secRefresh = $("#btn-sec-refresh");
+  if (secRefresh) secRefresh.addEventListener("click", (ev) => { ev.preventDefault(); loadSecurity(true); });
   const nftDetails = $("#nft-details");
   if (nftDetails) {
     nftDetails.addEventListener("toggle", () => {

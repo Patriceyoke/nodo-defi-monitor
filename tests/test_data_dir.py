@@ -39,7 +39,7 @@ def test_startup_does_not_crash_when_database_init_fails(monkeypatch):
         raise sqlite3.OperationalError("unable to open database file")
 
     monkeypatch.setattr(db, "init_db", boom)
-    main._startup()
+    main.prepare_runtime()
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can write inside a mode-555 directory")

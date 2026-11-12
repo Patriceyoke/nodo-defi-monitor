@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE UNIQUE INDEX IF NOT EXISTS evm_wallets_addr_owner ON evm_wallets(address, owner);
 CREATE UNIQUE INDEX IF NOT EXISTS btc_wallets_desc_owner ON btc_wallets(descriptor, owner);
 CREATE INDEX IF NOT EXISTS history_ts ON history(ts);
+CREATE TABLE IF NOT EXISTS balance_marks (
+    wallet TEXT NOT NULL,
+    chain TEXT NOT NULL,
+    token TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    amount REAL NOT NULL,
+    usd REAL NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (wallet, chain, token)
+);
 CREATE TABLE IF NOT EXISTS app_cache (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -123,6 +134,8 @@ def init_db() -> None:
             "electrs_host": "",
             "electrs_port": "50001",
             "btc_gap_limit": "20",
+            "outflow_drop_pct": "5",
+            "outflow_usd": "500",
             "currency": "USD",
             "fx_thb": "",
             "gas_estimate_usd": "",
@@ -314,6 +327,29 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
         if hide_nft(str(row.get("chain") or ""), str(row.get("contract") or ""), str(row.get("token_id") or ""), str(row.get("kind") or "token")):
             hides_added += 1
     return {"evm_added": added_evm, "btc_added": added_btc, "settings_updated": updated, "nft_hides_added": hides_added}
+
+
+def list_balance_marks() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT wallet, chain, token, owner, symbol, amount, usd, updated_at FROM balance_marks"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_balance_mark(
+    wallet: str, chain: str, token: str, owner: str, symbol: str, amount: float, usd: float
+) -> None:
+    now = int(time.time())
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO balance_marks(wallet, chain, token, owner, symbol, amount, usd, updated_at)
+               VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(wallet, chain, token) DO UPDATE SET
+                 owner=excluded.owner, symbol=excluded.symbol, amount=excluded.amount,
+                 usd=excluded.usd, updated_at=excluded.updated_at""",
+            (wallet.lower(), chain, token.lower(), owner, symbol, float(amount), float(usd), now),
+        )
 
 
 def cache_get(key: str) -> dict[str, Any] | None:

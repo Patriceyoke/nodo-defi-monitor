@@ -1,6 +1,7 @@
 """Monitor DeFi: read-only dashboard, REST API and MCP server."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import bitcoin, config, db, nft
+from . import bitcoin, config, db, nft, security
 from .config import APP_NAME, APP_VERSION
 from .mcp_server import router as mcp_router
 from .portfolio import cached_snapshot, failed_view, invalidate, refresh_status, snapshot
@@ -25,8 +26,8 @@ app = FastAPI(title=APP_NAME, version=APP_VERSION, docs_url="/api/docs", redoc_u
 app.include_router(mcp_router)
 
 
-@app.on_event("startup")
-def _startup() -> None:
+def prepare_runtime() -> None:
+    """Open the database. A failure here must not stop the HTTP server."""
     try:
         config.ensure_data_dir()
         db.init_db()
@@ -36,6 +37,12 @@ def _startup() -> None:
             "Database startup failed. The server will stay up so Umbrel can open the UI, "
             "but saved wallets and settings are unavailable."
         )
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    prepare_runtime()
+    asyncio.create_task(security.daily_loop())
 
 
 class EvmIn(BaseModel):
@@ -65,6 +72,8 @@ class SettingsIn(BaseModel):
     nft_api_provider: str | None = None
     nft_api_key: str | None = None
     btc_gap_limit: int | None = None
+    outflow_drop_pct: float | None = None
+    outflow_usd: float | None = None
     rotate_token: bool = False
 
 
@@ -109,6 +118,8 @@ async def get_settings() -> dict[str, Any]:
         "electrs_host": raw.get("electrs_host") or "",
         "electrs_port": int(raw.get("electrs_port") or 50001),
         "btc_gap_limit": int(raw.get("btc_gap_limit") or 20),
+        "outflow_drop_pct": float(raw.get("outflow_drop_pct") or 5),
+        "outflow_usd": float(raw.get("outflow_usd") or 500),
         "currency": raw.get("currency") if raw.get("currency") in {"USD", "THB"} else "USD",
         "fx_thb": float(raw["fx_thb"]) if raw.get("fx_thb") else None,
         "gas_estimate_usd": raw.get("gas_estimate_usd") or "",
@@ -135,6 +146,15 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         if gap < 1 or gap > 100:
             raise HTTPException(400, "Il gap limit deve essere tra 1 e 100.")
         db.set_setting("btc_gap_limit", str(gap))
+    if body.outflow_drop_pct is not None:
+        drop = float(body.outflow_drop_pct)
+        if drop <= 0 or drop > 100:
+            raise HTTPException(400, "La soglia di calo deve essere tra 0 e 100.")
+        db.set_setting("outflow_drop_pct", str(drop))
+    if body.outflow_usd is not None:
+        if body.outflow_usd < 0:
+            raise HTTPException(400, "La soglia in dollari non può essere negativa.")
+        db.set_setting("outflow_usd", str(body.outflow_usd))
     if body.currency is not None:
         cur = body.currency.upper()
         if cur not in {"USD", "THB"}:
@@ -402,6 +422,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "protocol_security": [],
             "btc_security": [],
             "ens": [],
+            "security": security.cached_alerts(owner),
         }
     try:
         data = await snapshot(owner, force=False)
@@ -414,6 +435,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "protocol_security": [],
             "btc_security": [],
             "ens": [],
+            "security": [],
         }
     return {
         "ok": True,
@@ -422,6 +444,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
         "protocol_security": data.get("security") or [],
         "btc_security": data.get("btc_security") or [],
         "ens": data.get("ens_alerts") or [],
+        "security": data.get("security_alerts") or security.cached_alerts(owner),
     }
 
 
@@ -436,6 +459,20 @@ async def get_history(owner: str = Query("tutti"), days: int = Query(90, ge=1, l
 async def get_btc(owner: str = Query("tutti")) -> dict[str, Any]:
     data = await snapshot(owner)
     return {"owner": owner, "node": data["node"], "btc_price_usd": data["btc_price_usd"], "wallets": data["btc_wallets"], "moves": data["btc_moves"]}
+
+
+@app.get("/api/security")
+async def get_security(owner: str = Query("tutti"), refresh: bool = Query(False)) -> dict[str, Any]:
+    """Cached checks. refresh runs them now; the dashboard does not call this on startup."""
+    if refresh:
+        await security.start_scan()
+    return security.public_report(owner)
+
+
+@app.post("/api/security/refresh")
+async def refresh_security() -> dict[str, Any]:
+    security.start_scan()
+    return {"ok": True, "running": True, "readonly": True}
 
 
 @app.get("/api/btc/security")
@@ -470,6 +507,8 @@ API_ROUTES = [
     "GET /api/portfolio?owner=tutti&refresh=true",
     "POST /api/refresh?owner=tutti",
     "GET /api/alerts",
+    "GET /api/security",
+    "POST /api/security/refresh",
     "GET /api/debug/refresh-status",
     "GET /api/balances",
     "GET /api/apys",

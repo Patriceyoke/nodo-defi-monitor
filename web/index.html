@@ -139,6 +139,21 @@
       </section>
     </div>
 
+    <section class="card" id="wallet-security">
+      <details id="security-details">
+        <summary>
+          <h2>Sicurezza del portafoglio</h2>
+          <p class="caption">Chiuso all'avvio. Approvazioni, incidenti dei protocolli che hai e uscite impreviste, per Io, Moglie e Combinato. Nessuna firma parte da qui.</p>
+        </summary>
+        <div class="card-head">
+          <p class="caption" id="sec-caption">Il controllo gira in background una volta al giorno. Aggiorna per leggerlo adesso.</p>
+          <button class="btn ghost" id="btn-sec-refresh" type="button">Aggiorna sicurezza</button>
+        </div>
+        <p class="mini" id="sec-status"></p>
+        <div id="sec-list"><p class="mini">Apri la sezione per vedere l'ultimo controllo.</p></div>
+      </details>
+    </section>
+
     <section class="card" id="nft">
       <details id="nft-details">
         <summary>
@@ -221,6 +236,14 @@
         <div>
           <label>Stima gas fissa in $ (vuoto = stima automatica)</label>
           <input name="gas_estimate_usd" type="number" step="0.01" />
+        </div>
+        <div>
+          <label>Avvisa se un saldo cala più di (%)</label>
+          <input name="outflow_drop_pct" type="number" min="0.1" max="100" step="0.1" value="5" />
+        </div>
+        <div>
+          <label>Avvisa se l'uscita supera ($)</label>
+          <input name="outflow_usd" type="number" min="0" step="1" value="500" />
         </div>
         <div>
           <label>Tor sul nodo Bitcoin</label>

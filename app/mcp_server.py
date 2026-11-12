@@ -11,6 +11,7 @@ from . import db
 from .config import APP_VERSION
 from .nft import collect_nfts
 from .portfolio import snapshot
+from . import security as security_checks
 from .validation import normalize_owner
 
 PROTOCOL_VERSION = "2025-03-26"
@@ -53,8 +54,19 @@ TOOLS = [
         },
     },
     {
+        "name": "get_security",
+        "description": "Approvazioni, incidenti dei protocolli posseduti e uscite impreviste. Sola lettura: la revoca si firma sul tuo hardware.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"},
+                "refresh": {"type": "boolean", "default": False},
+            },
+        },
+    },
+    {
         "name": "get_alerts",
-        "description": "Avvisi di sicurezza sui protocolli in possesso e sui conti Bitcoin osservati.",
+        "description": "Avvisi di sicurezza sui protocolli in possesso, sulle approvazioni e sui conti Bitcoin osservati.",
         "inputSchema": {
             "type": "object",
             "properties": {"owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"}},
@@ -177,7 +189,12 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
             "protocol_security": data["security"],
             "btc_security": data["btc_security"],
             "ens": data.get("ens_alerts") or [],
+            "security": data.get("security_alerts") or security_checks.cached_alerts(owner),
         })
+    if name == "get_security":
+        if bool(args.get("refresh")):
+            await security_checks.start_scan()
+        return _text(security_checks.public_report(owner))
     if name == "get_history":
         days = int(args.get("days") or 90)
         data = await snapshot(owner)
