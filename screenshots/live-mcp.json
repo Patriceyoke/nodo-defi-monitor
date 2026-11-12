@@ -1,0 +1,16 @@
+{
+  "tools": [
+    "get_portfolio",
+    "get_balances",
+    "get_apys",
+    "check_switch",
+    "get_alerts",
+    "get_history",
+    "get_btc_wallets",
+    "get_btc_security"
+  ],
+  "init": {
+    "name": "monitor-defi",
+    "version": "0.1.0"
+  }
+}

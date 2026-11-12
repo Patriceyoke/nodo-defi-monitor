@@ -1,0 +1,171 @@
+{
+  "ts": 1794420352,
+  "errors": [],
+  "rpc_ok": true,
+  "fx_eur": 0.9015179250618273,
+  "gas_usd": 0.0793823855830151,
+  "eth_price_usd": 2086.299349,
+  "btc_price_usd": 74343.975,
+  "node": {
+    "configured": false,
+    "connected": false,
+    "host": "",
+    "port": 50001,
+    "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
+    "detail": "Nessun host Electrs o Fulcrum impostato. In Impostazioni indica l'indirizzo locale del tuo indicizzatore."
+  },
+  "totals": {
+    "io": {
+      "owner": "io",
+      "defi_usd": 12137.446370850974,
+      "btc": 0.0,
+      "btc_usd": 0.0,
+      "total_usd": 12137.446370850974,
+      "wapy": 3.7967509546068987,
+      "year_usd": 1.8277833284016176
+    },
+    "moglie": {
+      "owner": "moglie",
+      "defi_usd": 9961144.300540464,
+      "btc": 0,
+      "btc_usd": 0.0,
+      "total_usd": 9961144.300540464,
+      "wapy": 0.0,
+      "year_usd": 0
+    },
+    "tutti": {
+      "owner": "tutti",
+      "defi_usd": 9973281.746911315,
+      "btc": 0.0,
+      "btc_usd": 0.0,
+      "total_usd": 9973281.746911315,
+      "wapy": 3.7967509546068987,
+      "year_usd": 1.8277833284016176
+    },
+    "view": {
+      "owner": "tutti",
+      "defi_usd": 9973281.746911315,
+      "btc": 0.0,
+      "btc_usd": 0.0,
+      "total_usd": 9973281.746911315,
+      "wapy": 3.7967509546068987,
+      "year_usd": 1.8277833284016176
+    }
+  },
+  "positions": [
+    {
+      "owner": "io",
+      "label": "Indirizzo pubblico noto",
+      "protocol": "Wallet",
+      "asset": "ETH",
+      "amount": 5.794616987480413,
+      "usd": 12089.305648684727,
+      "apy": null,
+      "apy30": null,
+      "risk": "basso"
+    },
+    {
+      "owner": "io",
+      "label": "Indirizzo pubblico noto",
+      "protocol": "Lido",
+      "asset": "stETH",
+      "amount": 1.0441375984514e-05,
+      "usd": 0.02179051155024323,
+      "apy": 2.33113,
+      "apy30": 2.66114,
+      "risk": "basso"
+    },
+    {
+      "owner": "io",
+      "label": "Indirizzo pubblico noto",
+      "protocol": "Lido",
+      "asset": "wstETH",
+      "amount": 1.2530959186981e-05,
+      "usd": 0.03273788496684419,
+      "apy": null,
+      "apy30": null,
+      "risk": "basso"
+    },
+    {
+      "owner": "io",
+      "label": "Indirizzo pubblico noto",
+      "protocol": "Spark/Sky",
+      "asset": "sUSDS",
+      "amount": 43.091714709517426,
+      "usd": 48.086193769729384,
+      "apy": 3.8,
+      "apy30": 3.8,
+      "risk": "basso"
+    },
+    {
+      "owner": "moglie",
+      "label": "Altro indirizzo pubblico",
+      "protocol": "Wallet",
+      "asset": "ETH",
+      "amount": 4774.551794456062,
+      "usd": 9961144.300540464,
+      "apy": null,
+      "apy30": null,
+      "risk": "basso"
+    }
+  ],
+  "switches": [],
+  "security": [
+    {
+      "protocol": "Lido",
+      "title": "Peg Lido",
+      "detail": "Prezzo osservato 2086.9491 $ rispetto a 2088.2306 $ (scostamento 0.06%).",
+      "tone": "success",
+      "label": "Nella norma"
+    },
+    {
+      "protocol": "Spark/Sky",
+      "title": "Spark/Sky",
+      "detail": "Mercato SUSDS su Ethereum, TVL circa 3,760,294,741 $. APY di riferimento 3.80%. Non è un incidente: è un dato di mercato da tenere d'occhio.",
+      "tone": "success",
+      "label": "Nella norma"
+    },
+    {
+      "protocol": "Lido",
+      "title": "Lido",
+      "detail": "Mercato STETH su Ethereum, TVL circa 20,178,287,083 $. APY di riferimento 2.33%. Non è un incidente: è un dato di mercato da tenere d'occhio.",
+      "tone": "success",
+      "label": "Nella norma"
+    }
+  ],
+  "btc_wallets": [
+    {
+      "label": "Cold storage (esempio)",
+      "owner": "io",
+      "kind": "xpub",
+      "key_masked": "xpub661M…GHHtYGeY",
+      "btc": 0.0,
+      "status": "Indicizzatore non collegato",
+      "last": "Nessun dato: Electrs/Fulcrum non è collegato.",
+      "connected": false
+    }
+  ],
+  "btc_security": [
+    {
+      "owner": "tutti",
+      "title": "Nodo / Electrs",
+      "detail": "L'indicizzatore locale non è impostato. In Impostazioni indica host e porta di Electrs o Fulcrum sul tuo Umbrel. I saldi Bitcoin restano vuoti finché non è collegato.",
+      "tone": "warning",
+      "label": "Non configurato"
+    },
+    {
+      "owner": "tutti",
+      "title": "Tor",
+      "detail": "Stato Tor non dichiarato. L'app non può vederlo da sola: puoi indicarlo in Impostazioni. Il promemoria è solo informativo.",
+      "tone": "warning",
+      "label": "Non dichiarato"
+    },
+    {
+      "owner": "tutti",
+      "title": "Backup della seed",
+      "detail": "Ricorda di verificare offline, da solo, che il backup della seed esista e sia leggibile. L'app non chiede e non deve mai vedere seed o chiavi private.",
+      "tone": "warning",
+      "label": "Promemoria"
+    }
+  ]
+}

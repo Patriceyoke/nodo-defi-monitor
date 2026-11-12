@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+tests
+tests/
+screenshots
+screenshots/
+nodo-defi-monitor/
+data
+.git
+*.md
+umbrel-store
+.github

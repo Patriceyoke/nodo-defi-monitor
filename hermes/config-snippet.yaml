@@ -1,0 +1,29 @@
+# Hermes Agent — frammento da aggiungere al config.yaml
+# Su Hermes in locale: ~/.hermes/config.yaml
+# Su Hermes installato come app Umbrel: File > App > Hermes Agent > data > hermes > config.yaml
+#
+# 1) Token di umbrelOS: Impostazioni > AI agents (MCP). Lo vedi una sola volta.
+# 2) Token dell'app: in Monitor DeFi, Impostazioni > "Genera un nuovo token MCP". Copialo subito.
+# Questa app è in sola lettura: non esistono tool di firma o trasferimento.
+
+mcp_servers:
+  umbrel:
+    url: "http://umbrel.local/mcp"
+    headers:
+      Authorization: "Bearer INCOLLA_QUI_IL_TOKEN_UMBREL"
+
+  defi_monitor:
+    url: "http://umbrel.local:3847/mcp"
+    headers:
+      Authorization: "Bearer INCOLLA_QUI_IL_TOKEN_APP"
+    timeout: 180
+    tools:
+      include:
+        - get_portfolio
+        - get_balances
+        - get_apys
+        - check_switch
+        - get_alerts
+        - get_history
+        - get_btc_wallets
+        - get_btc_security

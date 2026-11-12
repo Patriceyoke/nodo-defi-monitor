@@ -1,0 +1,16 @@
+# Installazione manuale (SSH o Portainer), senza l'App Store di Umbrel.
+# L'immagine va costruita in locale oppure prelevata da GHCR dopo la pubblicazione.
+services:
+  web:
+    build: .
+    image: nodo-defi-monitor:0.1.0
+    user: "1000:1000"
+    init: true
+    restart: unless-stopped
+    ports:
+      - "3847:3847"
+    environment:
+      DATA_DIR: /data
+      PORT: "3847"
+    volumes:
+      - ./data:/data

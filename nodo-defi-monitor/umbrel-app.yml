@@ -1,0 +1,40 @@
+manifestVersion: 1
+id: nodo-defi-monitor
+category: finance
+name: Monitor DeFi
+version: "0.1.0"
+tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
+description: >-
+  Monitor DeFi è un'app in sola lettura per seguire posizioni DeFi su Ethereum
+  (Lido, Aave v3, Compound, Fluid, Spark/Sky) e conti Bitcoin osservati da
+  xpub, zpub o descrittori, letti dal tuo nodo / Electrs o Fulcrum locale.
+
+  Ogni indirizzo o xpub ha un titolare, Io o Moglie. Tutte le viste e i tool
+  MCP accettano il filtro io / moglie / tutti. L'app suggerisce uno switch
+  solo se il rendimento sale a rischio uguale o inferiore, dopo il gas.
+  Nessuna transazione parte da qui: la firma resta tua, sul tuo portafoglio
+  hardware.
+
+  L'app non accetta e non deve mai vedere seed o chiavi private. Espone un
+  server MCP in sola lettura (get_portfolio, get_balances, get_apys,
+  check_switch, get_alerts, get_history, get_btc_wallets, get_btc_security)
+  per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
+  (AI agents / MCP) e/o dal config.yaml di Hermes.
+releaseNotes: >-
+  Prima versione: dashboard Io / Moglie / Combinato, Bitcoin in sola
+  osservazione, controlli di sicurezza, storico locale e server MCP in sola lettura.
+developer: Nodo
+website: https://github.com/Patriceyoke/nodo-defi-monitor
+dependencies: []
+repo: https://github.com/Patriceyoke/nodo-defi-monitor
+support: https://github.com/Patriceyoke/nodo-defi-monitor/issues
+port: 3847
+gallery:
+  - 1.png
+  - 2.png
+  - 3.png
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+submitter: Nodo
+submission: https://github.com/Patriceyoke/nodo-defi-monitor
