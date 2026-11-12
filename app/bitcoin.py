@@ -8,6 +8,7 @@ import logging
 import re
 import socket
 import ssl
+import threading
 import time
 from typing import Any
 
@@ -76,8 +77,12 @@ _PUB_VERSIONS = {
     bytes.fromhex("02575483"): "test",  # Vpub
 }
 _CANON_VERSION = {"main": bytes.fromhex("0488b21e"), "test": bytes.fromhex("043587cf")}
-_DETECTED: tuple[str, int] | None = None
-_DETECTED_AT = 0.0
+# host, port, via ("configured" or "host:port"), plain TCP
+_WORKING: tuple[str, int, str, bool] | None = None
+_WORKING_AT = 0.0
+_WORKING_KEY = ""
+_RESOLVE_LOCK = threading.Lock()
+_WORKING_TTL = 60.0
 
 
 def gap_limit() -> int:
@@ -99,6 +104,18 @@ def _configured_endpoint() -> tuple[str, int]:
     return host, port
 
 
+def local_host_hint(host: str) -> str:
+    """Names ending in .local are mDNS and do not resolve inside the container."""
+    name = (host or "").strip().lower().rstrip(".")
+    if name == "umbrel.local" or (name.endswith(".local") and name):
+        return (
+            "Questo nome .local non si risolve dentro l'app. "
+            "Su Umbrel l'host è electrs_electrs_1 e la porta 50001. "
+            "Puoi lasciarlo così: l'app prova da sola i contenitori Electrs e Fulcrum."
+        )
+    return ""
+
+
 def _host_resolves(host: str) -> bool:
     try:
         socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
@@ -107,36 +124,105 @@ def _host_resolves(host: str) -> bool:
         return False
 
 
-def detect_electrs() -> tuple[str, int] | None:
-    """Find Umbrel Electrs when the user left the host empty. Cached for a minute."""
-    global _DETECTED, _DETECTED_AT
-    now = time.time()
-    if now - _DETECTED_AT < 60:
-        return _DETECTED
-    found: tuple[str, int] | None = None
-    for host, port in ELECTRS_CANDIDATES:
-        if not _host_resolves(host):
-            continue
-        try:
-            _electrum_request(host, port, "server.version", ["monitor-defi", "1.4"], timeout=1.5)
-            found = (host, port)
-            break
-        except Exception:
-            continue
-    _DETECTED = found
-    _DETECTED_AT = now
+def _gateway_hosts() -> list[str]:
+    """Docker host gateway, only when this process can name it."""
+    found: list[str] = []
+    if _host_resolves("host.docker.internal"):
+        found.append("host.docker.internal")
+    try:
+        with open("/proc/net/route", encoding="ascii") as handle:
+            for line in handle.readlines()[1:]:
+                fields = line.split()
+                if len(fields) < 3 or fields[1] != "00000000":
+                    continue
+                raw = fields[2]
+                if len(raw) != 8:
+                    continue
+                ip = socket.inet_ntoa(bytes.fromhex(raw)[::-1])
+                if ip and ip not in {"0.0.0.0", "127.0.0.1"} and ip not in found:
+                    found.append(ip)
+                break
+    except OSError:
+        pass
     return found
 
 
-def electrs_endpoint() -> tuple[str, int, str]:
-    """Return host, port and how it was chosen: configured, detected or missing."""
+def _candidate_targets() -> list[tuple[str, int, str, bool]]:
+    """Saved host first, then Umbrel container names, then the Docker gateway.
+
+    Each item is host, port, via, plain TCP. Fallbacks are plain TCP.
+    The saved host keeps TLS on 50002, which is how Electrs SSL is usually published.
+    """
     host, port = _configured_endpoint()
+    out: list[tuple[str, int, str, bool]] = []
+    seen: set[tuple[str, int]] = set()
+
+    def add(item_host: str, item_port: int, via: str, plain: bool) -> None:
+        item_host = (item_host or "").strip()
+        if not item_host or item_port <= 0:
+            return
+        key = (item_host, item_port)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((item_host, item_port, via, plain))
+
     if host:
+        add(host, port, "configured", False)
+    for candidate, candidate_port in ELECTRS_CANDIDATES:
+        add(candidate, candidate_port, f"{candidate}:{candidate_port}", True)
+    for gateway in _gateway_hosts():
+        add(gateway, port or DEFAULT_ELECTRS_PORT, f"{gateway}:{port or DEFAULT_ELECTRS_PORT}", True)
+        add(gateway, 50001, f"{gateway}:50001", True)
+        add(gateway, 50002, f"{gateway}:50002", True)
+    return out
+
+
+def _forget_working() -> None:
+    global _WORKING, _WORKING_AT, _WORKING_KEY
+    _WORKING = None
+    _WORKING_AT = 0.0
+    _WORKING_KEY = ""
+
+
+def resolve_electrs() -> tuple[str, int, str, bool]:
+    """First Electrum server that answers server.version. Cached for a minute."""
+    global _WORKING, _WORKING_AT, _WORKING_KEY
+    configured_host, configured_port = _configured_endpoint()
+    key = f"{configured_host}:{configured_port}"
+    with _RESOLVE_LOCK:
+        now = time.time()
+        if _WORKING_KEY == key and now - _WORKING_AT < _WORKING_TTL:
+            return _WORKING or ("", configured_port, "missing", True)
+        found: tuple[str, int, str, bool] | None = None
+        for host, port, via, plain in _candidate_targets():
+            if not _host_resolves(host):
+                continue
+            try:
+                _electrum_request(
+                    host, port, "server.version", ["monitor-defi", "1.4"], timeout=1.5, plain=plain,
+                )
+            except Exception:
+                log.info("Electrum %s:%s non risponde.", host, port)
+                continue
+            found = (host, port, via, plain)
+            break
+        _WORKING = found
+        _WORKING_KEY = key
+        _WORKING_AT = now
+        if found:
+            return found
+        return "", configured_port, "missing", True
+
+
+def electrs_endpoint() -> tuple[str, int, str]:
+    """Return host, port and how it was chosen: configured, fallback or missing."""
+    host, port, via, _plain = resolve_electrs()
+    if not host:
+        return "", port, "missing"
+    if via == "configured":
         return host, port, "configured"
-    detected = detect_electrs()
-    if detected:
-        return detected[0], detected[1], "detected"
-    return "", port, "missing"
+    return host, port, "fallback"
 
 
 def mask_key(text: str) -> str:
@@ -334,12 +420,20 @@ def _scripthash(script_hex: str) -> str:
     return digest[::-1].hex()
 
 
-def _electrum_request(host: str, port: int, method: str, params: list[Any], timeout: float = 8.0) -> Any:
+def _electrum_request(
+    host: str,
+    port: int,
+    method: str,
+    params: list[Any],
+    timeout: float = 8.0,
+    plain: bool = False,
+) -> Any:
     payload = json.dumps({"id": 1, "jsonrpc": "2.0", "method": method, "params": params}) + "\n"
     sock = socket.create_connection((host, port), timeout=timeout)
     try:
-        # Electrs on Umbrel is usually plain TCP on 50001 (or SSL on 50002).
-        if port in {50002, 443, 60002}:
+        # Electrs on Umbrel is plain TCP on 50001. A saved port 50002 is TLS.
+        # Automatic fallbacks stay on plain TCP, including Fulcrum's 50002.
+        if not plain and port in {50002, 443, 60002}:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -368,41 +462,51 @@ def _electrum_request(host: str, port: int, method: str, params: list[Any], time
             pass
 
 
-async def electrs_call(method: str, params: list[Any]) -> Any:
-    host, port, source = electrs_endpoint()
-    if not host:
-        raise ElectrsError(
-            "Electrs non è configurato e electrs_electrs_1:50001 non risponde. "
-            "Installa Electrs su Umbrel oppure indica host e porta in Impostazioni."
+def _offline_detail(saved_host: str) -> str:
+    hint = local_host_hint(saved_host)
+    if hint:
+        return (
+            f"{hint} Nessun contenitore ha risposto "
+            "(electrs_electrs_1, electrs_app_1, fulcrum_fulcrum_1, fulcrum_app_1)."
         )
+    return (
+        "Electrs non è raggiungibile. Su Umbrel l'host di solito è electrs_electrs_1 "
+        "e la porta 50001. Lascia l'host vuoto per cercarlo, oppure scrivilo in Impostazioni."
+    )
+
+
+async def electrs_call(method: str, params: list[Any]) -> Any:
+    host, port, _via, plain = await asyncio.to_thread(resolve_electrs)
+    if not host:
+        saved, _port = _configured_endpoint()
+        raise ElectrsError(_offline_detail(saved))
     try:
-        return await asyncio.to_thread(_electrum_request, host, port, method, params)
-    except Exception as exc:
-        if source == "detected":
-            global _DETECTED_AT
-            _DETECTED_AT = 0.0
-        raise exc
+        return await asyncio.to_thread(
+            _electrum_request, host, port, method, params, 8.0, plain,
+        )
+    except ElectrsError:
+        raise
+    except Exception:
+        _forget_working()
+        raise
 
 
 async def electrs_status() -> dict[str, Any]:
-    host, port, source = electrs_endpoint()
+    saved_host, _saved_port = _configured_endpoint()
+    host, port, via, _plain = await asyncio.to_thread(resolve_electrs)
     base = {
-        "configured": bool(host),
-        "detected": source == "detected",
+        "configured": bool(saved_host or host),
+        "detected": via not in {"configured", "missing"},
         "connected": False,
         "indexing": False,
         "host": host,
         "port": port,
+        "via": "" if via in {"", "missing"} else (f"{host}:{port}" if host else ""),
         "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
     }
     if not host:
-        return {
-            **base,
-            "detail": (
-                "Electrs non è raggiungibile. Su Umbrel l'host di solito è electrs_electrs_1 "
-                "e la porta 50001. Lascia l'host vuoto per cercarlo, oppure scrivilo in Impostazioni."
-            ),
-        }
+        return {**base, "detail": _offline_detail(saved_host)}
+    where = f"{host}:{port}"
     try:
         await electrs_call("server.version", ["monitor-defi", "1.4"])
         height = None
@@ -416,7 +520,7 @@ async def electrs_status() -> dict[str, Any]:
                     **base,
                     "indexing": True,
                     "height": height,
-                    "detail": "Electrs risponde ma sta ancora indicizzando la blockchain. I saldi arriveranno quando l'indice è pronto.",
+                    "detail": f"Collegato via {where}. Electrs sta ancora indicizzando la blockchain.",
                 }
             raise
         indexing = height in (None, 0)
@@ -433,21 +537,25 @@ async def electrs_status() -> dict[str, Any]:
                 **base,
                 "indexing": True,
                 "height": height,
-                "detail": "Electrs è collegato ma sta ancora indicizzando. I saldi possono essere incompleti finché l'indice non è pronto.",
+                "detail": f"Collegato via {where}. Electrs sta ancora indicizzando.",
             }
-        where = f"{host}:{port}"
-        how = "rilevato da Umbrel" if source == "detected" else "impostato da te"
+        note = ""
+        if via != "configured" and saved_host and saved_host != host:
+            note = " " + local_host_hint(saved_host) if local_host_hint(saved_host) else (
+                f" L'host salvato {saved_host} non risponde da questo contenitore."
+            )
         return {
             **base,
             "configured": True,
             "connected": True,
             "height": height,
-            "detail": f"Connesso a Electrs ({where}, {how}). Altezza blocco {height}.",
+            "detail": f"Collegato via {where}.{note} Altezza blocco {height}.",
         }
     except Exception as exc:  # noqa: BLE001
+        _forget_working()
         return {
             **base,
-            "detail": f"Electrs non è raggiungibile su {host}:{port}. {exc}",
+            "detail": f"Electrs non è raggiungibile su {where}. {exc}",
         }
 
 

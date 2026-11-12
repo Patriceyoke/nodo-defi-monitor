@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 APP_NAME = "Monitor DeFi"
-APP_VERSION = "0.2.5"
+APP_VERSION = "0.2.6"
 DEFAULT_PORT = int(os.environ.get("PORT", "3847"))
 
 _DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data"
@@ -101,10 +101,15 @@ ensure_data_dir()
 DEFAULT_RPC = os.environ.get("ETH_RPC_URL", "https://ethereum.publicnode.com")
 DEFAULT_ELECTRS_HOST = os.environ.get("ELECTRS_HOST", "")
 DEFAULT_ELECTRS_PORT = int(os.environ.get("ELECTRS_PORT", "50001"))
-# Umbrel names the Electrs container electrs_electrs_1 and serves Electrum on 50001.
+# Plain TCP, in the order tried after the saved host fails inside the container.
+# Electrs answers on 50001. Fulcrum is tried on 50002, then 50001.
 ELECTRS_CANDIDATES = (
     ("electrs_electrs_1", 50001),
+    ("electrs_app_1", 50001),
+    ("fulcrum_fulcrum_1", 50002),
     ("fulcrum_fulcrum_1", 50001),
+    ("fulcrum_app_1", 50002),
+    ("fulcrum_app_1", 50001),
 )
 DEFAULT_BTC_PRICE_URL = os.environ.get(
     "BTC_PRICE_URL",

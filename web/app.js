@@ -833,12 +833,29 @@ function openSettings(open) {
   $("#settings-backdrop").classList.toggle("hidden", !open);
 }
 
+function electrsHint(host) {
+  const name = String(host || "").trim().toLowerCase().replace(/\.$/, "");
+  if (name === "umbrel.local" || (name.endsWith(".local") && name)) {
+    return "Questo nome .local non si risolve dentro l'app. Su Umbrel l'host è electrs_electrs_1 e la porta 50001. Puoi lasciarlo così: l'app prova da sola i contenitori Electrs e Fulcrum.";
+  }
+  return "";
+}
+function showElectrsHint(serverText) {
+  const el = $("#electrs-hint");
+  const form = $("#form-settings");
+  if (!el || !form) return;
+  const text = electrsHint(form.electrs_host.value) || serverText || "";
+  el.textContent = text;
+  el.classList.toggle("hidden", !text);
+}
+
 async function loadSettings() {
   const s = await api("/api/settings");
   const form = $("#form-settings");
   form.eth_rpc_url.value = s.eth_rpc_url || "";
   form.electrs_host.value = s.electrs_host || "";
   form.electrs_port.value = s.electrs_port || 50001;
+  showElectrsHint(s.electrs_hint);
   if (form.btc_gap_limit) form.btc_gap_limit.value = s.btc_gap_limit || 20;
   if (form.outflow_drop_pct) form.outflow_drop_pct.value = s.outflow_drop_pct ?? 5;
   if (form.outflow_usd) form.outflow_usd.value = s.outflow_usd ?? 500;
@@ -879,6 +896,8 @@ async function boot() {
   bindSegmented();
   $("#btn-refresh").addEventListener("click", () => load(true, { full: true }));
   $("#btn-settings").addEventListener("click", async () => { await loadSettings(); openSettings(true); });
+  const electrsHost = document.querySelector("#form-settings [name=electrs_host]");
+  if (electrsHost) electrsHost.addEventListener("input", () => showElectrsHint(""));
   $("#btn-close-settings").addEventListener("click", () => openSettings(false));
   $("#settings-backdrop").addEventListener("click", () => openSettings(false));
   $("#form-settings").addEventListener("submit", async (ev) => {

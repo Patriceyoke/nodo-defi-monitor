@@ -209,8 +209,7 @@ def test_electrs_missing_names_the_umbrel_host(monkeypatch):
     from app import bitcoin, config, db
 
     monkeypatch.setattr(config, "DATA_DIR", config.DATA_DIR)
-    monkeypatch.setattr(bitcoin, "_DETECTED_AT", 0.0)
-    monkeypatch.setattr(bitcoin, "_DETECTED", None)
+    bitcoin._forget_working()
 
     def nowhere(*_args, **_kwargs):
         raise socket.gaierror("assente")

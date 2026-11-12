@@ -34,13 +34,20 @@ def evaluate(wallets: list[dict[str, Any]], node: dict[str, Any], tor_enabled: b
     else:
         height = node.get("height")
         extra = f" Altezza vista: {height}." if height else ""
+        saved = str(node.get("detail") or "")
+        if "Collegato via" in saved:
+            text = saved
+        elif node.get("host"):
+            text = f"Collegato via {node['host']}:{node.get('port')}.{extra}"
+        else:
+            text = "Nodo Bitcoin / Electrs (locale) raggiungibile." + extra
         checks.append(
             _item(
                 "tutti",
                 "Nodo / Electrs",
-                "Nodo Bitcoin / Electrs (locale) raggiungibile." + extra,
+                text,
                 "success",
-                "Sincronizzato" if not height else f"Connesso",
+                "Sincronizzato" if not height else "Connesso",
             )
         )
 

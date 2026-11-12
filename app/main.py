@@ -118,6 +118,7 @@ async def get_settings() -> dict[str, Any]:
         "eth_rpc_url": raw.get("eth_rpc_url") or "",
         "electrs_host": raw.get("electrs_host") or "",
         "electrs_port": int(raw.get("electrs_port") or 50001),
+        "electrs_hint": bitcoin.local_host_hint(raw.get("electrs_host") or ""),
         "btc_gap_limit": int(raw.get("btc_gap_limit") or 20),
         "outflow_drop_pct": float(raw.get("outflow_drop_pct") or 5),
         "outflow_usd": float(raw.get("outflow_usd") or 500),
