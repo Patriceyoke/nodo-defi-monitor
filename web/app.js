@@ -460,6 +460,13 @@ function renderRows(el, rows) {
     </div>`).join("");
 }
 
+function btcProgressLine(wallet) {
+  const rows = (state.btcProgress && state.btcProgress.wallets) || [];
+  const row = rows.find((item) => item.id === wallet.id);
+  if (!row || row.status !== "In scansione") return "";
+  const branch = row.branch === "change" ? "Resto" : row.branch === "receive" ? "Ricezione" : "Avvio";
+  return `<p class="mini">Scansione ${branch} · indice ${row.index ?? 0} · ${row.checked ?? 0} indirizzi</p>`;
+}
 function branchLine(label, row) {
   if (!row) return "";
   const last = row.last_used == null ? "nessuno" : "#" + row.last_used;
@@ -512,7 +519,9 @@ function renderBtc(data) {
       <p class="mini">${OWNER_LABEL[w.owner]} · ${w.kind} · ${w.key_masked}</p>
       <div class="value" style="font-size:1.3rem;font-weight:800">${btcFmt(w.btc)}</div>
       <p class="mini">${money(w.usd != null ? w.usd : (w.btc || 0) * price)}${w.utxo_count != null ? " · " + w.utxo_count + " UTXO" : ""}</p>
-      <p class="mini">Ultimo movimento: ${w.last || "—"}</p>
+      <p class="mini">Ultimo movimento: ${escapeHtml(w.last || "—")}</p>
+      ${btcProgressLine(w)}
+      ${w.stale && w.scanned_at ? `<p class="mini warn-text">dati del ${updatedClock(w.scanned_at)}</p>` : ""}
       ${scanDetail(w.scan)}
     </div>`).join("") : `<p class="mini">Nessun xpub in questa vista. Aggiungilo in Impostazioni.</p>`;
 
@@ -843,8 +852,10 @@ async function load(force, extra) {
     state.data = data;
     state.refreshing = false;
     state.stale = !force;
+    if (data.btc_progress) state.btcProgress = data.btc_progress;
     if (data.fx_thb) state.fx = data.fx_thb;
     render();
+    if (data.btc_progress) watchBtc(data.btc_progress);
     if (force) {
       const nftOpen = $("#nft-details") && $("#nft-details").open;
       const secOpen = $("#security-details") && $("#security-details").open;
@@ -866,6 +877,37 @@ async function load(force, extra) {
   } finally {
     if (gen !== loadGen) return;
     if (button) button.disabled = false;
+  }
+}
+
+let btcWatch = 0;
+async function watchBtc(progress) {
+  state.btcProgress = progress;
+  if (!progress || !progress.running) return;
+  const watch = ++btcWatch;
+  while (watch === btcWatch) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (watch !== btcWatch) return;
+    try {
+      const next = await api("/api/btc/progress");
+      state.btcProgress = next;
+      if (state.data) renderBtc(state.data);
+      if (!next.running) {
+        const owner = encodeURIComponent(state.owner);
+        const fresh = await api("/api/portfolio?owner=" + owner);
+        if (state.data && fresh) {
+          state.data.btc_wallets = fresh.btc_wallets || [];
+          state.data.totals = fresh.totals || state.data.totals;
+          state.data.btc_moves = fresh.btc_moves || state.data.btc_moves;
+          state.data.node = fresh.node || state.data.node;
+          state.data.btc_security = fresh.btc_security || state.data.btc_security;
+          render();
+        }
+        return;
+      }
+    } catch (err) {
+      return;
+    }
   }
 }
 

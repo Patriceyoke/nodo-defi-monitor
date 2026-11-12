@@ -30,6 +30,18 @@ _STATUS: dict[str, Any] = {
 }
 
 
+def _apply_btc_update(scans: list[dict[str, Any]], node: dict[str, Any]) -> None:
+    """Replace Bitcoin rows in the snapshot the dashboard already returned."""
+    global _SNAPSHOT
+    if not isinstance(_SNAPSHOT, dict):
+        return
+    _SNAPSHOT["btc_wallets"] = scans
+    _SNAPSHOT["node"] = node
+    tor_raw = db.get_setting("tor_enabled")
+    tor_flag = None if tor_raw == "" else tor_raw in {"1", "true", "yes", "on"}
+    _SNAPSHOT["btc_security"] = btc_security.evaluate(scans, node, tor_flag)
+
+
 def cached_snapshot() -> dict[str, Any] | None:
     """Last snapshot in memory, or the one saved on disk after a restart."""
     global _SNAPSHOT, _SNAPSHOT_AT
@@ -484,36 +496,10 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                 errors.append(f"Prezzi o APY: {exc}. Le posizioni lette restano in elenco.")
                 positions = [{**p, "price_usd": None, "usd": None, "apy": None, "apy30": None, "risk": switches.risk_of(p["protocol"], p.get("asset"))} for p in positions]
 
-        node = await bitcoin.electrs_status()
-        btc_scans: list[dict[str, Any]] = []
-        for w in btc_wallets:
-            try:
-                btc_scans.append(await bitcoin.scan_wallet(w))
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"Bitcoin {w['label']}: {exc}")
-                btc_scans.append(
-                    {
-                        "id": w["id"],
-                        "label": w["label"],
-                        "owner": w["owner"],
-                        "kind": w["kind"],
-                        "role": w.get("role") or "watch",
-                        "key_masked": bitcoin.mask_key(w["descriptor"]),
-                        "btc": 0,
-                        "sats": 0,
-                        "status": "Errore",
-                        "last": str(exc),
-                        "connected": False,
-                        "addresses": [],
-                        "txs": [],
-                        "reuse": [],
-                        "dust": [],
-                        "alert_out_btc": w.get("alert_out_btc"),
-                        "alert_min_btc": w.get("alert_min_btc"),
-                        "hot_threshold_btc": w.get("hot_threshold_btc"),
-                        "node": node,
-                    }
-                )
+        node = bitcoin.cached_node(bool(btc_wallets))
+        btc_scans = [bitcoin.preview_wallet(w) for w in btc_wallets]
+        bitcoin.set_scan_callback(_apply_btc_update)
+        bitcoin.schedule_scans(btc_wallets)
 
         btc_price = await markets.btc_price_usd()
         fx = await markets.fx_thb()
@@ -762,6 +748,7 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "totals": built_totals,
         "position_summary": position_summary(data["positions"]),
         "positions_open": (db.get_setting("positions_open", "1") or "1") != "0",
+        "btc_progress": bitcoin.progress_view(),
         "sources": data.get("sources") or {},
         "positions": positions,
         "switches": ideas,

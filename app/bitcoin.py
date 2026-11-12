@@ -43,6 +43,10 @@ class ElectrsError(RuntimeError):
     pass
 
 
+class ConnectTimeout(TimeoutError):
+    """The TCP handshake itself did not finish. Do not retry these."""
+
+
 _INDEX_RE = re.compile(r"index|sync|not ready|waiting", re.IGNORECASE)
 _CHECKSUM_RE = re.compile(r"^[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{8}$")
 _INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
@@ -91,7 +95,14 @@ _RESOLVE_LOCK = threading.Lock()
 _WORKING_TTL = 60.0
 
 
-MAX_SCAN_INDEX = 2000
+MAX_SCAN_INDEX = 1000
+WALLET_SCAN_TIMEOUT = 45.0
+
+
+def branch_cap(last_used: int | None, gap: int) -> int:
+    """Hard stop: gap after the last used index, plus 50, never past 1000."""
+    base = -1 if last_used is None else int(last_used)
+    return max(1, min(MAX_SCAN_INDEX, base + gap + 50))
 
 
 def gap_limit() -> int:
@@ -645,6 +656,10 @@ ELECTRUM_PROTOCOL = "1.4"
 _LAST_CONNECT_MS: int | None = None
 _PROBE_STEPS: list[dict[str, Any]] = []
 _SCRIPT_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
+_PROGRESS: dict[int, dict[str, Any]] = {}
+_SCAN_TASK: asyncio.Task | None = None
+_NODE: dict[str, Any] | None = None
+_ON_BTC_DONE = None
 
 
 def _format_request(req_id: int, method: str, params: list[Any]) -> bytes:
@@ -675,7 +690,10 @@ def _banner(result: Any) -> str:
 def _open_socket(host: str, port: int, plain: bool) -> tuple[socket.socket, int]:
     global _LAST_CONNECT_MS
     started = time.perf_counter()
-    sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
+    try:
+        sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
+    except (TimeoutError, socket.timeout) as exc:
+        raise ConnectTimeout(str(exc)) from exc
     _LAST_CONNECT_MS = _ms(started)
     if not plain and port in {50002, 443, 60002}:
         ctx = ssl.create_default_context()
@@ -753,6 +771,8 @@ def _electrum_request(
     for _attempt in range(2):
         try:
             return _electrum_exchange(host, port, [(method, params)], timeout, plain)[0]
+        except ConnectTimeout:
+            raise
         except (TimeoutError, socket.timeout) as exc:
             last = exc
             continue
@@ -852,6 +872,8 @@ def _electrum_request_many(
     for _attempt in range(2):
         try:
             return _electrum_exchange(host, port, calls, timeout, plain)
+        except ConnectTimeout:
+            raise
         except (TimeoutError, socket.timeout) as exc:
             last = exc
             continue
@@ -935,6 +957,8 @@ async def electrs_status() -> dict[str, Any]:
         )
     else:
         detail = f"Collegato via {where}.{note} Altezza blocco {height}."
+    global _NODE
+    _NODE = dict(base)
     return {**base, "configured": True, "detail": detail}
 
 
@@ -960,14 +984,144 @@ def _utxo_unconfirmed(utxo: dict[str, Any]) -> bool:
     return height in (None, 0) or (isinstance(height, int) and height <= 0)
 
 
-async def _scan_branch(role: str, body: str, branch: int, gap: int) -> dict[str, Any]:
-    """Keep going until `gap` unused addresses follow the last used one."""
+def _progress_set(wallet_id: int, **fields: Any) -> None:
+    row = _PROGRESS.setdefault(int(wallet_id), {"id": int(wallet_id)})
+    row.update(fields)
+
+
+def progress_view() -> dict[str, Any]:
+    running = _SCAN_TASK is not None and not _SCAN_TASK.done()
+    return {"running": running, "wallets": [dict(row) for row in _PROGRESS.values()]}
+
+
+def _scan_cache_key(wallet_id: int) -> str:
+    return f"btc-scan:{int(wallet_id)}"
+
+
+def load_scan_cache(wallet_id: int) -> dict[str, Any]:
+    stored = db.cache_get(_scan_cache_key(wallet_id)) or {}
+    return stored if isinstance(stored, dict) else {}
+
+
+def save_scan_cache(wallet_id: int, payload: dict[str, Any]) -> None:
+    db.cache_set(_scan_cache_key(wallet_id), payload)
+
+
+def cached_node(has_wallets: bool) -> dict[str, Any]:
+    if isinstance(_NODE, dict):
+        return dict(_NODE)
+    return {
+        "configured": has_wallets,
+        "connected": False,
+        "indexing": False,
+        "host": "",
+        "port": 0,
+        "detail": "Controllo Electrs in corso, in background.",
+        "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
+        "attempts": [],
+        "steps": [],
+        "network": {},
+    }
+
+
+def preview_wallet(wallet: dict[str, Any]) -> dict[str, Any]:
+    """Last saved balance, or an empty card, without waiting for a scan."""
+    cached = load_scan_cache(int(wallet["id"]))
+    result = cached.get("result") if isinstance(cached.get("result"), dict) else None
+    if result:
+        view = dict(result)
+        view["scanning"] = True
+        view["stale"] = True
+        view.setdefault("scanned_at", cached.get("cached_at") or cached.get("ts"))
+        return view
+    return {
+        "id": wallet["id"],
+        "label": wallet["label"],
+        "owner": wallet["owner"],
+        "kind": wallet["kind"],
+        "role": wallet.get("role") or "watch",
+        "key_masked": mask_key(wallet["descriptor"]),
+        "btc": 0.0,
+        "sats": 0,
+        "utxo_count": 0,
+        "status": "In scansione",
+        "last": "Scansione in background.",
+        "connected": False,
+        "scanning": True,
+        "stale": False,
+        "addresses": [],
+        "txs": [],
+        "reuse": [],
+        "dust": [],
+        "scan": {
+            "gap": gap_limit(),
+            "receive": {"scanned": 0, "last_used": None},
+            "change": {"scanned": 0, "last_used": None},
+            "utxo_count": 0,
+            "confirmed_sats": 0,
+            "unconfirmed_sats": 0,
+        },
+        "alert_out_btc": wallet.get("alert_out_btc"),
+        "alert_min_btc": wallet.get("alert_min_btc"),
+        "hot_threshold_btc": wallet.get("hot_threshold_btc"),
+    }
+
+
+async def _fill_chunk(chunk: list[dict[str, Any]], scripts: dict[str, Any]) -> None:
+    """Reuse a scripthash when its status hash is unchanged. Otherwise read history and UTXOs."""
+    hashes = [_scripthash(item["scriptpubkey"]) for item in chunk]
+    try:
+        statuses = await query_scripthashes("blockchain.scripthash.subscribe", hashes)
+    except Exception:  # noqa: BLE001
+        statuses = {}
+    missing: list[str] = []
+    for item, scripthash in zip(chunk, hashes):
+        prev = scripts.get(scripthash) if isinstance(scripts.get(scripthash), dict) else {}
+        status = statuses.get(scripthash)
+        if prev and status and prev.get("status") == status:
+            item["history"] = list(prev.get("history") or [])
+            item["utxos"] = list(prev.get("utxos") or [])
+            continue
+        missing.append(scripthash)
+    histories: dict[str, Any] = {}
+    unspents: dict[str, Any] = {}
+    if missing:
+        histories = await query_scripthashes("blockchain.scripthash.get_history", missing)
+        unspents = await query_scripthashes("blockchain.scripthash.listunspent", missing)
+    for item, scripthash in zip(chunk, hashes):
+        if scripthash not in missing:
+            continue
+        hist = list(histories.get(scripthash) or [])
+        utxos = list(unspents.get(scripthash) or [])
+        if len(hist) > 20:
+            hist = hist[:20]
+        item["history"] = hist
+        item["utxos"] = utxos
+        scripts[scripthash] = {"status": statuses.get(scripthash), "history": hist, "utxos": utxos}
+
+
+async def _scan_branch(
+    role: str,
+    body: str,
+    branch: int,
+    gap: int,
+    known_last: int | None,
+    scripts: dict[str, Any],
+    deadline: float,
+    wallet_id: int,
+) -> dict[str, Any]:
+    """Stop after `gap` unused addresses, or at last_used + gap + 50, and never past 1000."""
     rows: list[dict[str, Any]] = []
     index = 0
     unused = 0
-    last_used: int | None = None
-    while unused < gap and index < MAX_SCAN_INDEX:
-        width = min(BATCH_SIZE, MAX_SCAN_INDEX - index)
+    last_used: int | None = known_last if isinstance(known_last, int) else None
+    cap = branch_cap(last_used, gap)
+    while unused < gap and index < cap:
+        if time.monotonic() > deadline:
+            raise TimeoutError("Scansione Bitcoin interrotta: tempo scaduto")
+        width = min(BATCH_SIZE, cap - index)
+        if width <= 0:
+            break
         chunk = []
         for offset in range(width):
             derived = _derive_at(body, branch, index + offset)
@@ -980,26 +1134,27 @@ async def _scan_branch(role: str, body: str, branch: int, gap: int) -> dict[str,
                     "role": role,
                 }
             )
-        hashes = [_scripthash(item["scriptpubkey"]) for item in chunk]
-        balances = await query_scripthashes("blockchain.scripthash.get_balance", hashes)
-        histories = await query_scripthashes("blockchain.scripthash.get_history", hashes)
-        unspents = await query_scripthashes("blockchain.scripthash.listunspent", hashes)
-        for item, scripthash in zip(chunk, hashes):
-            hist = list(histories.get(scripthash) or [])
-            utxos = list(unspents.get(scripthash) or [])
-            bal = balances.get(scripthash) or {}
-            sats = int((bal or {}).get("confirmed") or 0) + int((bal or {}).get("unconfirmed") or 0)
-            used = bool(hist) or bool(utxos) or sats > 0
-            item["history"] = hist
-            item["utxos"] = utxos
+        await _fill_chunk(chunk, scripts)
+        for item in chunk:
+            hist = list(item.get("history") or [])
+            utxos = list(item.get("utxos") or [])
+            used = bool(hist) or bool(utxos)
             rows.append(item)
             index += 1
+            _progress_set(
+                wallet_id,
+                branch=role,
+                index=item["index"],
+                checked=index,
+                status="In scansione",
+            )
             if used:
                 last_used = item["index"]
                 unused = 0
+                cap = branch_cap(last_used, gap)
             else:
                 unused += 1
-            if unused >= gap or index >= MAX_SCAN_INDEX:
+            if unused >= gap or index >= cap:
                 break
     return {"role": role, "scanned": len(rows), "last_used": last_used, "rows": rows}
 
@@ -1008,11 +1163,17 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
     if gap is None:
         gap = gap_limit()
     gap = max(1, min(int(gap), 500))
+    wallet_id = int(wallet["id"])
+    cached = load_scan_cache(wallet_id)
+    scripts = dict(cached.get("scripts") or {})
+    known_branches = cached.get("branches") if isinstance(cached.get("branches"), dict) else {}
+    deadline = time.monotonic() + WALLET_SCAN_TIMEOUT
     try:
         plans = branch_plans(wallet["descriptor"])
     except Exception as exc:
         log.warning("Derivazione Bitcoin non riuscita (%s).", type(exc).__name__)
         raise
+    _progress_set(wallet_id, label=wallet.get("label"), owner=wallet.get("owner"), status="In scansione", branch="", index=0, checked=0)
     status = await electrs_status()
     offline = "Electrs sta ancora indicizzando" if status.get("indexing") else "Electrs non raggiungibile"
     if not status["connected"]:
@@ -1049,7 +1210,8 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
     unconfirmed_sats = 0
     try:
         for role, body, branch in plans:
-            report = await _scan_branch(role, body, branch, gap)
+            known_last = (known_branches.get(role) or {}).get("last_used") if isinstance(known_branches.get(role), dict) else None
+            report = await _scan_branch(role, body, branch, gap, known_last, scripts, deadline, wallet_id)
             previous = branches.get(role)
             if previous is None:
                 branches[role] = {"scanned": report["scanned"], "last_used": report["last_used"]}
@@ -1190,7 +1352,7 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
         btc = top["btc"]
         last = f"{top['kind']} {btc:.8f} BTC".rstrip("0").rstrip(".") + (f" · blocco {top['height']}" if top["height"] else "")
 
-    return {
+    result = {
         "id": wallet["id"],
         "label": wallet["label"],
         "owner": wallet["owner"],
@@ -1211,5 +1373,74 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
         "alert_min_btc": wallet.get("alert_min_btc"),
         "hot_threshold_btc": wallet.get("hot_threshold_btc"),
         "scan": scan,
+        "scanning": False,
+        "stale": False,
+        "scanned_at": int(time.time()),
         "node": status,
     }
+    stored = {key: value for key, value in result.items() if key != "node"}
+    save_scan_cache(wallet_id, {"result": stored, "scripts": scripts, "branches": branches, "ts": stored["scanned_at"]})
+    _progress_set(wallet_id, status="Sincronizzato", branch="", checked=scan["receive"]["scanned"] + scan["change"]["scanned"], btc=stored["btc"], stale=False, ts=stored["scanned_at"])
+    return result
+
+
+def set_scan_callback(callback) -> None:
+    global _ON_BTC_DONE
+    _ON_BTC_DONE = callback
+
+
+def _keep_previous(previous: dict[str, Any], status: str, last: str) -> dict[str, Any]:
+    kept = dict(previous)
+    kept["scanning"] = False
+    kept["stale"] = bool(previous.get("scanned_at") or previous.get("btc"))
+    kept["status"] = status
+    kept["last"] = last if kept["stale"] else previous.get("last") or last
+    return kept
+
+
+async def _scan_all(wallets: list[dict[str, Any]]) -> None:
+    current = [preview_wallet(w) for w in wallets]
+    node = cached_node(True)
+    try:
+        node = await asyncio.wait_for(electrs_status(), timeout=8)
+    except Exception as exc:  # noqa: BLE001
+        node = {**cached_node(True), "detail": f"Electrs non ricontrollato: {exc}", "connected": False}
+    for index, wallet in enumerate(wallets):
+        wallet_id = int(wallet["id"])
+        previous = current[index]
+        try:
+            result = await asyncio.wait_for(scan_wallet(wallet), timeout=WALLET_SCAN_TIMEOUT)
+            if not result.get("connected") and previous.get("stale"):
+                result = _keep_previous(previous, "Ultimo saldo", "Electrs non raggiungibile. Ultimo saldo conservato.")
+        except Exception as exc:  # noqa: BLE001
+            timed_out = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+            result = _keep_previous(
+                previous,
+                "Tempo scaduto" if timed_out else "Errore",
+                "Ultimo saldo conservato.",
+            )
+            _progress_set(
+                wallet_id,
+                label=wallet.get("label"),
+                owner=wallet.get("owner"),
+                status=result["status"],
+                stale=result["stale"],
+                btc=result.get("btc") or 0,
+                ts=result.get("scanned_at"),
+            )
+        current[index] = result
+        if _ON_BTC_DONE:
+            try:
+                _ON_BTC_DONE(list(current), node)
+            except Exception:  # noqa: BLE001
+                log.warning("Aggiornamento saldo Bitcoin non applicato")
+
+
+def schedule_scans(wallets: list[dict[str, Any]]) -> None:
+    """Start the Bitcoin scan without waiting for it. A scan already running is left alone."""
+    global _SCAN_TASK
+    if not wallets:
+        return
+    if _SCAN_TASK is not None and not _SCAN_TASK.done():
+        return
+    _SCAN_TASK = asyncio.create_task(_scan_all(wallets))

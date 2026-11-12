@@ -566,6 +566,12 @@ async def refresh_security() -> dict[str, Any]:
     return {"ok": True, "running": True, "readonly": True}
 
 
+@app.get("/api/btc/progress")
+async def btc_progress() -> dict[str, Any]:
+    """Bitcoin scan progress. It does not start a scan and does not block Aggiorna."""
+    return bitcoin.progress_view()
+
+
 @app.get("/api/btc/security")
 async def get_btc_sec(owner: str = Query("tutti")) -> dict[str, Any]:
     data = await snapshot(owner)
@@ -609,6 +615,7 @@ API_ROUTES = [
     "POST /api/switches/hide",
     "POST /api/switches/unhide",
     "GET /api/history",
+    "GET /api/btc/progress",
     "GET /api/btc/wallets",
     "GET /api/btc/security",
     "GET /api/nfts",

@@ -1,5 +1,5 @@
 
-from app.bitcoin import consume_until_gap, derive_addresses, mask_key
+from app.bitcoin import branch_cap, consume_until_gap, derive_addresses, mask_key
 from app.validation import classify_btc_key
 
 XPUB = "xpub661MyMwAqRbcFhCvdhTAfpEEDV58oqDvv65YNHC686NNs4KbH8YZQJWVmrfbve7aAVHzxw8bKFxA7MLeDK6BbLfkE3bqkvHLPgaGHHtYGeY"
@@ -26,6 +26,12 @@ def test_one_branch_still_scans_the_other():
     change = add_checksum(f"wpkh({XPUB}/1/*)")
     other = {item["role"]: item["address"] for item in derive_addresses(change, gap=1)}
     assert roles == other
+
+
+def test_branch_cap_stops_a_long_scan():
+    assert branch_cap(None, 50) == 99
+    assert branch_cap(10, 50) == 110
+    assert branch_cap(980, 50) == 1000
 
 
 def test_gap_extends_past_a_used_address_near_the_end():
