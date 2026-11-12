@@ -422,7 +422,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "protocol_security": [],
             "btc_security": [],
             "ens": [],
-            "security": security.cached_alerts(owner),
+            "security_summary": security.security_summary(owner),
         }
     try:
         data = await snapshot(owner, force=False)
@@ -435,7 +435,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "protocol_security": [],
             "btc_security": [],
             "ens": [],
-            "security": [],
+            "security_summary": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
         }
     return {
         "ok": True,
@@ -444,7 +444,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
         "protocol_security": data.get("security") or [],
         "btc_security": data.get("btc_security") or [],
         "ens": data.get("ens_alerts") or [],
-        "security": data.get("security_alerts") or security.cached_alerts(owner),
+        "security_summary": data.get("security_summary") or security.security_summary(owner),
     }
 
 
@@ -467,6 +467,46 @@ async def get_security(owner: str = Query("tutti"), refresh: bool = Query(False)
     if refresh:
         await security.start_scan()
     return security.public_report(owner)
+
+
+class ApprovalHideIn(BaseModel):
+    wallet: str
+    chain: str
+    token: str
+    spender: str
+    allowance: str | None = None
+
+
+def _approval_target(body: ApprovalHideIn) -> tuple[str, str, str, str, str]:
+    wallet = (body.wallet or "").strip().lower()
+    token = (body.token or "").strip().lower()
+    spender = (body.spender or "").strip().lower()
+    chain = (body.chain or "").strip().lower()
+    if chain not in security.WATCH_CHAINS:
+        raise ValueError("Rete non riconosciuta.")
+    if not all(len(item) == 42 and item.startswith("0x") for item in (wallet, token, spender)):
+        raise ValueError("Indirizzo non valido.")
+    return wallet, chain, token, spender, str(body.allowance if body.allowance is not None else "")
+
+
+@app.post("/api/security/hide")
+async def hide_approval(body: ApprovalHideIn) -> dict[str, Any]:
+    try:
+        wallet, chain, token, spender, allowance = _approval_target(body)
+        db.hide_approval(wallet, chain, token, spender, allowance)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True, "summary": security.security_summary("tutti")}
+
+
+@app.post("/api/security/unhide")
+async def unhide_approval(body: ApprovalHideIn) -> dict[str, Any]:
+    try:
+        wallet, chain, token, spender, _allowance = _approval_target(body)
+        db.unhide_approval(wallet, chain, token, spender)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True, "summary": security.security_summary("tutti")}
 
 
 @app.post("/api/security/refresh")
@@ -509,6 +549,8 @@ API_ROUTES = [
     "GET /api/alerts",
     "GET /api/security",
     "POST /api/security/refresh",
+    "POST /api/security/hide",
+    "POST /api/security/unhide",
     "GET /api/debug/refresh-status",
     "GET /api/balances",
     "GET /api/apys",

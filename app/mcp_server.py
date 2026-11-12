@@ -189,7 +189,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
             "protocol_security": data["security"],
             "btc_security": data["btc_security"],
             "ens": data.get("ens_alerts") or [],
-            "security": data.get("security_alerts") or security_checks.cached_alerts(owner),
+            "security_summary": data.get("security_summary") or security_checks.security_summary(owner),
         })
     if name == "get_security":
         if bool(args.get("refresh")):

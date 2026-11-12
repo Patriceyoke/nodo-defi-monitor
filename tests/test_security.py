@@ -5,9 +5,11 @@ import time
 
 from app.security import (
     aave_frozen_paused,
+    annotate_hidden,
     approval_flags,
     approval_severity,
     compare_balance,
+    dedupe_approvals,
     is_unlimited,
     latest_approvals,
     match_hacks,
@@ -16,6 +18,7 @@ from app.security import (
     public_report,
     revoke_url,
     risk_usd,
+    security_summary,
 )
 
 WALLET = "0x" + "11" * 20
@@ -107,6 +110,51 @@ def test_outflow_ignores_the_first_reading_and_small_moves():
         [{**positions[0], "owner": "moglie"}], marks, {WALLET.lower()}, 5, 500,
     )
     assert quiet[0]["owner"] == "moglie"
+
+
+def test_same_spender_is_shown_once_and_a_changed_allowance_returns():
+    first = {"wallet": WALLET, "chain": "ethereum", "token": TOKEN, "spender": SPENDER, "kind": "erc20", "severity": "warning", "allowance": "10", "approved_at": 1, "symbol": "cWETHv3", "owner": "io"}
+    second = {**first, "kind": "erc721", "severity": "danger", "allowance": "unlimited", "approved_at": 2, "symbol": "aEthWETH"}
+    rows = dedupe_approvals([first, second, {**first, "wallet": "0x" + "44" * 20}])
+    assert len(rows) == 2
+    kept = [row for row in rows if row["wallet"] == WALLET][0]
+    assert kept["allowance"] == "unlimited"
+    hidden = annotate_hidden(rows, [{"wallet": WALLET.lower(), "chain": "ethereum", "token": TOKEN.lower(), "spender": SPENDER.lower(), "allowance": "unlimited"}])
+    by_wallet = {row["wallet"].lower(): row for row in hidden}
+    assert by_wallet[WALLET.lower()]["hidden"] is True
+    changed = annotate_hidden([{**kept, "allowance": "12"}], [{"wallet": WALLET.lower(), "chain": "ethereum", "token": TOKEN.lower(), "spender": SPENDER.lower(), "allowance": "unlimited"}])
+    assert changed[0]["hidden"] is False
+
+
+def test_hidden_approval_stays_out_of_the_counter(tmp_path, monkeypatch):
+    from app import config, db
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "monitor.db")
+    monkeypatch.setattr(config, "_READY", True)
+    monkeypatch.setattr(config, "DATA_PERSISTENT", True)
+    db.init_db()
+    db.add_evm("Casa", WALLET, "moglie")
+    db.cache_set("security", {
+        "scanned_at": 1,
+        "approvals": [
+            {"owner": "io", "wallet": WALLET, "chain": "ethereum", "token": TOKEN, "spender": SPENDER, "allowance": "unlimited", "severity": "danger", "symbol": "cWETHv3"},
+            {"owner": "io", "wallet": WALLET, "chain": "ethereum", "token": TOKEN, "spender": SPENDER, "allowance": "5", "severity": "warning", "symbol": "cWETHv3", "kind": "erc721"},
+        ],
+        "incidents": [],
+        "outflows": [{"owner": "moglie", "symbol": "ETH", "severity": "warning", "wallet": WALLET, "chain": "ethereum"}],
+        "alerts": [],
+        "errors": [],
+    })
+    assert security_summary("io")["approvals"] == 1
+    assert security_summary("io")["visible"] == 1
+    db.hide_approval(WALLET, "ethereum", TOKEN, SPENDER, "unlimited")
+    assert security_summary("io")["approvals"] == 0
+    assert security_summary("io")["hidden"] == 1
+    assert security_summary("tutti")["outflows"] == 1
+    db.init_db()
+    assert db.list_evm()[0]["address"] == WALLET
+    assert len(db.list_approval_hides()) == 1
 
 
 def test_cached_security_does_not_scan_and_wallets_survive(tmp_path, monkeypatch):

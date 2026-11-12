@@ -20,6 +20,7 @@
 
   <main class="wrap">
     <div id="errors"></div>
+    <div id="security-summary"></div>
 
     <section class="card" id="overview">
       <div class="card-head">
@@ -147,7 +148,10 @@
         </summary>
         <div class="card-head">
           <p class="caption" id="sec-caption">Il controllo gira in background una volta al giorno. Aggiorna per leggerlo adesso.</p>
-          <button class="btn ghost" id="btn-sec-refresh" type="button">Aggiorna sicurezza</button>
+          <div class="row-actions">
+            <button class="btn ghost" id="btn-sec-hidden" type="button">Mostra nascoste (0)</button>
+            <button class="btn ghost" id="btn-sec-refresh" type="button">Aggiorna sicurezza</button>
+          </div>
         </div>
         <p class="mini" id="sec-status"></p>
         <div id="sec-list"><p class="mini">Apri la sezione per vedere l'ultimo controllo.</p></div>

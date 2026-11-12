@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, refreshing: false };
+const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, refreshing: false };
 const charts = {};
 
 const $ = (sel) => document.querySelector(sel);
@@ -47,7 +47,7 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function showBanner(list, ensAlerts, securityAlerts) {
+function showBanner(list, ensAlerts) {
   const box = $("#errors");
   if (!box) return;
   const errs = (list || []).map((item) => String(item || "")).filter(Boolean);
@@ -56,14 +56,42 @@ function showBanner(list, ensAlerts, securityAlerts) {
     const who = OWNER_LABEL[item.owner] || item.label || "";
     return `<div class="callout ${tone}"><strong>${escapeHtml(item.name || "ENS")}</strong> ${escapeHtml(item.text || "")}${who ? " · " + escapeHtml(who) : ""}</div>`;
   }).join("");
-  const secHtml = (securityAlerts || []).filter((item) => state.owner === "tutti" || item.owner === state.owner).map((item) => {
-    const tone = item.level === "danger" ? "bad" : "warn";
-    const who = OWNER_LABEL[item.owner] || "";
-    const link = item.href ? ` <a href="${escapeHtml(item.href)}" target="_blank" rel="noopener">apri</a>` : "";
-    return `<div class="callout ${tone}"><strong>${escapeHtml(item.title || "Sicurezza")}</strong> ${escapeHtml(item.text || "")}${who ? " · " + escapeHtml(who) : ""}${link}</div>`;
-  }).join("");
   const errHtml = errs.length ? `<div class="errbar">${errs.map((e) => escapeHtml(e)).join("<br>")}</div>` : "";
-  box.innerHTML = secHtml + ensHtml + errHtml;
+  box.innerHTML = ensHtml + errHtml;
+}
+
+function securityLine(summary) {
+  const approvals = Number(summary.approvals || 0);
+  const other = Number(summary.incidents || 0) + Number(summary.outflows || 0);
+  const approvazioni = approvals === 1 ? "1 approvazione" : `${approvals} approvazioni`;
+  const avvisi = other === 1 ? "1 avviso" : `${other} avvisi`;
+  if (approvals && other) return `${approvazioni} e ${avvisi} da controllare`;
+  if (approvals) return `${approvazioni} da controllare`;
+  return `${avvisi} da controllare`;
+}
+
+function liveSecuritySummary(fallback) {
+  const data = state.security;
+  if (data && data.ready) {
+    const approvals = securityRows(data.approvals).filter((row) => !row.hidden);
+    const outflows = securityRows(data.outflows);
+    const incidents = (data.incidents || []).filter((row) => state.owner === "tutti" || (row.owners || []).includes(state.owner));
+    return { approvals: approvals.length, incidents: incidents.length, outflows: outflows.length, visible: approvals.length + incidents.length + outflows.length };
+  }
+  const pack = fallback || {};
+  if (pack[state.owner]) return pack[state.owner];
+  return pack.view || pack;
+}
+
+function renderSecuritySummary(summary) {
+  const box = $("#security-summary");
+  if (!box) return;
+  const visible = summary && Number(summary.visible || 0);
+  if (!visible) {
+    box.innerHTML = "";
+    return;
+  }
+  box.innerHTML = `<div class="callout warn"><a href="#wallet-security" data-goto-security>${escapeHtml(securityLine(summary))} · Vai a Sicurezza</a></div>`;
 }
 
 function updatedClock(ts) {
@@ -552,7 +580,11 @@ function renderSecurity() {
     box.innerHTML = `<p class="mini">${escapeHtml(data.note || "Nessun controllo ancora.")}</p>`;
     return;
   }
-  const approvals = securityRows(data.approvals);
+  const allApprovals = securityRows(data.approvals);
+  const hiddenApprovals = allApprovals.filter((row) => row.hidden);
+  const approvals = state.showHiddenApprovals ? allApprovals : allApprovals.filter((row) => !row.hidden);
+  const hiddenBtn = $("#btn-sec-hidden");
+  if (hiddenBtn) hiddenBtn.textContent = state.showHiddenApprovals ? "Nascondi le nascoste" : `Mostra nascoste (${hiddenApprovals.length})`;
   const outflows = securityRows(data.outflows);
   const incidents = (data.incidents || []).filter((row) => state.owner === "tutti" || (row.owners || []).includes(state.owner));
   const flagText = (flags) => (flags || []).map((flag) => ({
@@ -564,6 +596,7 @@ function renderSecurity() {
       <p class="mini">${escapeHtml(row.label || "")} · ${OWNER_LABEL[row.owner] || ""} · ${escapeHtml(flagText(row.flags) || "nessun segnale")}</p>
       <p class="mini">A rischio: ${row.value_at_risk_usd == null ? "n/d" : money(row.value_at_risk_usd)}</p>
       <p><a href="${escapeHtml(row.revoke_url || "#")}" target="_blank" rel="noopener">Apri su revoke.cash</a> <span class="mini">La firma resta tua, per esempio su OneKey.</span></p>
+      <p><button class="btn" type="button" data-approval-${row.hidden ? "unhide" : "hide"} data-wallet="${escapeHtml(row.wallet || "")}" data-chain="${escapeHtml(row.chain || "")}" data-token="${escapeHtml(row.token || "")}" data-spender="${escapeHtml(row.spender || "")}" data-allowance="${escapeHtml(row.allowance)}">${row.hidden ? "Ripristina" : "Nascondi"}</button></p>
     </article>`).join("") : `<p class="mini">Nessuna approvazione segnalata in questa vista.</p>`;
   const incidentHtml = incidents.length ? incidents.map((row) => `
     <p class="mini"><span class="pill ${row.severity === "danger" ? "bad" : "warn"}">${escapeHtml(row.protocol || "")}</span> ${escapeHtml(row.detail || row.name || "")}</p>
@@ -592,6 +625,8 @@ async function loadSecurity(force) {
       data = await api("/api/security?owner=tutti");
     }
     state.security = data;
+    if (state.data) state.data.security_summary = data.summary || state.data.security_summary;
+    renderSecuritySummary(data.summary);
     renderSecurity();
   } catch (err) {
     if (status) status.textContent = "";
@@ -660,7 +695,8 @@ function render() {
     if ((data.wallet_count || 0) > 0 && !data.positions.length && !data.btc_wallets.length && !state.refreshing) {
       banners.unshift("I portafogli sono salvati, ma questo ricalcolo non ha prodotto posizioni.");
     }
-    showBanner(banners, data.ens_alerts || [], data.security_alerts || []);
+    showBanner(banners, data.ens_alerts || []);
+    renderSecuritySummary(liveSecuritySummary(data.security_summary));
     const pill = $("#source-pill");
     if (pill) {
       const clock = data.saved === false ? "" : updatedClock(data.ts);
@@ -786,6 +822,43 @@ async function boot() {
   }
   const secRefresh = $("#btn-sec-refresh");
   if (secRefresh) secRefresh.addEventListener("click", (ev) => { ev.preventDefault(); loadSecurity(true); });
+  const secHidden = $("#btn-sec-hidden");
+  if (secHidden) secHidden.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    state.showHiddenApprovals = !state.showHiddenApprovals;
+    renderSecurity();
+  });
+  document.addEventListener("click", async (ev) => {
+    const jump = ev.target.closest("[data-goto-security]");
+    if (jump) {
+      ev.preventDefault();
+      const details = $("#security-details");
+      if (details) {
+        details.open = true;
+        details.scrollIntoView({ behavior: "smooth", block: "start" });
+        loadSecurity(false);
+      }
+      return;
+    }
+    const hide = ev.target.closest("[data-approval-hide]");
+    const unhide = ev.target.closest("[data-approval-unhide]");
+    const button = hide || unhide;
+    if (!button) return;
+    try {
+      await api(hide ? "/api/security/hide" : "/api/security/unhide", {
+        method: "POST",
+        body: JSON.stringify({
+          wallet: button.dataset.wallet,
+          chain: button.dataset.chain,
+          token: button.dataset.token,
+          spender: button.dataset.spender,
+          allowance: button.dataset.allowance,
+        }),
+      });
+      state.security = null;
+      await loadSecurity(false);
+    } catch (err) { alert(err.message); }
+  });
   const nftDetails = $("#nft-details");
   if (nftDetails) {
     nftDetails.addEventListener("toggle", () => {

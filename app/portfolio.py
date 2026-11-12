@@ -116,17 +116,28 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
         "history": [],
         "ens_alerts": [],
         "ens_names": [],
-        "security_alerts": [],
+        "security_summary": {
+            "io": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
+            "moglie": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
+            "tutti": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
+            "view": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
+        },
         "wallet_count": _STATUS.get("wallet_count") or 0,
     }
 
 
-def _security_alerts(owner: str) -> list[dict[str, Any]]:
+def _security_summary(owner: str) -> dict[str, Any]:
+    empty = {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0}
     try:
-        from .security import cached_alerts
-        return cached_alerts(owner)
+        from .security import security_summary
+        return {
+            "io": security_summary("io"),
+            "moglie": security_summary("moglie"),
+            "tutti": security_summary("tutti"),
+            "view": security_summary(owner),
+        }
     except Exception:  # noqa: BLE001
-        return []
+        return {"io": empty, "moglie": empty, "tutti": empty, "view": empty}
 
 
 def filter_owner(owner: str, item_owner: str) -> bool:
@@ -696,7 +707,7 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
         "history": history,
         "ens_alerts": ens_alerts,
         "ens_names": ens_names,
-        "security_alerts": _security_alerts(owner),
+        "security_summary": _security_summary(owner),
         "saved": data.get("saved") is not False,
         "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item))
         + sum(1 for w in data.get("btc_wallets") or [] if filter_owner(owner, w.get("owner"))),

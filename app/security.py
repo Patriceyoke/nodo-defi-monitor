@@ -178,7 +178,7 @@ def latest_approvals(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         parsed = parse_approval_log(entry)
         if not parsed:
             continue
-        key = (parsed["kind"], parsed["token"], parsed["spender"])
+        key = (parsed["token"], parsed["spender"])
         current = chosen.get(key)
         if current is None or parsed["block"] >= current["block"]:
             chosen[key] = parsed
@@ -322,6 +322,66 @@ def outflow_rows(
             "amount": 0.0, "usd": 0.0,
         })
     return alerts, updates
+
+
+def approval_identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("wallet") or "").lower(),
+        str(row.get("chain") or "").lower(),
+        str(row.get("token") or "").lower(),
+        str(row.get("spender") or "").lower(),
+    )
+
+
+def dedupe_approvals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per wallet, chain, token and spender."""
+    rank = {"ok": 0, "warning": 1, "danger": 2}
+    chosen: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = approval_identity(row)
+        previous = chosen.get(key)
+        if previous is None:
+            chosen[key] = row
+            continue
+        better_severity = rank.get(str(row.get("severity")), 0) > rank.get(str(previous.get("severity")), 0)
+        newer = int(row.get("approved_at") or 0) >= int(previous.get("approved_at") or 0)
+        if better_severity or (rank.get(str(row.get("severity")), 0) == rank.get(str(previous.get("severity")), 0) and newer):
+            chosen[key] = row
+    return list(chosen.values())
+
+
+def annotate_hidden(rows: list[dict[str, Any]], hides: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """A hide sticks only while the allowance is unchanged."""
+    stored = {
+        (row["wallet"], row["chain"], row["token"], row["spender"]): str(row.get("allowance"))
+        for row in (hides if hides is not None else db.list_approval_hides())
+    }
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        key = approval_identity(item)
+        remembered = stored.get(key)
+        item["hidden"] = remembered is not None and remembered == str(item.get("allowance"))
+        out.append(item)
+    return out
+
+
+def security_summary(owner: str = "tutti") -> dict[str, int]:
+    owner = normalize_owner(owner, allow_all=True)
+    report = cached_report() or {}
+    approvals = annotate_hidden(dedupe_approvals(filter_owner_rows(list(report.get("approvals") or []), owner)))
+    incidents = list(report.get("incidents") or [])
+    outflows = filter_owner_rows(list(report.get("outflows") or []), owner)
+    if owner != "tutti":
+        incidents = [row for row in incidents if owner in (row.get("owners") or [])]
+    visible_approvals = [row for row in approvals if not row.get("hidden")]
+    return {
+        "approvals": len(visible_approvals),
+        "hidden": len(approvals) - len(visible_approvals),
+        "incidents": len(incidents),
+        "outflows": len(outflows),
+        "visible": len(visible_approvals) + len(incidents) + len(outflows),
+    }
 
 
 def filter_owner_rows(rows: list[dict[str, Any]], owner: str) -> list[dict[str, Any]]:
@@ -727,6 +787,7 @@ async def scan_and_store() -> dict[str, Any]:
     for row in updates:
         db.upsert_balance_mark(row["wallet"], row["chain"], row["token"], row["owner"], row["symbol"], row["amount"], row["usd"])
     alerts: list[dict[str, Any]] = []
+    approvals = dedupe_approvals(approvals)
     alerts.extend(item for item in (_alert_from_approval(row) for row in approvals) if item)
     for incident in incidents:
         owners = sorted({pos.get("owner") for pos in positions if pos.get("protocol") == incident.get("protocol")})
@@ -768,15 +829,23 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
             "outflows": [],
             "alerts": [],
             "errors": [],
+            "summary": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
             "counts": {"io": 0, "moglie": 0, "tutti": 0},
         }
-    approvals = filter_owner_rows(list(report.get("approvals") or []), owner)
+    approvals = annotate_hidden(dedupe_approvals(filter_owner_rows(list(report.get("approvals") or []), owner)))
     outflows = filter_owner_rows(list(report.get("outflows") or []), owner)
-    alerts = filter_owner_rows(list(report.get("alerts") or []), owner)
+    alerts = [row for row in filter_owner_rows(list(report.get("alerts") or []), owner) if row.get("kind") != "approval"]
     incidents = list(report.get("incidents") or [])
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
-    all_alerts = list(report.get("alerts") or [])
+    visible_approvals = [row for row in approvals if not row.get("hidden")]
+    summary = {
+        "approvals": len(visible_approvals),
+        "hidden": len(approvals) - len(visible_approvals),
+        "incidents": len(incidents),
+        "outflows": len(outflows),
+        "visible": len(visible_approvals) + len(incidents) + len(outflows),
+    }
     return {
         "owner": owner,
         "ready": True,
@@ -794,10 +863,11 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
         "errors": report.get("errors") or [],
         "drop_pct": report.get("drop_pct"),
         "usd_min": report.get("usd_min"),
+        "summary": summary,
         "counts": {
-            "io": sum(1 for row in all_alerts if row.get("owner") == "io" and row.get("level") in {"warning", "danger"}),
-            "moglie": sum(1 for row in all_alerts if row.get("owner") == "moglie" and row.get("level") in {"warning", "danger"}),
-            "tutti": sum(1 for row in all_alerts if row.get("level") in {"warning", "danger"}),
+            "io": security_summary("io")["visible"],
+            "moglie": security_summary("moglie")["visible"],
+            "tutti": security_summary("tutti")["visible"],
         },
     }
 
