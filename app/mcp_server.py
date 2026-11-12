@@ -153,7 +153,9 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
     owner = normalize_owner(str(args.get("owner") or "tutti"), allow_all=True)
     if name == "get_portfolio":
         data = await snapshot(owner, force=bool(args.get("refresh")))
-        return _text({k: data[k] for k in ("owner", "ts", "totals", "income", "positions", "btc_wallets", "switches", "errors", "node") if k in data})
+        payload = {k: data[k] for k in ("owner", "ts", "totals", "income", "positions", "btc_wallets", "errors", "node") if k in data}
+        payload["switches"] = [item for item in data.get("switches") or [] if not item.get("hidden")]
+        return _text(payload)
     if name == "get_balances":
         data = await snapshot(owner)
         return _text({"owner": owner, "positions": data["positions"], "totals": data["totals"]})
@@ -178,7 +180,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
             {
                 "owner": owner,
                 "gas_usd": data.get("gas_usd"),
-                "switches": data["switches"],
+                "switches": [item for item in data["switches"] if not item.get("hidden")],
                 "note": "Sono solo proposte. Nessuna transazione parte da qui. La firma resta tua (es. OneKey).",
             }
         )

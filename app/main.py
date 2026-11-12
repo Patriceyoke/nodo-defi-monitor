@@ -405,9 +405,55 @@ async def check_switch(owner: str = Query("tutti")) -> dict[str, Any]:
     return {
         "owner": owner,
         "gas_usd": data.get("gas_usd"),
-        "switches": data["switches"],
+        "switches": [item for item in data["switches"] if not item.get("hidden")],
         "note": "Sono solo proposte. Nessuna transazione parte da qui.",
     }
+
+
+class SwitchHideIn(BaseModel):
+    owner: str
+    from_position: str
+    to_target: str
+    spread: float | None = None
+
+
+def _switch_target(body: SwitchHideIn) -> tuple[str, str, str]:
+    owner = normalize_owner(body.owner)
+    source = (body.from_position or "").strip()
+    target = (body.to_target or "").strip()
+    if not source or not target or len(source) > 80 or len(target) > 80:
+        raise ValueError("Suggerimento non valido.")
+    return owner, source, target
+
+
+def _switch_spread(owner: str, source: str, target: str, fallback: float | None) -> float:
+    data = cached_snapshot() or {}
+    for idea in data.get("switches") or []:
+        if idea.get("owner") == owner and idea.get("from") == source and idea.get("to") == target:
+            return float(idea["to_apy"]) - float(idea["from_apy"])
+    if fallback is None:
+        raise ValueError("Suggerimento non trovato.")
+    return float(fallback)
+
+
+@app.post("/api/switches/hide")
+async def hide_switch(body: SwitchHideIn) -> dict[str, Any]:
+    try:
+        owner, source, target = _switch_target(body)
+        db.hide_switch(owner, source, target, _switch_spread(owner, source, target, body.spread))
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True}
+
+
+@app.post("/api/switches/unhide")
+async def unhide_switch(body: SwitchHideIn) -> dict[str, Any]:
+    try:
+        owner, source, target = _switch_target(body)
+        db.unhide_switch(owner, source, target)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True}
 
 
 @app.get("/api/alerts")
@@ -555,6 +601,8 @@ API_ROUTES = [
     "GET /api/balances",
     "GET /api/apys",
     "GET /api/check_switch",
+    "POST /api/switches/hide",
+    "POST /api/switches/unhide",
     "GET /api/history",
     "GET /api/btc/wallets",
     "GET /api/btc/security",

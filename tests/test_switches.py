@@ -1,5 +1,5 @@
 
-from app.switches import estimate_gas_usd, suggest_switches
+from app.switches import estimate_gas_usd, mark_switch_hides, suggest_switches, switch_is_hidden
 
 
 def _pos(owner, protocol, asset, usd, apy, risk=None):
@@ -52,6 +52,50 @@ def test_does_not_cross_owner_or_bucket():
         _pos("io", "Lido", "stETH", 1, 8.0),
     ]
     assert suggest_switches(rows, gas_usd=1) == []
+
+
+def test_hidden_switch_returns_only_when_the_gap_grows_or_the_target_changes():
+    idea = {"owner": "io", "from": "Aave USDT", "to": "Compound USDT", "from_apy": 3.6, "to_apy": 5.2}
+    hidden_at = 1_700_000_000
+    assert switch_is_hidden(idea, 1.6, hidden_at, hidden_at + 6 * 86400) is True
+    assert switch_is_hidden(idea, None) is False
+    # 1.6 + 0.9 stays hidden; 1.6 + 1.0 comes back.
+    assert switch_is_hidden({**idea, "to_apy": 6.1}, 1.6, hidden_at, hidden_at + 86400) is True
+    assert switch_is_hidden({**idea, "to_apy": 6.2}, 1.6, hidden_at, hidden_at + 86400) is False
+    # Still valid after 7 days: show it again.
+    assert switch_is_hidden(idea, 1.6, hidden_at, hidden_at + 7 * 86400) is False
+    marked, release = mark_switch_hides(
+        [idea, {**idea, "to": "Spark USDT", "to_apy": 5.2}, {**idea, "owner": "moglie"}],
+        [{"owner": "io", "from_position": "Aave USDT", "to_target": "Compound USDT", "spread": 1.6, "created_at": hidden_at}],
+        now=hidden_at + 2 * 86400,
+    )
+    by_key = {(row["owner"], row["to"]): row["hidden"] for row in marked}
+    assert by_key[("io", "Compound USDT")] is True
+    assert by_key[("io", "Spark USDT")] is False
+    assert by_key[("moglie", "Compound USDT")] is False
+    assert release == []
+    _marked, due = mark_switch_hides(
+        [idea],
+        [{"owner": "io", "from_position": "Aave USDT", "to_target": "Compound USDT", "spread": 1.6, "created_at": hidden_at}],
+        now=hidden_at + 7 * 86400,
+    )
+    assert due == [("io", "Aave USDT", "Compound USDT")]
+    assert _marked[0]["hidden"] is False
+
+
+def test_switch_hide_survives_restart(tmp_path, monkeypatch):
+    from app import config, db
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "monitor.db")
+    monkeypatch.setattr(config, "_READY", True)
+    monkeypatch.setattr(config, "DATA_PERSISTENT", True)
+    db.init_db()
+    db.add_evm("Casa", "0x" + "ab" * 20, "io")
+    db.hide_switch("io", "Aave USDT", "Compound USDT", 1.6)
+    db.init_db()
+    assert db.list_evm()[0]["label"] == "Casa"
+    assert db.list_switch_hides()[0]["spread"] == 1.6
 
 
 def test_gas_estimate():

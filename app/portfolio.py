@@ -602,7 +602,12 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
         }
     positions = [p for p in data["positions"] if filter_owner(owner, p["owner"])]
     btc = [w for w in data["btc_wallets"] if filter_owner(owner, w["owner"])]
-    ideas = [s for s in data["switches"] if filter_owner(owner, s["owner"])]
+    ideas, released = switches.mark_switch_hides(
+        [s for s in data["switches"] if filter_owner(owner, s["owner"])],
+        db.list_switch_hides(),
+    )
+    for owner_key, source, target in released:
+        db.unhide_switch(owner_key, source, target)
     held = {p["protocol"] for p in positions}
     security = [c for c in data["security"] if c.get("protocol") in held or c.get("protocol") in {p.get("asset") for p in positions}]
     # protocol_health tags protocol OR stable name; filter to held protocols mostly

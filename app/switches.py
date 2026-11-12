@@ -1,6 +1,7 @@
 """Suggest a protocol switch only if yield rises at equal or lower risk, after gas."""
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from .config import ETH_ASSETS, PROTOCOL_RISK, RISK_RANK, STABLE_ASSETS, SWITCH_GAS_UNITS
@@ -30,6 +31,63 @@ def estimate_gas_usd(gas_price_wei: int, eth_price: float, override: float | Non
     if gas_price_wei <= 0 or eth_price <= 0:
         return 10.0
     return (gas_price_wei * SWITCH_GAS_UNITS / 1e18) * eth_price
+
+
+MATERIAL_SPREAD_PP = 1.0
+HIDE_SECONDS = 7 * 86400
+
+
+def switch_spread(idea: dict[str, Any]) -> float:
+    return float(idea["to_apy"]) - float(idea["from_apy"])
+
+
+def switch_is_hidden(
+    idea: dict[str, Any],
+    saved_spread: float | None,
+    hidden_at: int | None = None,
+    now: int | None = None,
+) -> bool:
+    """Stay hidden until the gap grows by 1 point, or 7 days pass while it is still proposed.
+
+    A different target is a different suggestion, so it is not passed here.
+    """
+    if saved_spread is None:
+        return False
+    if hidden_at is not None:
+        moment = int(time.time() if now is None else now)
+        if moment - int(hidden_at) >= HIDE_SECONDS:
+            return False
+    return switch_spread(idea) < float(saved_spread) + MATERIAL_SPREAD_PP - 1e-9
+
+
+def mark_switch_hides(
+    ideas: list[dict[str, Any]],
+    hides: list[dict[str, Any]],
+    now: int | None = None,
+) -> tuple[list[dict[str, Any]], list[tuple[str, str, str]]]:
+    """Mark ideas and list hides to drop because the suggestion is visible again."""
+    moment = int(time.time() if now is None else now)
+    saved = {
+        (row["owner"], row["from_position"], row["to_target"]): (float(row["spread"]), int(row.get("created_at") or moment))
+        for row in hides
+    }
+    marked: list[dict[str, Any]] = []
+    release: list[tuple[str, str, str]] = []
+    for idea in ideas:
+        row = dict(idea)
+        row["spread"] = switch_spread(row)
+        key = (row["owner"], row["from"], row["to"])
+        remembered = saved.get(key)
+        row["hidden"] = switch_is_hidden(
+            row,
+            None if remembered is None else remembered[0],
+            None if remembered is None else remembered[1],
+            moment,
+        )
+        if remembered is not None and not row["hidden"]:
+            release.append(key)
+        marked.append(row)
+    return marked, release
 
 
 def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[dict[str, Any]]:

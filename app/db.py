@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS app_cache (
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS switch_hides (
+    owner TEXT NOT NULL,
+    from_position TEXT NOT NULL,
+    to_target TEXT NOT NULL,
+    spread REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (owner, from_position, to_target)
+);
 CREATE TABLE IF NOT EXISTS approval_hides (
     wallet TEXT NOT NULL,
     chain TEXT NOT NULL,
@@ -278,6 +286,7 @@ def export_backup() -> dict[str, Any]:
         "settings": settings,
         "nft_hides": list_nft_hides(),
         "approval_hides": list_approval_hides(),
+        "switch_hides": list_switch_hides(),
         "warning": (
             "Questo file contiene i descrittori Bitcoin di sola osservazione salvati su questo server. "
             "Non sono chiavi private e non possono firmare, ma mostrano gli indirizzi del conto. "
@@ -336,6 +345,17 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
             continue
         if hide_nft(str(row.get("chain") or ""), str(row.get("contract") or ""), str(row.get("token_id") or ""), str(row.get("kind") or "token")):
             hides_added += 1
+    switches_added = 0
+    for row in payload.get("switch_hides") or []:
+        if not isinstance(row, dict):
+            continue
+        if hide_switch(
+            str(row.get("owner") or ""),
+            str(row.get("from_position") or ""),
+            str(row.get("to_target") or ""),
+            float(row.get("spread") or 0),
+        ):
+            switches_added += 1
     approvals_added = 0
     for row in payload.get("approval_hides") or []:
         if not isinstance(row, dict):
@@ -354,6 +374,7 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
         "settings_updated": updated,
         "nft_hides_added": hides_added,
         "approval_hides_added": approvals_added,
+        "switch_hides_added": switches_added,
     }
 
 
@@ -408,6 +429,40 @@ def cache_set(key: str, payload: dict[str, Any]) -> None:
                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
             (key, blob, now),
         )
+
+
+def list_switch_hides() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT owner, from_position, to_target, spread, created_at FROM switch_hides ORDER BY created_at"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def hide_switch(owner: str, from_position: str, to_target: str, spread: float) -> bool:
+    owner = (owner or "").strip().lower()
+    from_position = (from_position or "").strip()
+    to_target = (to_target or "").strip()
+    if owner not in {"io", "moglie"} or not from_position or not to_target:
+        raise ValueError("Suggerimento non valido.")
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO switch_hides(owner, from_position, to_target, spread, created_at)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(owner, from_position, to_target) DO UPDATE SET
+                 spread=excluded.spread, created_at=excluded.created_at""",
+            (owner, from_position, to_target, float(spread), int(time.time())),
+        )
+    return True
+
+
+def unhide_switch(owner: str, from_position: str, to_target: str) -> bool:
+    with connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM switch_hides WHERE owner=? AND from_position=? AND to_target=?",
+            ((owner or "").strip().lower(), (from_position or "").strip(), (to_target or "").strip()),
+        )
+        return cur.rowcount > 0
 
 
 def list_approval_hides() -> list[dict[str, Any]]:

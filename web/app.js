@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, refreshing: false };
+const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false };
 const charts = {};
 
 const $ = (sel) => document.querySelector(sel);
@@ -354,21 +354,27 @@ function renderPositions(data) {
 
 function renderSwitches(data) {
   const box = $("#switches");
-  const items = data.switches || [];
+  const all = data.switches || [];
+  const hidden = all.filter((item) => item.hidden);
+  const items = state.showHiddenSwitches ? all : all.filter((item) => !item.hidden);
+  const toggle = $("#btn-switch-hidden");
+  if (toggle) toggle.textContent = state.showHiddenSwitches ? "Nascondi i nascosti" : `Mostra nascosti (${hidden.length})`;
   if (!items.length) {
-    box.innerHTML = `<p class="mini">Nessuno switch conviene in questa vista, a rischio uguale o inferiore e dopo il gas di circa ${money(data.gas_usd || 0)}.</p>
+    const note = hidden.length && !state.showHiddenSwitches ? " Quelli nascosti tornano se il vantaggio cresce di almeno un punto, se cambia la destinazione, o dopo 7 giorni." : "";
+    box.innerHTML = `<p class="mini">Nessuno switch conviene in questa vista, a rischio uguale o inferiore e dopo il gas di circa ${money(data.gas_usd || 0)}.${note}</p>
       <p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
     return;
   }
   box.innerHTML = items.map((s) => `
-    <div class="callout warn">
-      <strong>${s.lead}</strong>
-      Spostare ${money(s.usd)} da ${s.from} (${pct(s.from_apy)}, rischio ${s.from_risk}) a ${s.to} (${pct(s.to_apy)}, rischio ${s.to_risk}).
+    <div class="callout ${s.hidden ? "warn" : "warn"}">
+      <strong>${escapeHtml(s.lead)}</strong>
+      Spostare ${money(s.usd)} da ${escapeHtml(s.from)} (${pct(s.from_apy)}, rischio ${escapeHtml(s.from_risk)}) a ${escapeHtml(s.to)} (${pct(s.to_apy)}, rischio ${escapeHtml(s.to_risk)}).
       Stesso rischio o inferiore, rendimento più alto anche dopo il gas (${money(s.gas_usd)}): circa ${money(s.net_year_usd)} in più all'anno. È solo una proposta.
+      <p><button class="btn" type="button" data-switch-${s.hidden ? "unhide" : "hide"} data-owner="${escapeHtml(s.owner || "")}" data-from="${escapeHtml(s.from || "")}" data-to="${escapeHtml(s.to || "")}" data-spread="${escapeHtml(s.spread)}">${s.hidden ? "Ripristina" : "Nascondi"}</button></p>
     </div>
     <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
       ${metric("APY", pct(s.from_apy) + " → " + pct(s.to_apy))}
-      ${metric("Rischio", s.from_risk + " → " + s.to_risk)}
+      ${metric("Rischio", escapeHtml(s.from_risk) + " → " + escapeHtml(s.to_risk))}
       ${metric("Guadagno dopo il gas", "+" + money(s.net_year_usd), "stima annua · " + OWNER_LABEL[s.owner])}
     </div>
   `).join("") + `<p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
@@ -822,6 +828,29 @@ async function boot() {
   }
   const secRefresh = $("#btn-sec-refresh");
   if (secRefresh) secRefresh.addEventListener("click", (ev) => { ev.preventDefault(); loadSecurity(true); });
+  const switchHidden = $("#btn-switch-hidden");
+  if (switchHidden) switchHidden.addEventListener("click", () => {
+    state.showHiddenSwitches = !state.showHiddenSwitches;
+    if (state.data) renderSwitches(state.data);
+  });
+  document.addEventListener("click", async (ev) => {
+    const hide = ev.target.closest("[data-switch-hide]");
+    const unhide = ev.target.closest("[data-switch-unhide]");
+    const button = hide || unhide;
+    if (!button) return;
+    try {
+      await api(hide ? "/api/switches/hide" : "/api/switches/unhide", {
+        method: "POST",
+        body: JSON.stringify({
+          owner: button.dataset.owner,
+          from_position: button.dataset.from,
+          to_target: button.dataset.to,
+          spread: Number(button.dataset.spread),
+        }),
+      });
+      await load(false);
+    } catch (err) { alert(err.message); }
+  });
   const secHidden = $("#btn-sec-hidden");
   if (secHidden) secHidden.addEventListener("click", (ev) => {
     ev.preventDefault();

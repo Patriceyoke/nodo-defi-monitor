@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.2.1"
+version: "0.2.2"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,9 +23,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.2.1: le approvazioni non riempiono più la pagina. In alto resta solo
-  una riga, se ce n'è almeno una da vedere. Il dettaglio è nella sezione
-  Sicurezza, con Nascondi. Un'approvazione nascosta torna se l'importo cambia.
+  0.2.2: ogni suggerimento di switch ha Nascondi. Torna se il vantaggio
+  cresce di almeno un punto, se cambia la destinazione, o dopo 7 giorni.
+  Mostra nascosti lo riporta subito. Gli indirizzi restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []
