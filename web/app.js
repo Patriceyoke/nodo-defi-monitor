@@ -90,7 +90,7 @@ function renderAlloc(data) {
     $("#alloc-title").textContent = "Ripartizione per titolare";
   } else {
     const map = new Map();
-    defi.forEach((p) => map.set(p.protocol, (map.get(p.protocol) || 0) + p.usd));
+    defi.forEach((p) => map.set(p.protocol, (map.get(p.protocol) || 0) + (Number(p.usd) || 0)));
     parts = [...map.entries()].map(([label, usd]) => ({ label, usd }));
     $("#alloc-title").textContent = "Ripartizione per protocollo";
   }
@@ -118,8 +118,8 @@ function renderApy(data) {
     data: {
       labels,
       datasets: [
-        { label: "APY attuale", data: pos.map((p) => p.apy ?? 0), backgroundColor: "#0D9488" },
-        { label: "Media 30 giorni", data: pos.map((p) => p.apy30 ?? 0), backgroundColor: "#2563EB" },
+        { label: "APY attuale", data: pos.map((p) => (p.apy == null ? null : p.apy)), backgroundColor: "#0D9488" },
+        { label: "Media 30 giorni", data: pos.map((p) => (p.apy30 == null ? null : p.apy30)), backgroundColor: "#2563EB" },
       ],
     },
     options: {
@@ -197,8 +197,8 @@ function renderPositions(data) {
       <td>${OWNER_LABEL[p.owner] || p.owner}</td>
       <td>${p.protocol}</td>
       <td>${p.asset}</td>
-      <td class="num">${money(p.usd || 0)}</td>
-      <td class="num">${pct(p.apy)}</td>
+      <td class="num">${p.usd == null ? "n/d" : money(p.usd)}</td>
+      <td class="num">${p.protocol !== "Wallet" && p.apy == null ? "non disponibile" : pct(p.apy)}</td>
       <td class="num">${apyDelta(p.apy, p.apy30)}</td>
       <td>${riskBadge(p.risk)}</td>
     </tr>`).join("");

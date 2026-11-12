@@ -41,19 +41,16 @@ def _norm_symbol(symbol: str) -> str:
     return (symbol or "").upper().replace(" ", "")
 
 
-def _pool_matches(pool: dict[str, Any], project: str, symbol: str) -> bool:
-    if (pool.get("chain") or "").lower() not in {"ethereum", "eth"}:
-        return False
-    proj = (pool.get("project") or "").lower()
-    if proj != (project or "").lower():
-        return False
-    want = _norm_symbol(symbol)
-    have = _norm_symbol(pool.get("symbol") or "")
-    if have == want:
-        return True
-    # Common Llama symbols like "USDC" or "WETH-USDC"
-    parts = have.replace("-", "_").split("_")
-    return want in parts and len(parts) == 1 or have.startswith(want)
+# Llama's chain label is not always the same word we use internally.
+LLAMA_CHAIN_NAMES = {
+    "ethereum": {"ethereum", "eth"},
+    "bsc": {"bsc", "binance", "binance smart chain"},
+}
+
+
+def _chain_ok(pool_chain: str, chain: str) -> bool:
+    names = LLAMA_CHAIN_NAMES.get(chain, {chain.lower()})
+    return (pool_chain or "").lower() in names
 
 
 async def llama_pools() -> list[dict[str, Any]]:
@@ -61,30 +58,37 @@ async def llama_pools() -> list[dict[str, Any]]:
     return list(data.get("data") or [])
 
 
-async def match_pool(project: str | None, symbol: str | None) -> dict[str, Any] | None:
+async def match_pool(project: str | None, symbol: str | None, chain: str = "ethereum") -> dict[str, Any] | None:
+    """Exact project + symbol on the requested chain.
+
+    When several pools share that symbol, prefer the one without poolMeta
+    (the main market, not Umbrella or a collateral row) and then the largest TVL.
+    A substring match is intentionally not used: "ETH" must not select "WETH".
+    """
     if not project or not symbol:
         return None
     pools = await llama_pools()
-    candidates = [p for p in pools if _pool_matches(p, project, symbol)]
-    if not candidates:
-        # Relaxed: same project, symbol contained
-        want = _norm_symbol(symbol)
-        for p in pools:
-            if (p.get("chain") or "").lower() not in {"ethereum", "eth"}:
-                continue
-            if (p.get("project") or "").lower() != project.lower():
-                continue
-            if want in _norm_symbol(p.get("symbol") or ""):
-                candidates.append(p)
+    want = _norm_symbol(symbol)
+    candidates = [
+        p for p in pools
+        if _chain_ok(p.get("chain") or "", chain)
+        and (p.get("project") or "").lower() == project.lower()
+        and _norm_symbol(p.get("symbol") or "") == want
+    ]
     if not candidates:
         return None
-    # Prefer the largest TVL pool as the canonical rate
-    candidates.sort(key=lambda p: float(p.get("tvlUsd") or 0), reverse=True)
-    return candidates[0]
+    main = [p for p in candidates if not (p.get("poolMeta") or "")]
+    group = main or candidates
+    group.sort(key=lambda p: float(p.get("tvlUsd") or 0), reverse=True)
+    return group[0]
 
 
-async def apy_for(project: str | None, symbol: str | None) -> tuple[float | None, float | None, dict[str, Any] | None]:
-    pool = await match_pool(project, symbol)
+async def apy_for(
+    project: str | None,
+    symbol: str | None,
+    chain: str = "ethereum",
+) -> tuple[float | None, float | None, dict[str, Any] | None]:
+    pool = await match_pool(project, symbol, chain)
     if not pool:
         return None, None, None
     apy = pool.get("apy")
@@ -100,18 +104,37 @@ async def apy_for(project: str | None, symbol: str | None) -> tuple[float | None
     return apy_f, apy30_f, pool
 
 
+def _llama_coin(token: str) -> tuple[str, str]:
+    """Return (llama coin id, lookup key).
+
+    A bare 0x address is Ethereum. "bsc:0x..." selects another chain.
+    "ETH" is the native ether price.
+    """
+    text = (token or "").strip()
+    if text.upper() == "ETH":
+        return "coingecko:ethereum", "ETH"
+    if ":" in text:
+        chain, addr = text.split(":", 1)
+        chain = chain.lower()
+        key = f"{chain}:{addr.lower()}"
+        return key, key
+    key = "ethereum:" + text.lower()
+    return key, key
+
+
 async def prices_usd(tokens: list[str]) -> dict[str, float]:
-    coins = []
-    mapping: dict[str, str] = {}
+    coins: list[str] = []
+    wanted: dict[str, str] = {}
     for token in tokens:
-        if token.upper() == "ETH":
-            key = "coingecko:ethereum"
-        else:
-            key = "ethereum:" + token.lower()
-        coins.append(key)
-        mapping[key] = token
+        if not token:
+            continue
+        coin, lookup = _llama_coin(token)
+        coins.append(coin)
+        wanted[coin] = lookup
     if not coins:
         return {}
+    # Llama rejects duplicate ids in one request.
+    coins = list(dict.fromkeys(coins))
     url = LLAMA_PRICES.format(coins=",".join(coins))
     data = await _get_json(url, PRICE_TTL)
     out: dict[str, float] = {}
@@ -119,8 +142,8 @@ async def prices_usd(tokens: list[str]) -> dict[str, float]:
         price = info.get("price")
         if price is None:
             continue
-        token = mapping.get(key, key)
-        out[token.lower() if token != "ETH" else "ETH"] = float(price)
+        lookup = wanted.get(key, key)
+        out[lookup] = float(price)
         out[key] = float(price)
     return out
 
@@ -159,8 +182,8 @@ async def protocol_health() -> list[dict[str, Any]]:
     pools = await llama_pools()
     price_tokens = [STETH, USDC, USDT, DAI, USDS, WETH]
     px = await prices_usd(price_tokens)
-    eth = px.get(WETH.lower()) or px.get("ETH") or 0
-    steth = px.get(STETH.lower()) or 0
+    eth = px.get(f"ethereum:{WETH.lower()}") or px.get("ETH") or 0
+    steth = px.get(f"ethereum:{STETH.lower()}") or 0
     checks: list[dict[str, Any]] = []
 
     def peg(name: str, price: float, target: float, warn_bps: float = 0.01) -> dict[str, Any]:
@@ -189,20 +212,21 @@ async def protocol_health() -> list[dict[str, Any]]:
 
     checks.append(peg("Lido", steth, eth, 0.008))
     for stable, addr in (("USDC", USDC), ("USDT", USDT), ("DAI", DAI), ("USDS", USDS)):
-        checks.append(peg(stable, px.get(addr.lower()) or 0, 1.0, 0.005))
+        checks.append(peg(stable, px.get(f"ethereum:{addr.lower()}") or 0, 1.0, 0.005))
 
     # Utilization / TVL signal from the largest Ethereum pool of each project.
     wanted = {
-        "Aave": "aave-v3",
-        "Compound": "compound-v3",
-        "Fluid": "fluid-lending",
-        "Spark/Sky": "spark",
-        "Lido": "lido",
+        "Aave": ["aave-v3"],
+        "Compound": ["compound-v3"],
+        "Fluid": ["fluid-lending"],
+        "Spark": ["spark-savings"],
+        "SparkLend": ["sparklend"],
+        "Sky": ["sky-lending"],
+        "Maple": ["maple"],
+        "Rocket Pool": ["rocket-pool"],
+        "Lido": ["lido"],
     }
-    # Sky savings may be listed as sky-lending
-    extra_projects = {"Spark/Sky": ["spark", "sky-lending", "sky"]}
-    for protocol, project in wanted.items():
-        projects = extra_projects.get(protocol, [project])
+    for protocol, projects in wanted.items():
         group = [
             p for p in pools
             if (p.get("project") or "").lower() in {x.lower() for x in projects}

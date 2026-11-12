@@ -2,12 +2,13 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.1.1"
+version: "0.1.2"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
   Monitor DeFi è un'app in sola lettura per seguire posizioni DeFi su Ethereum
-  (Lido, Aave v3, Compound, Fluid, Spark/Sky) e conti Bitcoin osservati da
+  (Lido, Rocket Pool, Aave v3, Compound v3, Fluid, Spark, SparkLend, Sky, Maple)
+  e Fluid fUSDT su BNB Chain, più conti Bitcoin osservati da
   xpub, zpub o descrittori, letti dal tuo nodo / Electrs o Fulcrum locale.
 
   Ogni indirizzo o xpub ha un titolare, Io o Moglie. Tutte le viste e i tool
@@ -22,9 +23,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.1.1: l'app si apre anche se la cartella dati non è scrivibile, e l'icona
-  della home è un PNG 512px servito da GitHub. La cartella data/ è nel
-  pacchetto così Umbrel la crea come utente 1000.
+  0.1.2: indirizzi dei protocolli verificati on-chain, vault ERC-4626
+  valutati con convertToAssets, e Fluid fUSDT su BNB Chain. Se un prezzo
+  o un APY manca, la posizione resta in elenco e l'avviso compare in alto.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

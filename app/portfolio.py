@@ -24,12 +24,15 @@ def filter_owner(owner: str, item_owner: str) -> bool:
 
 
 def stats(positions: list[dict[str, Any]]) -> dict[str, float]:
-    total = sum(float(p.get("usd") or 0) for p in positions if p.get("protocol") != "Wallet" or True)
-    # Wallet ETH is included in DeFi/portfolio totals as liquid ETH, but not in APY.
+    # Wallet ETH is included in portfolio totals, but not in the APY average.
+    # Positions with an unknown APY stay in the total and are left out of the average
+    # so a missing rate is not treated as 0%.
     defi = [p for p in positions if p.get("protocol") != "Wallet"]
     defi_usd = sum(float(p.get("usd") or 0) for p in defi)
-    year = sum(float(p.get("usd") or 0) * float(p.get("apy") or 0) / 100.0 for p in defi)
-    wapy = (year / defi_usd * 100.0) if defi_usd else 0.0
+    known = [p for p in defi if p.get("apy") is not None and p.get("usd")]
+    known_usd = sum(float(p.get("usd") or 0) for p in known)
+    year = sum(float(p.get("usd") or 0) * float(p["apy"]) / 100.0 for p in known)
+    wapy = (year / known_usd * 100.0) if known_usd else 0.0
     wallet_usd = sum(float(p.get("usd") or 0) for p in positions if p.get("protocol") == "Wallet")
     return {
         "total_usd": defi_usd + wallet_usd,
@@ -40,42 +43,85 @@ def stats(positions: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
-async def _enrich(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    tokens = []
-    for r in rows:
-        token = r.get("price_token") or r.get("token")
+def _lookup_price(px: dict[str, float], row: dict[str, Any]) -> float:
+    if row.get("valuation_ok") is False:
+        return 0.0
+    if row.get("asset") == "ETH":
+        return float(px.get("ETH") or 0)
+    key = row.get("price_token") or ""
+    if not key:
+        return 0.0
+    if key in px:
+        return float(px[key])
+    return float(px.get(key.lower()) or 0)
+
+
+async def _enrich(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Attach price and APY. Never drop a position because either lookup failed."""
+    alerts: list[str] = []
+    tokens = ["ETH"]
+    for row in rows:
+        token = row.get("price_token")
         if token:
             tokens.append(token)
-    tokens.append("ETH")
-    px = await markets.prices_usd(list(dict.fromkeys(tokens)))
+    try:
+        px = await markets.prices_usd(list(dict.fromkeys(tokens)))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Price feed failed: %s", exc)
+        px = {}
+        alerts.append(f"Listino prezzi non disponibile: {exc}. Le posizioni restano in elenco senza dollari.")
     out = []
-    for r in rows:
-        token = (r.get("price_token") or r.get("token") or "").lower()
-        price = px.get(token) or px.get(r.get("token", "").lower()) or 0
-        if r.get("asset") == "ETH":
-            price = px.get("ETH") or px.get("ethereum:eth".lower()) or price
-            # llama key for WETH often works for ETH
-            if not price:
-                from .protocols import WETH
-                price = px.get(WETH.lower()) or 0
-        usd = float(r["amount"]) * float(price)
+    missing_price: list[str] = []
+    missing_apy: list[str] = []
+    for row in rows:
+        name = f"{row.get('protocol')} {row.get('asset')}"
+        price = _lookup_price(px, row)
         apy, apy30, pool = (None, None, None)
-        if r.get("protocol") != "Wallet":
-            apy, apy30, pool = await markets.apy_for(r.get("llama_project"), r.get("llama_symbol") or r.get("asset"))
+        if row.get("protocol") != "Wallet":
+            try:
+                apy, apy30, pool = await markets.apy_for(
+                    row.get("llama_project"),
+                    row.get("llama_symbol") or row.get("asset"),
+                    row.get("chain") or "ethereum",
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("APY lookup failed for %s: %s", name, exc)
+                apy, apy30, pool = None, None, None
+        if price <= 0:
+            usd = None
+            price_out = None
+            if row.get("valuation_ok") is not False:
+                missing_price.append(name)
+                log.warning("Prezzo non disponibile per %s", name)
+        else:
+            usd = float(row["amount"]) * float(price)
+            price_out = price
+            # Hide leftover dust only when we actually know the dollar value.
+            if usd < 1:
+                continue
         item = {
-            **r,
-            "price_usd": price,
+            **row,
+            "price_usd": price_out,
             "usd": usd,
             "apy": apy,
             "apy30": apy30 if apy30 is not None else apy,
-            "risk": PROTOCOL_RISK.get(r["protocol"], "medio"),
+            "apy_available": apy is not None if row.get("protocol") != "Wallet" else None,
+            "risk": PROTOCOL_RISK.get(row["protocol"], "medio"),
             "pool_id": (pool or {}).get("pool"),
         }
-        # Hide leftover dust so the dashboard stays readable.
-        if item["usd"] < 1:
-            continue
+        if row.get("protocol") != "Wallet" and apy is None:
+            missing_apy.append(name)
+            log.warning("APY non disponibile per %s", name)
         out.append(item)
-    return out
+    if missing_price:
+        alerts.append(
+            "Prezzo non disponibile, posizione comunque in elenco: " + ", ".join(missing_price)
+        )
+    if missing_apy:
+        alerts.append(
+            "APY non disponibile, posizione comunque in elenco: " + ", ".join(missing_apy)
+        )
+    return out, alerts
 
 
 async def refresh(force: bool = False) -> dict[str, Any]:
@@ -88,26 +134,35 @@ async def refresh(force: bool = False) -> dict[str, Any]:
         btc_wallets = db.list_btc()
         positions: list[dict[str, Any]] = []
         errors: list[str] = []
-        rpc_ok = True
-        try:
-            # Probe RPC once
-            await evm.eth_rpc("eth_blockNumber", [])
-        except Exception as exc:  # noqa: BLE001
-            rpc_ok = False
-            errors.append(f"RPC Ethereum non raggiungibile: {exc}")
+        chains_ok: dict[str, bool] = {}
+        from .protocols import CHAINS
+        for chain_id, chain in CHAINS.items():
+            try:
+                await evm.eth_rpc("eth_blockNumber", [], chain=chain_id)
+                chains_ok[chain_id] = True
+            except Exception as exc:  # noqa: BLE001
+                chains_ok[chain_id] = False
+                msg = f"RPC {chain['label']} non raggiungibile: {exc}"
+                log.warning(msg)
+                errors.append(msg)
+        rpc_ok = any(chains_ok.values())
 
         if rpc_ok:
             for w in evm_wallets:
                 try:
-                    found = await evm.scan_wallet(w["address"], w["owner"], w["label"])
+                    found, notes = await evm.scan_wallet(w["address"], w["owner"], w["label"], chains_ok)
                     positions.extend(found)
+                    errors.extend(notes)
                 except Exception as exc:  # noqa: BLE001
+                    log.warning("Lettura %s fallita: %s", w["label"], exc)
                     errors.append(f"Lettura {w['label']}: {exc}")
             try:
-                positions = await _enrich(positions)
+                positions, alerts = await _enrich(positions)
+                errors.extend(alerts)
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"Prezzi o APY: {exc}")
-                positions = [{**p, "price_usd": 0, "usd": 0, "apy": None, "apy30": None, "risk": PROTOCOL_RISK.get(p["protocol"], "medio")} for p in positions]
+                log.warning("Arricchimento prezzi/APY fallito: %s", exc)
+                errors.append(f"Prezzi o APY: {exc}. Le posizioni lette restano in elenco.")
+                positions = [{**p, "price_usd": None, "usd": None, "apy": None, "apy30": None, "risk": PROTOCOL_RISK.get(p["protocol"], "medio")} for p in positions]
 
         node = await bitcoin.electrs_status()
         btc_scans: list[dict[str, Any]] = []
@@ -151,8 +206,10 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             try:
                 from .protocols import WETH
                 px = await markets.prices_usd([WETH])
-                eth_price = px.get(WETH.lower()) or 0
-            except Exception:
+                eth_price = px.get(f"ethereum:{WETH.lower()}") or px.get("ETH") or 0
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Prezzo ETH di riserva non disponibile: %s", exc)
+                errors.append(f"Prezzo ETH non disponibile: {exc}")
                 eth_price = 0
 
         gas_override = db.get_setting("gas_estimate_usd")

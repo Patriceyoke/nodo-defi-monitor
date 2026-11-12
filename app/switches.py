@@ -117,10 +117,13 @@ async def market_alternatives(positions: list[dict[str, Any]]) -> list[dict[str,
     wanted_projects = {
         "aave-v3": ("Aave", "basso"),
         "compound-v3": ("Compound", "basso"),
-        "spark": ("Spark/Sky", "basso"),
-        "sky-lending": ("Spark/Sky", "basso"),
+        "spark-savings": ("Spark", "basso"),
+        "sparklend": ("SparkLend", "basso"),
+        "sky-lending": ("Sky", "basso"),
         "lido": ("Lido", "basso"),
+        "rocket-pool": ("Rocket Pool", "basso"),
         "fluid-lending": ("Fluid", "medio"),
+        "maple": ("Maple", "medio"),
     }
     held_buckets = {bucket(p["asset"]) for p in positions if p.get("protocol") != "Wallet"}
     if not held_buckets:

@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 APP_NAME = "Monitor DeFi"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 DEFAULT_PORT = int(os.environ.get("PORT", "3847"))
 
 _DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data"
@@ -98,7 +98,7 @@ def abandon_unwritable_data_dir(reason: BaseException | None = None) -> Path:
 
 ensure_data_dir()
 
-DEFAULT_RPC = os.environ.get("ETH_RPC_URL", "https://cloudflare-eth.com")
+DEFAULT_RPC = os.environ.get("ETH_RPC_URL", "https://ethereum.publicnode.com")
 DEFAULT_ELECTRS_HOST = os.environ.get("ELECTRS_HOST", "")
 DEFAULT_ELECTRS_PORT = int(os.environ.get("ELECTRS_PORT", "50001"))
 DEFAULT_BTC_PRICE_URL = os.environ.get(
@@ -108,25 +108,33 @@ DEFAULT_BTC_PRICE_URL = os.environ.get(
 
 # Fallback public Ethereum RPC list (no API keys required).
 PUBLIC_RPCS = [
-    "https://cloudflare-eth.com",
-    "https://eth.llamarpc.com",
-    "https://rpc.ankr.com/eth",
     "https://ethereum.publicnode.com",
+    "https://cloudflare-eth.com",
+    "https://rpc.mevblocker.io",
 ]
 
 # Risk ranking used for switch suggestions (lower is safer).
 RISK_RANK = {"basso": 0, "medio": 1, "alto": 2}
 PROTOCOL_RISK = {
     "Lido": "basso",
+    "Rocket Pool": "basso",
     "Aave": "basso",
     "Compound": "basso",
+    "Spark": "basso",
+    "SparkLend": "basso",
+    "Sky": "basso",
     "Spark/Sky": "basso",
     "Fluid": "medio",
+    "Fluid BNB": "medio",
+    "Maple": "medio",
     "Wallet": "basso",
 }
 
-STABLE_ASSETS = {"USDC", "USDT", "DAI", "USDS", "sUSDS", "sDAI", "GHO"}
-ETH_ASSETS = {"ETH", "WETH", "stETH", "wstETH", "aEthWETH", "aEthwstETH"}
+STABLE_ASSETS = {
+    "USDC", "USDT", "DAI", "USDS", "sUSDS", "stUSDS", "sDAI", "GHO",
+    "spUSDC", "spUSDT", "syrupUSDC", "syrupUSDT", "fUSDC", "fUSDT",
+}
+ETH_ASSETS = {"ETH", "WETH", "stETH", "wstETH", "rETH", "aEthWETH", "aEthwstETH"}
 
 # Typical gas units for a withdraw+deposit style move (estimate only).
 SWITCH_GAS_UNITS = 220_000
