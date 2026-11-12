@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 APP_NAME = "Monitor DeFi"
-APP_VERSION = "0.2.6"
+APP_VERSION = "0.2.7"
 DEFAULT_PORT = int(os.environ.get("PORT", "3847"))
 
 _DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data"
@@ -101,13 +101,24 @@ ensure_data_dir()
 DEFAULT_RPC = os.environ.get("ETH_RPC_URL", "https://ethereum.publicnode.com")
 DEFAULT_ELECTRS_HOST = os.environ.get("ELECTRS_HOST", "")
 DEFAULT_ELECTRS_PORT = int(os.environ.get("ELECTRS_PORT", "50001"))
-# Plain TCP, in the order tried after the saved host fails inside the container.
-# Electrs answers on 50001. Fulcrum is tried on 50002, then 50001.
+# Official addresses from getumbrel/umbrel-apps electrs/exports.sh and fulcrum/exports.sh.
+# Electrs 0.11.1 listens on plain TCP 50001 and publishes that port on the host.
+# umbreld forces the container name electrs_electrs_1. 10.21.21.10 is APP_ELECTRS_NODE_IP.
+# Fulcrum's Electrum port on Umbrel is plain TCP 50002 at 10.21.21.200.
+UMBREL_ELECTRS_IP = "10.21.21.10"
+UMBREL_ELECTRS_PORT = 50001
+UMBREL_FULCRUM_IP = "10.21.21.200"
+UMBREL_FULCRUM_PORT = 50002
 ELECTRS_CANDIDATES = (
+    ("10.21.21.10", 50001),
     ("electrs_electrs_1", 50001),
+    ("electrs-electrs-1", 50001),
+    ("electrs", 50001),
     ("electrs_app_1", 50001),
+    ("10.21.21.200", 50002),
     ("fulcrum_fulcrum_1", 50002),
     ("fulcrum_fulcrum_1", 50001),
+    ("fulcrum-fulcrum-1", 50002),
     ("fulcrum_app_1", 50002),
     ("fulcrum_app_1", 50001),
 )

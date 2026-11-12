@@ -5,9 +5,11 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import socket
 import ssl
+import struct
 import threading
 import time
 from typing import Any
@@ -22,6 +24,7 @@ from .config import (
     DEFAULT_ELECTRS_PORT,
     DEFAULT_GAP_LIMIT,
     ELECTRS_CANDIDATES,
+    UMBREL_ELECTRS_PORT,
 )
 from . import db
 from .validation import classify_btc_key, reject_if_secret
@@ -81,6 +84,8 @@ _CANON_VERSION = {"main": bytes.fromhex("0488b21e"), "test": bytes.fromhex("0435
 _WORKING: tuple[str, int, str, bool] | None = None
 _WORKING_AT = 0.0
 _WORKING_KEY = ""
+_ATTEMPTS: list[dict[str, Any]] = []
+_NETWORK: dict[str, Any] = {}
 _RESOLVE_LOCK = threading.Lock()
 _WORKING_TTL = 60.0
 
@@ -110,7 +115,7 @@ def local_host_hint(host: str) -> str:
     if name == "umbrel.local" or (name.endswith(".local") and name):
         return (
             "Questo nome .local non si risolve dentro l'app. "
-            "Su Umbrel l'host è electrs_electrs_1 e la porta 50001. "
+            "Su Umbrel Electrs è electrs_electrs_1, indirizzo 10.21.21.10, porta 50001, senza SSL. "
             "Puoi lasciarlo così: l'app prova da sola i contenitori Electrs e Fulcrum."
         )
     return ""
@@ -147,11 +152,21 @@ def _gateway_hosts() -> list[str]:
     return found
 
 
+def _env_endpoint(host_key: str, port_key: str, default_port: int) -> tuple[str, int]:
+    host = (os.environ.get(host_key) or "").strip()
+    raw = (os.environ.get(port_key) or "").strip()
+    try:
+        port = int(raw) if raw else default_port
+    except ValueError:
+        port = default_port
+    return host, port
+
+
 def _candidate_targets() -> list[tuple[str, int, str, bool]]:
-    """Saved host first, then Umbrel container names, then the Docker gateway.
+    """Saved host, then Umbrel's real Electrs address, then names and the gateway.
 
     Each item is host, port, via, plain TCP. Fallbacks are plain TCP.
-    The saved host keeps TLS on 50002, which is how Electrs SSL is usually published.
+    A saved port 50002 still uses TLS. Umbrel's own Fulcrum port 50002 is plain TCP.
     """
     host, port = _configured_endpoint()
     out: list[tuple[str, int, str, bool]] = []
@@ -169,13 +184,89 @@ def _candidate_targets() -> list[tuple[str, int, str, bool]]:
 
     if host:
         add(host, port, "configured", False)
+    env_host, env_port = _env_endpoint("APP_ELECTRS_NODE_IP", "APP_ELECTRS_NODE_PORT", UMBREL_ELECTRS_PORT)
+    if env_host:
+        add(env_host, env_port, f"{env_host}:{env_port}", True)
+    fulcrum_host, fulcrum_port = _env_endpoint("APP_FULCRUM_NODE_IP", "APP_FULCRUM_NODE_PORT", 50002)
     for candidate, candidate_port in ELECTRS_CANDIDATES:
         add(candidate, candidate_port, f"{candidate}:{candidate_port}", True)
+    if fulcrum_host:
+        add(fulcrum_host, fulcrum_port, f"{fulcrum_host}:{fulcrum_port}", True)
+    domain = (os.environ.get("DEVICE_DOMAIN_NAME") or "").strip()
+    if domain:
+        add(domain, port or DEFAULT_ELECTRS_PORT, f"{domain}:{port or DEFAULT_ELECTRS_PORT}", True)
+        add(domain, 50001, f"{domain}:50001", True)
+    gateway_env = (os.environ.get("GATEWAY_IP") or "").strip()
+    if gateway_env:
+        add(gateway_env, 50001, f"{gateway_env}:50001", True)
+        add(gateway_env, 50002, f"{gateway_env}:50002", True)
     for gateway in _gateway_hosts():
         add(gateway, port or DEFAULT_ELECTRS_PORT, f"{gateway}:{port or DEFAULT_ELECTRS_PORT}", True)
         add(gateway, 50001, f"{gateway}:50001", True)
         add(gateway, 50002, f"{gateway}:50002", True)
     return out
+
+
+def _failure_text(exc: BaseException) -> str:
+    if isinstance(exc, socket.gaierror):
+        return f"DNS: {exc}"
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return f"Timeout: {exc}"
+    if isinstance(exc, ConnectionRefusedError):
+        return f"Connessione rifiutata: {exc}"
+    if isinstance(exc, (ElectrsError, json.JSONDecodeError)):
+        return f"Errore di protocollo: {exc}"
+    if isinstance(exc, OSError) and exc.errno in {101, 113}:
+        return f"Rete non raggiungibile: {exc}"
+    return f"Errore: {exc}"
+
+
+def _interface_report() -> list[str]:
+    """IPv4 addresses of this container, as 'interfaccia indirizzo'."""
+    found: list[str] = []
+    try:
+        names = os.listdir("/sys/class/net")
+    except OSError:
+        return found
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for name in sorted(names):
+            try:
+                packed = fcntl_ioctl(sock.fileno(), name)
+            except OSError:
+                continue
+            ip = socket.inet_ntoa(packed[20:24])
+            found.append(f"{name} {ip}")
+    finally:
+        sock.close()
+    return found
+
+
+def fcntl_ioctl(fileno: int, name: str) -> bytes:
+    import fcntl
+
+    return fcntl.ioctl(fileno, 0x8915, struct.pack("256s", name.encode()[:15]))
+
+
+def network_report() -> dict[str, Any]:
+    """What this container can see: its addresses, interfaces, and default gateway."""
+    gateways = _gateway_hosts()
+    env_gateway = (os.environ.get("GATEWAY_IP") or "").strip()
+    if env_gateway and env_gateway not in gateways:
+        gateways = [env_gateway, *gateways]
+    try:
+        interfaces = sorted(os.listdir("/sys/class/net"))
+    except OSError:
+        interfaces = []
+    return {
+        "ips": _interface_report(),
+        "networks": interfaces,
+        "gateway": gateways[0] if gateways else "",
+        "gateways": gateways,
+        "domain": (os.environ.get("DEVICE_DOMAIN_NAME") or "").strip(),
+        "electrs_ip": (os.environ.get("APP_ELECTRS_NODE_IP") or "").strip(),
+        "electrs_port": (os.environ.get("APP_ELECTRS_NODE_PORT") or "").strip(),
+    }
 
 
 def _forget_working() -> None:
@@ -187,32 +278,52 @@ def _forget_working() -> None:
 
 def resolve_electrs() -> tuple[str, int, str, bool]:
     """First Electrum server that answers server.version. Cached for a minute."""
-    global _WORKING, _WORKING_AT, _WORKING_KEY
+    global _WORKING, _WORKING_AT, _WORKING_KEY, _ATTEMPTS, _NETWORK
     configured_host, configured_port = _configured_endpoint()
     key = f"{configured_host}:{configured_port}"
     with _RESOLVE_LOCK:
         now = time.time()
         if _WORKING_KEY == key and now - _WORKING_AT < _WORKING_TTL:
             return _WORKING or ("", configured_port, "missing", True)
+        attempts: list[dict[str, Any]] = []
         found: tuple[str, int, str, bool] | None = None
         for host, port, via, plain in _candidate_targets():
             if not _host_resolves(host):
+                attempts.append({
+                    "host": host,
+                    "port": port,
+                    "ok": False,
+                    "error": "DNS: nome non risolto",
+                })
                 continue
             try:
                 _electrum_request(
                     host, port, "server.version", ["monitor-defi", "1.4"], timeout=1.5, plain=plain,
                 )
-            except Exception:
-                log.info("Electrum %s:%s non risponde.", host, port)
+            except Exception as exc:
+                attempts.append({
+                    "host": host,
+                    "port": port,
+                    "ok": False,
+                    "error": _failure_text(exc),
+                })
+                log.info("Electrum %s:%s non risponde: %s", host, port, attempts[-1]["error"])
                 continue
+            attempts.append({"host": host, "port": port, "ok": True, "error": ""})
             found = (host, port, via, plain)
             break
+        _ATTEMPTS = attempts
+        _NETWORK = network_report()
         _WORKING = found
         _WORKING_KEY = key
         _WORKING_AT = now
         if found:
             return found
         return "", configured_port, "missing", True
+
+
+def electrs_diagnostics() -> dict[str, Any]:
+    return {"attempts": list(_ATTEMPTS), "network": dict(_NETWORK)}
 
 
 def electrs_endpoint() -> tuple[str, int, str]:
@@ -466,12 +577,12 @@ def _offline_detail(saved_host: str) -> str:
     hint = local_host_hint(saved_host)
     if hint:
         return (
-            f"{hint} Nessun contenitore ha risposto "
-            "(electrs_electrs_1, electrs_app_1, fulcrum_fulcrum_1, fulcrum_app_1)."
+            f"{hint} Nessun indirizzo ha risposto, nemmeno 10.21.21.10:50001 "
+            "(electrs_electrs_1). Apri la diagnostica qui sotto."
         )
     return (
-        "Electrs non è raggiungibile. Su Umbrel l'host di solito è electrs_electrs_1 "
-        "e la porta 50001. Lascia l'host vuoto per cercarlo, oppure scrivilo in Impostazioni."
+        "Electrs non è raggiungibile. Su Umbrel il server è 10.21.21.10:50001 "
+        "(contenitore electrs_electrs_1, TCP senza SSL). Apri la diagnostica qui sotto."
     )
 
 
@@ -494,6 +605,7 @@ async def electrs_call(method: str, params: list[Any]) -> Any:
 async def electrs_status() -> dict[str, Any]:
     saved_host, _saved_port = _configured_endpoint()
     host, port, via, _plain = await asyncio.to_thread(resolve_electrs)
+    diag = electrs_diagnostics()
     base = {
         "configured": bool(saved_host or host),
         "detected": via not in {"configured", "missing"},
@@ -503,6 +615,8 @@ async def electrs_status() -> dict[str, Any]:
         "port": port,
         "via": "" if via in {"", "missing"} else (f"{host}:{port}" if host else ""),
         "source": "Nodo Bitcoin Umbrel / Electrs (locale)",
+        "attempts": diag["attempts"],
+        "network": diag["network"],
     }
     if not host:
         return {**base, "detail": _offline_detail(saved_host)}

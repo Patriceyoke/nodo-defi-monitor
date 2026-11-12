@@ -3,7 +3,7 @@
 services:
   web:
     build: .
-    image: nodo-defi-monitor:0.2.6
+    image: nodo-defi-monitor:0.2.7
     user: "1000:1000"
     init: true
     restart: unless-stopped
@@ -12,6 +12,12 @@ services:
     environment:
       DATA_DIR: /data
       PORT: "3847"
+      APP_ELECTRS_NODE_IP: ${APP_ELECTRS_NODE_IP:-}
+      APP_ELECTRS_NODE_PORT: ${APP_ELECTRS_NODE_PORT:-50001}
+      APP_FULCRUM_NODE_IP: ${APP_FULCRUM_NODE_IP:-}
+      APP_FULCRUM_NODE_PORT: ${APP_FULCRUM_NODE_PORT:-50002}
+      DEVICE_DOMAIN_NAME: ${DEVICE_DOMAIN_NAME:-}
+      GATEWAY_IP: ${GATEWAY_IP:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

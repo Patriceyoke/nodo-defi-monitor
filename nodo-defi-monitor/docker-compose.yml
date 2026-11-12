@@ -9,7 +9,7 @@ services:
       PROXY_AUTH_WHITELIST: "/mcp*"
 
   web:
-    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.2.6
+    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.2.7
     user: "1000:1000"
     init: true
     restart: on-failure
@@ -17,6 +17,14 @@ services:
     environment:
       DATA_DIR: /data
       PORT: "3847"
+      # Present only when Umbrel sources the Electrs (or Fulcrum) exports.
+      APP_ELECTRS_NODE_IP: ${APP_ELECTRS_NODE_IP:-}
+      APP_ELECTRS_NODE_PORT: ${APP_ELECTRS_NODE_PORT:-50001}
+      APP_FULCRUM_NODE_IP: ${APP_FULCRUM_NODE_IP:-}
+      APP_FULCRUM_NODE_PORT: ${APP_FULCRUM_NODE_PORT:-50002}
+      DEVICE_DOMAIN_NAME: ${DEVICE_DOMAIN_NAME:-}
+      DEVICE_HOSTNAME: ${DEVICE_HOSTNAME:-}
+      GATEWAY_IP: ${GATEWAY_IP:-}
     networks:
       - default
     extra_hosts:

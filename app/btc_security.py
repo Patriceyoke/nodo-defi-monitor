@@ -8,14 +8,20 @@ def _item(owner: str, title: str, detail: str, tone: str, label: str) -> dict[st
     return {"owner": owner, "title": title, "detail": detail, "tone": tone, "label": label}
 
 
+def _node_check(node: dict[str, Any], detail: str, tone: str, label: str) -> dict[str, Any]:
+    item = _item("tutti", "Nodo / Electrs", detail, tone, label)
+    item["attempts"] = list(node.get("attempts") or [])
+    item["network"] = dict(node.get("network") or {})
+    return item
+
+
 def evaluate(wallets: list[dict[str, Any]], node: dict[str, Any], tor_enabled: bool | None = None) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
 
     if not node.get("configured"):
         checks.append(
-            _item(
-                "tutti",
-                "Nodo / Electrs",
+            _node_check(
+                node,
                 "L'indicizzatore locale non è impostato. In Impostazioni indica host e porta di Electrs o Fulcrum sul tuo Umbrel. I saldi Bitcoin restano vuoti finché non è collegato.",
                 "warning",
                 "Non configurato",
@@ -23,9 +29,8 @@ def evaluate(wallets: list[dict[str, Any]], node: dict[str, Any], tor_enabled: b
         )
     elif not node.get("connected"):
         checks.append(
-            _item(
-                "tutti",
-                "Nodo / Electrs",
+            _node_check(
+                node,
                 node.get("detail") or "L'indicizzatore locale non risponde. Controlla che il nodo Bitcoin e Electrs/Fulcrum siano avviati e allineati.",
                 "danger",
                 "Non collegato",
@@ -42,9 +47,8 @@ def evaluate(wallets: list[dict[str, Any]], node: dict[str, Any], tor_enabled: b
         else:
             text = "Nodo Bitcoin / Electrs (locale) raggiungibile." + extra
         checks.append(
-            _item(
-                "tutti",
-                "Nodo / Electrs",
+            _node_check(
+                node,
                 text,
                 "success",
                 "Sincronizzato" if not height else "Connesso",

@@ -176,6 +176,10 @@ form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 #nft-details[open] > summary h2::before, #security-details[open] > summary h2::before, #positions-details[open] > summary h2::before { content: "▾ "; }
 .warn-text { color: #B45309; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.electrs-diag { margin-top: 8px; }
+.electrs-diag summary { cursor: pointer; font-weight: 700; min-height: 44px; display: flex; align-items: center; }
+.electrs-diag ul { margin: 6px 0 0; padding-left: 18px; }
+.electrs-diag li { margin: 2px 0; word-break: break-word; }
 .nft-card p { margin: 4px 0; }
 @media (max-width: 960px) {
   .metrics { grid-template-columns: 1fr 1fr; }

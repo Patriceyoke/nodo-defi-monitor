@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.2.6"
+version: "0.2.7"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,13 +23,15 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.2.6: se l'host Electrs è umbrel.local, che nel contenitore non si
-  risolve, l'app prova electrs_electrs_1, electrs_app_1, Fulcrum e il
-  gateway Docker. In Sicurezza compare «Collegato via …». L'host che hai
-  scritto resta salvato. Indirizzi e impostazioni restano.
+  0.2.7: Electrs su Umbrel è 10.21.21.10 porta 50001 (electrs_electrs_1),
+  non umbrel.local. La scheda Nodo / Electrs elenca ogni tentativo e
+  l'errore, più l'IP del contenitore e il gateway. L'app dipende da
+  Electrs così Umbrel passa l'indirizzo ufficiale. Indirizzi e
+  impostazioni restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
-dependencies: []
+dependencies:
+  - electrs
 repo: https://github.com/Patriceyoke/nodo-defi-monitor
 support: https://github.com/Patriceyoke/nodo-defi-monitor/issues
 port: 3847

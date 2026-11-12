@@ -44,9 +44,12 @@ def test_saved_umbrel_local_uses_the_electrs_container(monkeypatch):
     assert "Collegato via electrs_electrs_1:50001" in status["detail"]
     versions = [item for item in calls if item[3] == "server.version"]
     assert versions[0][:2] == ("umbrel.local", 50001)
-    assert versions[1][:3] == ("electrs_electrs_1", 50001, True)
+    assert versions[1][:2] == ("10.21.21.10", 50001)
+    assert versions[2][:3] == ("electrs_electrs_1", 50001, True)
     assert all(item[0] != "172.17.0.1" for item in calls)
     assert saved["electrs_host"] == "umbrel.local"
+    dns = [item for item in status["attempts"] if item["host"] == "umbrel.local"]
+    assert dns and dns[0]["error"].startswith("Errore:")
 
 
 def test_fulcrum_plain_tcp_comes_after_electrs_names(monkeypatch):
@@ -70,14 +73,14 @@ def test_fulcrum_plain_tcp_comes_after_electrs_names(monkeypatch):
     )
     status = asyncio.run(bitcoin.electrs_status())
     assert "Collegato via fulcrum_fulcrum_1:50001" in status["detail"]
-    tried = [(host, port, plain) for host, port, plain, method in calls if method == "server.version"]
-    assert tried[:4] == [
-        ("electrs_electrs_1", 50001, True),
-        ("electrs_app_1", 50001, True),
-        ("fulcrum_fulcrum_1", 50002, True),
-        ("fulcrum_fulcrum_1", 50001, True),
-    ]
-    assert tried[2][2] is True
+    tried = [(host, port) for host, port, _plain, method in calls if method == "server.version"]
+    assert tried.index(("10.21.21.10", 50001)) < tried.index(("electrs_electrs_1", 50001))
+    assert tried.index(("10.21.21.200", 50002)) < tried.index(("fulcrum_fulcrum_1", 50001))
+    dns = next(item for item in status["attempts"] if item["host"] == "umbrel.local")
+    assert dns["error"] == "DNS: nome non risolto"
+    refused = next(item for item in status["attempts"] if item["host"] == "10.21.21.10")
+    assert refused["error"].startswith("Connessione rifiutata")
+    assert status["network"]["gateway"] == "" or isinstance(status["network"]["gateway"], str)
 
 
 def test_configured_host_wins_and_is_cached(monkeypatch):

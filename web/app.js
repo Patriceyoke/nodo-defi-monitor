@@ -423,6 +423,23 @@ function renderSwitches(data) {
   }).join("") + `<p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
 }
 
+function electrsDiagnostic(row) {
+  const attempts = row.attempts || [];
+  const net = row.network || {};
+  if (!attempts.length && !(net.ips || net.networks || net.gateway)) return "";
+  const lines = attempts.map((item) => {
+    const result = item.ok ? "risponde" : (item.error || "errore");
+    return `<li><code>${escapeHtml(item.host)}:${escapeHtml(item.port)}</code> — ${escapeHtml(result)}</li>`;
+  }).join("");
+  const ips = (net.ips || []).join(", ") || "n/d";
+  const networks = (net.networks || []).join(", ") || "n/d";
+  const gateway = net.gateway || "n/d";
+  const domain = net.domain ? ` · Dominio: ${escapeHtml(net.domain)}` : "";
+  const injected = net.electrs_ip ? ` · APP_ELECTRS_NODE_IP: ${escapeHtml(net.electrs_ip)}:${escapeHtml(net.electrs_port || "")}` : "";
+  return `<details class="electrs-diag"><summary>Diagnostica Electrs</summary>
+    <p class="mini">IP del contenitore: ${escapeHtml(ips)} · Reti: ${escapeHtml(networks)} · Gateway: ${escapeHtml(gateway)}${domain}${injected}</p>
+    <ul>${lines}</ul></details>`;
+}
 function renderRows(el, rows) {
   if (!rows.length) {
     el.innerHTML = `<p class="mini">Nessun elemento in questa vista.</p>`;
@@ -430,8 +447,8 @@ function renderRows(el, rows) {
   }
   el.innerHTML = rows.map((s) => `
     <div class="rowitem">
-      <div><div class="title">${s.title || s.protocol}</div><div class="detail">${s.detail || ""}</div></div>
-      <span class="pill ${toneClass(s.tone)}">${s.label || ""}</span>
+      <div><div class="title">${escapeHtml(s.title || s.protocol)}</div><div class="detail">${escapeHtml(s.detail || "")}${electrsDiagnostic(s)}</div></div>
+      <span class="pill ${toneClass(s.tone)}">${escapeHtml(s.label || "")}</span>
     </div>`).join("");
 }
 
