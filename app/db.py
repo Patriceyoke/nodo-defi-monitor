@@ -8,7 +8,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-from .config import DB_PATH
+from . import config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -46,16 +46,44 @@ CREATE INDEX IF NOT EXISTS history_ts ON history(ts);
 """
 
 
+def _open_connection() -> sqlite3.Connection:
+    """Open SQLite. A read-only data dir switches to a temp dir instead of crashing."""
+    last_error: Exception | None = None
+    for attempt in (1, 2):
+        if attempt == 2:
+            config.abandon_unwritable_data_dir(last_error)
+        else:
+            config.ensure_data_dir()
+        path = config.DB_PATH
+        conn: sqlite3.Connection | None = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(path), timeout=30)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            return conn
+        except (OSError, sqlite3.Error) as exc:
+            if conn is not None:
+                conn.close()
+            last_error = exc
+            if attempt == 2:
+                raise
+    raise RuntimeError("database unavailable")
+
+
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    conn = _open_connection()
     try:
         yield conn
         conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        raise
     finally:
         conn.close()
 

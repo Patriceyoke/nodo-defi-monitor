@@ -8,11 +8,12 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import db
+from .config import APP_VERSION
 from .portfolio import snapshot
 from .validation import normalize_owner
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "monitor-defi", "version": "0.1.0"}
+SERVER_INFO = {"name": "monitor-defi", "version": APP_VERSION}
 
 TOOLS = [
     {

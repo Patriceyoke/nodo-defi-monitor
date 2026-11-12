@@ -2,8 +2,9 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.1.0"
+version: "0.1.1"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
+icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
   Monitor DeFi è un'app in sola lettura per seguire posizioni DeFi su Ethereum
   (Lido, Aave v3, Compound, Fluid, Spark/Sky) e conti Bitcoin osservati da
@@ -21,8 +22,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  Prima versione: dashboard Io / Moglie / Combinato, Bitcoin in sola
-  osservazione, controlli di sicurezza, storico locale e server MCP in sola lettura.
+  0.1.1: l'app si apre anche se la cartella dati non è scrivibile, e l'icona
+  della home è un PNG 512px servito da GitHub. La cartella data/ è nel
+  pacchetto così Umbrel la crea come utente 1000.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []
@@ -30,9 +32,9 @@ repo: https://github.com/Patriceyoke/nodo-defi-monitor
 support: https://github.com/Patriceyoke/nodo-defi-monitor/issues
 port: 3847
 gallery:
-  - 1.png
-  - 2.png
-  - 3.png
+  - https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/1.png
+  - https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/2.png
+  - https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/3.png
 path: ""
 defaultUsername: ""
 defaultPassword: ""

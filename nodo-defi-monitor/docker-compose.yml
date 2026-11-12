@@ -9,7 +9,7 @@ services:
       PROXY_AUTH_WHITELIST: "/mcp*"
 
   web:
-    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.1.0
+    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.1.1
     user: "1000:1000"
     init: true
     restart: on-failure
@@ -18,4 +18,6 @@ services:
       DATA_DIR: /data
       PORT: "3847"
     volumes:
+      # data/.gitkeep is part of the package. Umbrel copies it into APP_DATA_DIR
+      # as uid 1000 and then removes .gitkeep, so Docker does not create /data as root.
       - ${APP_DATA_DIR}/data:/data

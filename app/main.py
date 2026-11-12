@@ -5,19 +5,21 @@ import logging
 from pathlib import Path
 from typing import Any
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import bitcoin, db
+from . import bitcoin, config, db
 from .config import APP_NAME, APP_VERSION
 from .mcp_server import router as mcp_router
 from .portfolio import snapshot
 from .validation import RejectedSecretError, classify_btc_key, normalize_eth, normalize_owner
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+_log = logging.getLogger("app")
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION, docs_url="/api/docs", redoc_url=None)
 app.include_router(mcp_router)
@@ -25,7 +27,15 @@ app.include_router(mcp_router)
 
 @app.on_event("startup")
 def _startup() -> None:
-    db.init_db()
+    try:
+        config.ensure_data_dir()
+        db.init_db()
+        _log.info("Database ready at %s (persistent=%s)", config.DB_PATH, config.DATA_PERSISTENT)
+    except Exception:
+        _log.exception(
+            "Database startup failed. The server will stay up so Umbrel can open the UI, "
+            "but saved wallets and settings are unavailable."
+        )
 
 
 class EvmIn(BaseModel):
@@ -63,7 +73,13 @@ def _http_secret(exc: Exception) -> HTTPException:
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "name": APP_NAME, "version": APP_VERSION, "readonly": True}
+    return {
+        "ok": True,
+        "name": APP_NAME,
+        "version": APP_VERSION,
+        "readonly": True,
+        "data_persistent": config.DATA_PERSISTENT,
+    }
 
 
 @app.get("/api/settings")
