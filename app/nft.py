@@ -76,7 +76,35 @@ NFT_CHAINS: dict[str, dict[str, str]] = {
 
 _URL_RE = re.compile(r"(https?://|www\.)", re.IGNORECASE)
 _SPAM_WORD_RE = re.compile(r"\b(claim|reward|visit|voucher)\b", re.IGNORECASE)
+_LP_NAME_RE = re.compile(
+    r"(uni-?v[34]-pos|uniswap\s*v[34]\s*positions?|"
+    r"pancake(?:swap)?\s*v3\s*positions?|"
+    r"slipstream|nonfungible\s*position|liquidity\s+position|"
+    r"aerodrome.{0,24}positions?|velodrome.{0,24}positions?|"
+    r"algebra.{0,24}positions?|camelot.{0,24}positions?|"
+    r"sushi(?:swap)?.{0,16}v3\s*positions?)",
+    re.IGNORECASE,
+)
+# Public position-manager contracts. Not wallets. Same CREATE2 address is reused on several chains.
+LP_CONTRACTS = {
+    "0xc36442b4a4522e871399cd717abdd847ab11fe88",  # Uniswap V3 NonfungiblePositionManager
+    "0x03a520b32c04bf3beef7beb72e919cf822ed34f1",  # Uniswap V3 on Base
+    "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e",  # Uniswap V4 PositionManager, Ethereum
+    "0x7c5f5a4bbd8fd63184577525326123b519429bdc",  # Uniswap V4 PositionManager, Base
+    "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364",  # PancakeSwap V3 NonfungiblePositionManager
+    "0x827922686190790b37229fd06084350e74485b72",  # Aerodrome Slipstream
+    "0x416b433906b1b72fa758e166e239c43d68dc6f29",  # Velodrome Slipstream
+}
 _CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def is_liquidity_position(item: dict[str, Any]) -> bool:
+    """True for DEX liquidity NFTs, which are positions rather than collectibles."""
+    contract = str(item.get("contract") or "").lower()
+    if contract in LP_CONTRACTS:
+        return True
+    text = " ".join(str(item.get(key) or "") for key in ("name", "collection", "symbol"))
+    return bool(_LP_NAME_RE.search(text))
 
 
 def spam_reason(item: dict[str, Any]) -> str | None:
@@ -111,6 +139,13 @@ def suggest_sale(item: dict[str, Any]) -> dict[str, Any]:
     The suggestion is a number to look at, not an order. Listing and signing
     stay outside this app.
     """
+    if item.get("liquidity"):
+        return {
+            "suggestion_native": None,
+            "suggestion_usd": None,
+            "suggestion_reason": "Posizione di liquidità: non è un NFT da vendere.",
+            "price_status": "lp",
+        }
     floor_n = _pos(item.get("floor_native"))
     floor_u = _pos(item.get("floor_usd"))
     recent_n = _pos(item.get("recent_sale_native"))
@@ -224,6 +259,7 @@ def parse_alchemy_nft(raw: dict[str, Any], chain: str) -> dict[str, Any]:
         "token_id": str(raw.get("tokenId") or ""),
         "token_type": raw.get("tokenType") or contract.get("tokenType") or "",
         "name": raw.get("name") or meta.get("collectionName") or contract.get("name") or "Senza nome",
+        "symbol": contract.get("symbol") or "",
         "collection": meta.get("collectionName") or contract.get("name") or "",
         "collection_slug": meta.get("collectionSlug") or "",
         "description": raw.get("description") or meta.get("description") or "",
@@ -254,6 +290,7 @@ def parse_blockscout_nft(raw: dict[str, Any], chain: str) -> dict[str, Any]:
         "token_id": str(raw.get("id") or ""),
         "token_type": raw.get("token_type") or token.get("type") or "",
         "name": metadata.get("name") or token.get("name") or "Senza nome",
+        "symbol": token.get("symbol") or "",
         "collection": token.get("name") or "",
         "collection_slug": "",
         "description": metadata.get("description") or "",
@@ -293,11 +330,39 @@ def apply_market(item: dict[str, Any], market: dict[str, Any] | None, native_usd
 
 
 def finalize(item: dict[str, Any]) -> dict[str, Any]:
-    reason = spam_reason(item)
+    item["liquidity"] = is_liquidity_position(item)
+    if item["liquidity"]:
+        for key in ("floor_native", "floor_usd", "recent_sale_native", "recent_sale_usd", "list_price_native", "list_price_usd"):
+            item[key] = None
+        item["listed"] = None
+        item["recent_sales_count"] = None
+    reason = None if item["liquidity"] else spam_reason(item)
     item["hidden"] = reason is not None
     item["hidden_reason"] = reason or ""
+    item["user_hidden"] = False
     item.update(suggest_sale(item))
     return item
+
+
+def apply_user_hides(item: dict[str, Any], hides: list[dict[str, Any]]) -> None:
+    chain = str(item.get("chain") or "").lower()
+    contract = str(item.get("contract") or "").lower()
+    token_id = str(item.get("token_id") or "")
+    collection_hit = False
+    token_hit = False
+    for row in hides:
+        if str(row.get("chain") or "").lower() != chain or str(row.get("contract") or "").lower() != contract:
+            continue
+        if row.get("kind") == "collection":
+            collection_hit = True
+        elif row.get("kind") == "token" and str(row.get("token_id") or "") == token_id:
+            token_hit = True
+    if not collection_hit and not token_hit:
+        return
+    item["user_hidden"] = True
+    item["hidden"] = True
+    item["hidden_reason"] = "Collezione nascosta da te." if collection_hit else "Nascosto da te."
+    item["hide_kind"] = "collection" if collection_hit else "token"
 
 
 async def _get_json(client: httpx.AsyncClient, url: str, headers: dict[str, str] | None = None) -> Any:
@@ -455,8 +520,9 @@ async def collect_nfts(owner: str) -> dict[str, Any]:
         markets: dict[tuple[str, str], dict[str, Any] | None] = {}
         contracts = []
         for row in items:
+            row["liquidity"] = is_liquidity_position(row)
             key = (row["chain"], (row.get("contract") or "").lower())
-            if key[1] and key not in markets:
+            if key[1] and key not in markets and not row["liquidity"]:
                 contracts.append(key)
         for key in contracts[:COINGECKO_CONTRACT_CAP]:
             markets[key] = await _coingecko_market(client, key[0], key[1])
@@ -470,12 +536,15 @@ async def collect_nfts(owner: str) -> dict[str, Any]:
             native_usd = native.get(NFT_CHAINS[row["chain"]]["native_id"])
             apply_market(row, markets.get(key), native_usd)
             # Spam uses floor and sales, so classify after the market lookup.
-            if opensea and listed_budget > 0 and spam_reason(row) is None:
+            if opensea and listed_budget > 0 and not row.get("liquidity") and spam_reason(row) is None:
                 await _listing(client, row, opensea)
                 listed_budget -= 1
                 native_usd = native.get(NFT_CHAINS[row["chain"]]["native_id"])
                 apply_market(row, None, native_usd)
             finalize(row)
+        hides = db.list_nft_hides()
+        for row in items:
+            apply_user_hides(row, hides)
     listing_note = (
         "Con una chiave OpenSea nelle impostazioni si vede anche se il pezzo è già in vendita. "
         "Senza chiave quella riga resta «non disponibile»."

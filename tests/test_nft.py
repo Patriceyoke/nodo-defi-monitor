@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app import config, db
-from app.nft import spam_reason, suggest_sale
+from app.nft import apply_user_hides, finalize, is_liquidity_position, spam_reason, suggest_sale
 
 
 def _real(**extra):
@@ -105,3 +105,55 @@ def test_import_adds_without_deleting_or_leaking_mcp_token(isolated_db):
     assert isolated_db.get_setting("mcp_token") == token
     assert isolated_db.get_setting("nft_api_provider") == "alchemy"
     assert isolated_db.get_setting("currency") == "USD"
+
+
+def test_liquidity_positions_are_not_priced_as_collectibles():
+    manager = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
+    assert is_liquidity_position({"contract": manager, "name": "1", "collection": "", "symbol": ""})
+    assert is_liquidity_position({
+        "contract": "0x" + "11" * 20,
+        "name": "1",
+        "collection": "Uniswap V3 Positions",
+        "symbol": "UNI-V3-POS",
+    })
+    assert not is_liquidity_position({
+        "contract": "0x" + "22" * 20,
+        "name": "Blue square",
+        "collection": "Paintings",
+        "symbol": "ART",
+    })
+    done = finalize({
+        "contract": manager,
+        "name": "1",
+        "collection": "Uniswap V3 Positions",
+        "symbol": "UNI-V3-POS",
+        "floor_native": 1,
+        "floor_usd": 2000,
+        "token_type": "ERC721",
+        "verified": True,
+        "source_spam": False,
+    })
+    assert done["liquidity"] is True
+    assert done["hidden"] is False
+    assert done["suggestion_usd"] is None
+    assert done["suggestion_native"] is None
+    assert done["floor_usd"] is None
+    assert done["price_status"] == "lp"
+
+
+def test_user_hide_is_saved_and_exported(isolated_db):
+    item = {"chain": "ethereum", "contract": "0xabc", "token_id": "9", "hidden": False, "hidden_reason": ""}
+    apply_user_hides(item, [{"kind": "token", "chain": "ethereum", "contract": "0xAbC", "token_id": "9"}])
+    assert item["user_hidden"] is True
+    assert item["hidden_reason"] == "Nascosto da te."
+    contract = "0x" + "ab" * 20
+    isolated_db.hide_nft("ethereum", contract, "9", "token")
+    isolated_db.hide_nft("base", "0x" + "cd" * 20, "", "collection")
+    isolated_db.init_db()
+    assert len(isolated_db.list_nft_hides()) == 2
+    backup = isolated_db.export_backup()
+    assert {row["kind"] for row in backup["nft_hides"]} == {"token", "collection"}
+    isolated_db.unhide_nft("ethereum", contract, "9", "token")
+    assert len(isolated_db.list_nft_hides()) == 1
+    isolated_db.import_backup({"evm": [], "btc": [], "settings": {}, "nft_hides": backup["nft_hides"]})
+    assert len(isolated_db.list_nft_hides()) == 2

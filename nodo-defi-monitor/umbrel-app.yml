@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.1.4"
+version: "0.1.5"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,9 +23,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.1.4: Aggiorna rilegge i portafogli salvati e, se non trova posizioni,
-  lo scrive nel riquadro rosso. GET /api/alerts si apre senza rifare la
-  scansione. GET /api/debug/refresh-status mostra RPC e errori per indirizzo.
+  0.1.5: puoi nascondere un NFT o un'intera collezione, e la scelta resta
+  dopo gli aggiornamenti. Le posizioni di liquidità (Uniswap, Pancake,
+  Aerodrome e simili) non ricevono un prezzo di vendita.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

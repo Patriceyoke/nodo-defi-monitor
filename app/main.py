@@ -159,12 +159,53 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
     return out
 
 
+class NftHideIn(BaseModel):
+    chain: str
+    contract: str
+    token_id: str = ""
+    kind: str = "token"
+
+
+def _nft_hide_target(body: NftHideIn) -> tuple[str, str, str, str]:
+    chain = body.chain.strip().lower()
+    if chain not in nft.NFT_CHAINS:
+        raise ValueError("Catena NFT non prevista.")
+    contract = body.contract.strip()
+    if not contract.lower().startswith("0x") or len(contract) != 42:
+        raise ValueError("Contratto NFT non valido.")
+    kind = "collection" if body.kind == "collection" else "token"
+    token_id = "" if kind == "collection" else str(body.token_id or "").strip()
+    if kind == "token" and not token_id:
+        raise ValueError("Manca l'identificativo del pezzo.")
+    return chain, contract.lower(), token_id, kind
+
+
 @app.get("/api/nfts")
 async def get_nfts(owner: str = Query("tutti")) -> dict[str, Any]:
     try:
         return await nft.collect_nfts(owner)
     except Exception as exc:
         raise _http_secret(exc) from exc
+
+
+@app.post("/api/nfts/hide")
+async def hide_nft(body: NftHideIn) -> dict[str, Any]:
+    try:
+        chain, contract, token_id, kind = _nft_hide_target(body)
+        db.hide_nft(chain, contract, token_id, kind)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True}
+
+
+@app.post("/api/nfts/unhide")
+async def unhide_nft(body: NftHideIn) -> dict[str, Any]:
+    try:
+        chain, contract, token_id, kind = _nft_hide_target(body)
+        db.unhide_nft(chain, contract, token_id, kind)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True}
 
 
 @app.get("/api/backup")
@@ -425,6 +466,8 @@ API_ROUTES = [
     "GET /api/btc/wallets",
     "GET /api/btc/security",
     "GET /api/nfts",
+    "POST /api/nfts/hide",
+    "POST /api/nfts/unhide",
     "GET /api/backup",
     "POST /api/backup",
     "POST /mcp",

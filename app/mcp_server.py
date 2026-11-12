@@ -187,7 +187,12 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
     if name == "get_nfts":
         data = await collect_nfts(owner)
         include_hidden = bool(args.get("include_hidden"))
-        items = data["items"] if include_hidden else [item for item in data["items"] if not item.get("hidden")]
+        collectibles = [item for item in data["items"] if not item.get("liquidity")]
+        visible = collectibles if include_hidden else [item for item in collectibles if not item.get("hidden")]
+        liquidity = [
+            item for item in data["items"]
+            if item.get("liquidity") and (include_hidden or not item.get("user_hidden"))
+        ]
         return _text(
             {
                 "owner": owner,
@@ -212,7 +217,18 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
                         "suggestion_usd": item.get("suggestion_usd"),
                         "suggestion_reason": item.get("suggestion_reason"),
                     }
-                    for item in items
+                    for item in visible
+                ],
+                "liquidity_positions": [
+                    {
+                        "owner": item.get("owner"),
+                        "chain": item.get("chain"),
+                        "collection": item.get("collection"),
+                        "name": item.get("name"),
+                        "token_id": item.get("token_id"),
+                        "note": "Posizione di liquidità, non un NFT da vendere.",
+                    }
+                    for item in liquidity
                 ],
             }
         )

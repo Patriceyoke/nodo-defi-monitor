@@ -350,6 +350,31 @@ function nativeOrMissing(amount, symbol) {
   if (amount == null) return "non disponibile";
   return Number(amount).toLocaleString("it-IT", { maximumFractionDigits: 4 }) + (symbol ? " " + symbol : "");
 }
+function nftActions(item) {
+  const attrs = `data-chain="${escapeHtml(item.chain || "")}" data-contract="${escapeHtml(item.contract || "")}" data-token="${escapeHtml(item.token_id || "")}"`;
+  if (item.user_hidden) {
+    const kind = item.hide_kind === "collection" ? "collection" : "token";
+    return `<button class="btn" type="button" data-nft-unhide data-kind="${kind}" ${attrs}>Ripristina</button>`;
+  }
+  return `<button class="btn" type="button" data-nft-hide data-kind="token" ${attrs}>Nascondi</button>
+    <button class="btn ghost" type="button" data-nft-hide data-kind="collection" ${attrs}>Nascondi collezione</button>`;
+}
+function nftCard(item) {
+  const sale = item.liquidity ? `<p class="mini">Posizione di liquidità: non è un NFT da vendere.</p>` : `
+    <p class="mini">Floor: ${nativeOrMissing(item.floor_native, item.native_symbol)} · ${moneyOrMissing(item.floor_usd)}</p>
+    <p class="mini">Vendite recenti (media 24h): ${nativeOrMissing(item.recent_sale_native, item.native_symbol)} · ${moneyOrMissing(item.recent_sale_usd)}</p>
+    <p class="mini">In vendita: ${item.listed == null ? "non disponibile" : item.listed ? nativeOrMissing(item.list_price_native, item.native_symbol) : "no"}</p>
+    <p><strong>Suggerimento:</strong> ${item.suggestion_usd == null && item.suggestion_native == null ? "prezzo non disponibile" : nativeOrMissing(item.suggestion_native, item.native_symbol) + " · " + moneyOrMissing(item.suggestion_usd)}</p>
+    <p class="mini">${escapeHtml(item.suggestion_reason || "")}</p>`;
+  return `<article class="nft-card ${item.hidden ? "hidden-nft" : ""}">
+    ${item.image ? `<img alt="" src="${escapeHtml(item.image)}" />` : `<div class="empty">senza immagine</div>`}
+    <h3>${escapeHtml(item.name || "Senza nome")}</h3>
+    <p class="mini">${escapeHtml(item.collection || "")} · ${escapeHtml(item.chain_label || item.chain || "")} · ${OWNER_LABEL[item.owner] || ""}</p>
+    ${sale}
+    ${item.hidden ? `<p class="mini">Nascosto: ${escapeHtml(item.hidden_reason || "")}</p>` : ""}
+    <p>${nftActions(item)}</p>
+  </article>`;
+}
 function renderNfts() {
   const box = $("#nft-list");
   const caption = $("#nft-caption");
@@ -359,41 +384,29 @@ function renderNfts() {
     box.innerHTML = `<p class="mini">Caricamento NFT…</p>`;
     return;
   }
-  const items = (data.items || []).filter((item) => state.showHiddenNfts || !item.hidden);
-  if (caption) {
-    caption.textContent = (data.limit_note || "") + " " + (data.listing_note || "");
-  }
-  const hiddenCount = (data.items || []).filter((item) => item.hidden).length;
+  const all = data.items || [];
+  const hiddenCount = all.filter((item) => item.hidden).length;
   const btn = $("#btn-nft-hidden");
   if (btn) btn.textContent = state.showHiddenNfts ? "Nascondi i filtrati" : `Mostra nascosti (${hiddenCount})`;
-  if (!items.length) {
-    box.innerHTML = `<p class="mini">${data.errors && data.errors.length ? escapeHtml(data.errors.join(" ")) : "Nessun NFT in questa vista, oppure sono stati filtrati come spam."}</p>`;
-    return;
-  }
+  if (caption) caption.textContent = (data.limit_note || "") + " " + (data.listing_note || "");
+  const collectibles = all.filter((item) => !item.liquidity && (state.showHiddenNfts || !item.hidden));
+  const liquidity = all.filter((item) => item.liquidity && !item.user_hidden);
   const groups = new Map();
-  items.forEach((item) => {
+  collectibles.forEach((item) => {
     const key = state.owner === "tutti" ? item.owner : "vista";
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   });
-  box.innerHTML = [...groups.entries()].map(([key, rows]) => `
+  const grid = collectibles.length ? [...groups.entries()].map(([key, rows]) => `
     ${key === "vista" ? "" : `<h3>${OWNER_LABEL[key] || escapeHtml(key)}</h3>`}
-    <div class="nft-grid">
-      ${rows.map((item) => `
-        <article class="nft-card ${item.hidden ? "hidden-nft" : ""}">
-          ${item.image ? `<img alt="" src="${escapeHtml(item.image)}" />` : `<div class="empty">senza immagine</div>`}
-          <h3>${escapeHtml(item.name || "Senza nome")}</h3>
-          <p class="mini">${escapeHtml(item.collection || "")} · ${escapeHtml(item.chain_label || item.chain || "")} · ${OWNER_LABEL[item.owner] || ""}</p>
-          <p class="mini">Floor: ${nativeOrMissing(item.floor_native, item.native_symbol)} · ${moneyOrMissing(item.floor_usd)}</p>
-          <p class="mini">Vendite recenti (media 24h): ${nativeOrMissing(item.recent_sale_native, item.native_symbol)} · ${moneyOrMissing(item.recent_sale_usd)}</p>
-          <p class="mini">In vendita: ${item.listed == null ? "non disponibile" : item.listed ? nativeOrMissing(item.list_price_native, item.native_symbol) : "no"}</p>
-          <p><strong>Suggerimento:</strong> ${item.suggestion_usd == null && item.suggestion_native == null ? "prezzo non disponibile" : nativeOrMissing(item.suggestion_native, item.native_symbol) + " · " + moneyOrMissing(item.suggestion_usd)}</p>
-          <p class="mini">${escapeHtml(item.suggestion_reason || "")}</p>
-          ${item.hidden ? `<p class="mini">Nascosto: ${escapeHtml(item.hidden_reason || "")}</p>` : ""}
-        </article>
-      `).join("")}
-    </div>
-  `).join("");
+    <div class="nft-grid">${rows.map(nftCard).join("")}</div>
+  `).join("") : `<p class="mini">${data.errors && data.errors.length ? escapeHtml(data.errors.join(" ")) : "Nessun NFT da collezione in questa vista."}</p>`;
+  const lp = liquidity.length ? `<details class="lp-fold">
+    <summary>Posizioni di liquidità (${liquidity.length})</summary>
+    <p class="mini">Uniswap, Pancake, Aerodrome e simili: sono posizioni, non pezzi da vendere. Nessun prezzo suggerito.</p>
+    <div class="nft-grid">${liquidity.map(nftCard).join("")}</div>
+  </details>` : "";
+  box.innerHTML = grid + lp;
 }
 
 async function loadNfts() {
@@ -540,6 +553,25 @@ async function boot() {
   $("#btn-nft-hidden").addEventListener("click", () => {
     state.showHiddenNfts = !state.showHiddenNfts;
     renderNfts();
+  });
+  document.addEventListener("click", async (ev) => {
+    const hide = ev.target.closest("[data-nft-hide]");
+    const unhide = ev.target.closest("[data-nft-unhide]");
+    const button = hide || unhide;
+    if (!button) return;
+    try {
+      await api(hide ? "/api/nfts/hide" : "/api/nfts/unhide", {
+        method: "POST",
+        body: JSON.stringify({
+          chain: button.dataset.chain,
+          contract: button.dataset.contract,
+          token_id: button.dataset.token,
+          kind: button.dataset.kind,
+        }),
+      });
+      state.nfts = null;
+      await loadNfts();
+    } catch (err) { alert(err.message); }
   });
   $("#btn-clear-nft-key").addEventListener("click", async () => {
     try {

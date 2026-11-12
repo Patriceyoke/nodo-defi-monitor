@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE UNIQUE INDEX IF NOT EXISTS evm_wallets_addr_owner ON evm_wallets(address, owner);
 CREATE UNIQUE INDEX IF NOT EXISTS btc_wallets_desc_owner ON btc_wallets(descriptor, owner);
 CREATE INDEX IF NOT EXISTS history_ts ON history(ts);
+CREATE TABLE IF NOT EXISTS nft_hides (
+    kind TEXT NOT NULL CHECK (kind IN ('token', 'collection')),
+    chain TEXT NOT NULL,
+    contract TEXT NOT NULL,
+    token_id TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (kind, chain, contract, token_id)
+);
 """
 
 
@@ -240,6 +248,7 @@ def export_backup() -> dict[str, Any]:
             for w in list_btc()
         ],
         "settings": settings,
+        "nft_hides": list_nft_hides(),
     }
 
 
@@ -287,7 +296,52 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
                 continue
             set_setting(key, "" if value is None else str(value))
             updated += 1
-    return {"evm_added": added_evm, "btc_added": added_btc, "settings_updated": updated}
+    hides_added = 0
+    for row in payload.get("nft_hides") or []:
+        if not isinstance(row, dict):
+            continue
+        if hide_nft(str(row.get("chain") or ""), str(row.get("contract") or ""), str(row.get("token_id") or ""), str(row.get("kind") or "token")):
+            hides_added += 1
+    return {"evm_added": added_evm, "btc_added": added_btc, "settings_updated": updated, "nft_hides_added": hides_added}
+
+
+def list_nft_hides() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT kind, chain, contract, token_id, created_at FROM nft_hides ORDER BY created_at, contract, token_id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def hide_nft(chain: str, contract: str, token_id: str = "", kind: str = "token") -> bool:
+    """Remember a local hide. Returns False if that hide was already stored."""
+    chain = (chain or "").strip().lower()
+    contract = (contract or "").strip().lower()
+    token_id = "" if kind == "collection" else str(token_id or "").strip()
+    kind = "collection" if kind == "collection" else "token"
+    if not chain or not contract:
+        raise ValueError("Catena o contratto mancante.")
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO nft_hides(kind, chain, contract, token_id, created_at)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(kind, chain, contract, token_id) DO NOTHING""",
+            (kind, chain, contract, token_id, int(time.time())),
+        )
+        return cur.rowcount > 0
+
+
+def unhide_nft(chain: str, contract: str, token_id: str = "", kind: str = "token") -> bool:
+    chain = (chain or "").strip().lower()
+    contract = (contract or "").strip().lower()
+    token_id = "" if kind == "collection" else str(token_id or "").strip()
+    kind = "collection" if kind == "collection" else "token"
+    with connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM nft_hides WHERE kind=? AND chain=? AND contract=? AND token_id=?",
+            (kind, chain, contract, token_id),
+        )
+        return cur.rowcount > 0
 
 
 def delete_btc(wallet_id: int) -> bool:

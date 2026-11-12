@@ -157,6 +157,8 @@ form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .nft-card.hidden-nft { opacity: 0.72; }
 .nft-card img { width: 100%; height: 140px; object-fit: cover; border-radius: 12px; background: var(--bg); }
 .nft-card h3 { margin: 8px 0 2px; font-size: 1rem; }
+.lp-fold { margin-top: 16px; }
+.lp-fold summary { cursor: pointer; font-weight: 700; }
 .nft-card p { margin: 4px 0; }
 @media (max-width: 960px) {
   .metrics { grid-template-columns: 1fr 1fr; }
