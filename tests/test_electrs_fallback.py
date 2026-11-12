@@ -17,6 +17,11 @@ def _settings(mapping):
 
 def _install(monkeypatch, settings, request, gateways=None, resolves=None):
     bitcoin._forget_working()
+    bitcoin._GOOD = None
+    bitcoin.db.cache_delete_prefix("electrs-good")
+    if bitcoin._LIVE is not None:
+        bitcoin._LIVE.close()
+        bitcoin._LIVE = None
     monkeypatch.setattr(db, "get_setting", _settings(settings))
     monkeypatch.setattr(bitcoin, "_electrum_request", request)
     monkeypatch.setattr(bitcoin, "_gateway_hosts", lambda: list(gateways or []))
@@ -155,6 +160,93 @@ def test_scripthash_batches_are_cached(monkeypatch):
     assert len(calls[1]) == 5
     assert first == second
     assert next(iter(second.values()))["confirmed"] == 1
+
+
+def test_http_host_is_a_plain_address():
+    assert bitcoin.normalize_electrum_host("http://192.168.1.137") == ("192.168.1.137", 50001)
+    assert bitcoin.normalize_electrum_host("http://192.168.1.137:50001/") == ("192.168.1.137", 50001)
+    assert bitcoin.normalize_electrum_host("ssl://electrs.local:50002/rpc") == ("electrs.local", 50002)
+    assert bitcoin.normalize_electrum_host("tcp://10.21.21.10") == ("10.21.21.10", 50001)
+
+
+def test_known_good_host_is_tried_first(monkeypatch):
+    bitcoin._GOOD = ("10.21.21.10", 50001, True)
+    monkeypatch.setattr(bitcoin.db, "get_setting", lambda key, default="": "http://192.168.1.137" if key == "electrs_host" else "50001")
+    monkeypatch.setattr(bitcoin, "_gateway_hosts", lambda: [])
+    hosts = [item[0] for item in bitcoin._candidate_targets()]
+    assert hosts[0] == "10.21.21.10"
+    assert "192.168.1.137" in hosts
+    bitcoin._GOOD = None
+
+
+def test_successful_steps_mark_the_card_connected():
+    from app.btc_security import evaluate
+
+    checks = evaluate([], {
+        "configured": True,
+        "connected": False,
+        "host": "10.21.21.10",
+        "port": 50001,
+        "detail": "Electrs non ricontrollato:",
+        "steps": [
+            {"name": "TCP connect", "ok": True, "ms": 12, "detail": "10.21.21.10:50001"},
+            {"name": "server.version", "ok": True, "ms": 40, "detail": "electrs/0.11.1 / 1.4"},
+            {"name": "blockchain.headers.subscribe", "ok": True, "ms": 30, "detail": "altezza 975571"},
+            {"name": "scripthash.get_balance", "ok": True, "ms": 20, "detail": "ok"},
+        ],
+    })
+    assert checks[0]["label"] == "Connesso"
+    assert checks[0]["tone"] == "success"
+    assert "10.21.21.10:50001" in checks[0]["detail"]
+    assert "975571" in checks[0]["detail"]
+    assert "non ricontrollato" not in checks[0]["detail"]
+
+
+def test_diagnostics_reuse_one_socket(monkeypatch):
+    import json as _json
+
+    class _Sock:
+        def __init__(self):
+            self.pending = b""
+
+        def sendall(self, data):
+            for line in data.split(b"\n"):
+                if not line.strip():
+                    continue
+                msg = _json.loads(line)
+                self.pending += (_json.dumps({"id": msg["id"], "result": ["Electrs 0.11.1", "1.4"]}) + "\n").encode()
+
+        def recv(self, _size):
+            if not self.pending:
+                return b""
+            chunk, self.pending = self.pending, b""
+            return chunk
+
+        def settimeout(self, _timeout):
+            return None
+
+        def close(self):
+            return None
+
+    opened = []
+
+    def _open(host, port, plain):
+        sock = _Sock()
+        opened.append((host, port, plain, sock))
+        return sock, 7
+
+    bitcoin._GOOD = None
+    if bitcoin._LIVE is not None:
+        bitcoin._LIVE.close()
+        bitcoin._LIVE = None
+    monkeypatch.setattr(bitcoin, "_open_socket", _open)
+    first = bitcoin._electrum_request("10.21.21.10", 50001, "server.version", ["nodo-defi-monitor", "1.4"], timeout=1, plain=True)
+    second = bitcoin._electrum_request("10.21.21.10", 50001, "server.features", [], timeout=1, plain=True)
+    assert first[0].startswith("Electrs")
+    assert second[0].startswith("Electrs")
+    assert len(opened) == 1
+    bitcoin._LIVE.close()
+    bitcoin._LIVE = None
 
 
 def test_local_name_hint_and_security_card():

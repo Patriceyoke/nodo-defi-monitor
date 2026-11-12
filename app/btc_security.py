@@ -19,7 +19,24 @@ def _node_check(node: dict[str, Any], detail: str, tone: str, label: str) -> dic
 def evaluate(wallets: list[dict[str, Any]], node: dict[str, Any], tor_enabled: bool | None = None) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
 
-    if not node.get("configured"):
+    steps = {step.get("name"): step for step in node.get("steps") or []}
+    version = steps.get("server.version") or {}
+    headers = steps.get("blockchain.headers.subscribe") or {}
+    proven = bool(node.get("connected") or version.get("ok"))
+    if proven and node.get("host"):
+        height = node.get("height")
+        if height is None:
+            parts = str(headers.get("detail") or "").split()
+            if len(parts) == 2 and parts[1].isdigit():
+                height = int(parts[1])
+        detail = f"Collegato via {node.get('host')}:{node.get('port')}."
+        if height:
+            detail += f" Altezza blocco {height}."
+        banner = version.get("detail")
+        if banner:
+            detail += f" {banner}."
+        checks.append(_node_check(node, detail, "success", "Connesso"))
+    elif not node.get("configured"):
         checks.append(
             _node_check(
                 node,
@@ -28,7 +45,7 @@ def evaluate(wallets: list[dict[str, Any]], node: dict[str, Any], tor_enabled: b
                 "Non configurato",
             )
         )
-    elif not node.get("connected"):
+    elif not node.get("connected") and not proven:
         checks.append(
             _node_check(
                 node,

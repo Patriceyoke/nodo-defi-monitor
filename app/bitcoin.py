@@ -135,14 +135,43 @@ def consume_until_gap(used_flags: list[bool], gap: int) -> tuple[int, int | None
     return seen, last_used
 
 
+def normalize_electrum_host(raw: str, default_port: int = DEFAULT_ELECTRS_PORT) -> tuple[str, int]:
+    """Drop a scheme, a path and a trailing slash, and read an inline port.
+
+    ``http://192.168.1.137`` is a host, not a DNS name that includes the scheme.
+    The value stored in settings is left unchanged.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return "", default_port
+    lowered = text.lower()
+    for prefix in ("https://", "http://", "ssl://", "tcp://"):
+        if lowered.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    text = text.split("/", 1)[0].strip()
+    port = default_port
+    if text.startswith("[") and "]" in text:
+        host, rest = text[1:].split("]", 1)
+        if rest.startswith(":") and rest[1:].isdigit():
+            port = int(rest[1:])
+        text = host
+    elif text.count(":") == 1:
+        host, maybe = text.rsplit(":", 1)
+        if maybe.isdigit():
+            text = host
+            port = int(maybe)
+    return text.strip(), port
+
+
 def _configured_endpoint() -> tuple[str, int]:
-    host = (db.get_setting("electrs_host") or DEFAULT_ELECTRS_HOST or "").strip()
+    raw_host = (db.get_setting("electrs_host") or DEFAULT_ELECTRS_HOST or "").strip()
     port_raw = db.get_setting("electrs_port") or str(DEFAULT_ELECTRS_PORT)
     try:
-        port = int(port_raw)
+        default_port = int(port_raw)
     except ValueError:
-        port = DEFAULT_ELECTRS_PORT
-    return host, port
+        default_port = DEFAULT_ELECTRS_PORT
+    return normalize_electrum_host(raw_host, default_port)
 
 
 def local_host_hint(host: str) -> str:
@@ -218,6 +247,9 @@ def _candidate_targets() -> list[tuple[str, int, str, bool]]:
         seen.add(key)
         out.append((item_host, item_port, via, plain))
 
+    remembered = _last_good()
+    if remembered:
+        add(remembered[0], remembered[1], "known", remembered[2])
     if host:
         add(host, port, "configured", False)
     env_host, env_port = _env_endpoint("APP_ELECTRS_NODE_IP", "APP_ELECTRS_NODE_PORT", UMBREL_ELECTRS_PORT)
@@ -241,6 +273,32 @@ def _candidate_targets() -> list[tuple[str, int, str, bool]]:
         add(gateway, 50001, f"{gateway}:50001", True)
         add(gateway, 50002, f"{gateway}:50002", True)
     return out
+
+
+def _last_good() -> tuple[str, int, bool] | None:
+    if _GOOD:
+        return _GOOD
+    try:
+        stored = db.cache_get("electrs-good") or {}
+    except Exception:  # noqa: BLE001
+        stored = {}
+    host = str(stored.get("host") or "").strip()
+    if not host:
+        return None
+    try:
+        port = int(stored.get("port") or DEFAULT_ELECTRS_PORT)
+    except (TypeError, ValueError):
+        port = DEFAULT_ELECTRS_PORT
+    return host, port, bool(stored.get("plain", True))
+
+
+def _remember_good(host: str, port: int, plain: bool) -> None:
+    global _GOOD
+    _GOOD = (host, port, plain)
+    try:
+        db.cache_set("electrs-good", {"host": host, "port": port, "plain": plain})
+    except Exception:  # noqa: BLE001
+        log.info("Host Electrs non memorizzato")
 
 
 def _failure_text(exc: BaseException) -> str:
@@ -352,13 +410,15 @@ def resolve_electrs() -> tuple[str, int, str, bool]:
                 })
                 log.info("Electrum %s:%s non risponde: %s", host, port, attempts[-1]["error"])
                 continue
-            version_ms = _ms(started)
-            connect_ms = _LAST_CONNECT_MS
+            total_ms = _ms(started)
+            connect_ms = _LAST_CONNECT_MS or 0
+            version_ms = max(0, total_ms - connect_ms)
+            _remember_good(host, port, plain)
             _PROBE_STEPS = [
                 {
                     "name": "TCP connect",
                     "ok": True,
-                    "ms": connect_ms if connect_ms is not None else version_ms,
+                    "ms": connect_ms,
                     "detail": f"{host}:{port}",
                 },
                 {
@@ -660,6 +720,8 @@ _PROGRESS: dict[int, dict[str, Any]] = {}
 _SCAN_TASK: asyncio.Task | None = None
 _NODE: dict[str, Any] | None = None
 _ON_BTC_DONE = None
+_GOOD: tuple[str, int, bool] | None = None
+_LIVE: "_LiveSocket | None" = None
 
 
 def _format_request(req_id: int, method: str, params: list[Any]) -> bytes:
@@ -732,6 +794,91 @@ def _read_messages(sock: socket.socket, timeout: float, want: int) -> list[dict[
     return found
 
 
+class _LiveSocket:
+    """One Electrum socket, reused by the diagnostics and the address scan."""
+
+    def __init__(self, host: str, port: int, plain: bool) -> None:
+        self.host = host
+        self.port = port
+        self.plain = plain
+        self.sock: socket.socket | None = None
+        self.buf = b""
+        self.next_id = 0
+
+    def close(self) -> None:
+        sock = self.sock
+        self.sock = None
+        self.buf = b""
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def ensure(self) -> int:
+        if self.sock is not None:
+            return 0
+        sock, connect_ms = _open_socket(self.host, self.port, self.plain)
+        self.sock = sock
+        return connect_ms
+
+    def call_many(self, calls: list[tuple[str, list[Any]]], timeout: float) -> tuple[list[Any], int]:
+        connect_ms = self.ensure()
+        assert self.sock is not None
+        ids: list[int] = []
+        frames: list[bytes] = []
+        for method, params in calls:
+            self.next_id += 1
+            ids.append(self.next_id)
+            frames.append(_format_request(self.next_id, method, params))
+        try:
+            self.sock.sendall(b"".join(frames))
+            messages = self._read(timeout, len(calls))
+        except Exception:
+            self.close()
+            raise
+        by_id = {msg.get("id"): msg.get("result") for msg in messages}
+        return [by_id.get(req_id) for req_id in ids], connect_ms
+
+    def _read(self, timeout: float, want: int) -> list[dict[str, Any]]:
+        assert self.sock is not None
+        self.sock.settimeout(timeout)
+        found: list[dict[str, Any]] = []
+        while len(found) < want:
+            if b"\n" not in self.buf:
+                data = self.sock.recv(65536)
+                if not data:
+                    break
+                self.buf += data
+                continue
+            line, self.buf = self.buf.split(b"\n", 1)
+            raw = line.decode("utf-8").strip()
+            if not raw:
+                continue
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ElectrsError(f"Errore di protocollo: {exc}") from exc
+            if not isinstance(msg, dict):
+                raise ElectrsError("Errore di protocollo: risposta non è un oggetto")
+            if msg.get("error"):
+                raise ElectrsError(str(msg["error"]))
+            found.append(msg)
+        if len(found) < want:
+            raise ElectrsError("Risposta vuota da Electrs")
+        return found
+
+
+def _live(host: str, port: int, plain: bool) -> _LiveSocket:
+    global _LIVE
+    if isinstance(_LIVE, _LiveSocket) and ( _LIVE.host, _LIVE.port, _LIVE.plain) == (host, port, plain):
+        return _LIVE
+    if isinstance(_LIVE, _LiveSocket):
+        _LIVE.close()
+    _LIVE = _LiveSocket(host, port, plain)
+    return _LIVE
+
+
 def _electrum_exchange(
     host: str,
     port: int,
@@ -739,23 +886,16 @@ def _electrum_exchange(
     timeout: float,
     plain: bool,
 ) -> list[Any]:
-    """Send newline-terminated calls on one socket and collect the replies."""
-    sock, _connect_ms = _open_socket(host, port, plain)
+    """Send newline-terminated calls on the shared socket and collect the replies."""
+    global _LAST_CONNECT_MS
+    live = _live(host, port, plain)
     try:
-        frames = [_format_request(index, method, params) for index, (method, params) in enumerate(calls, start=1)]
-        sock.sendall(b"".join(frames))
-        messages = _read_messages(sock, timeout, len(calls))
-        results: dict[int, Any] = {}
-        for msg in messages:
-            req_id = msg.get("id")
-            if isinstance(req_id, int):
-                results[req_id] = msg.get("result")
-        return [results.get(index) for index in range(1, len(calls) + 1)]
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
+        results, connect_ms = live.call_many(calls, timeout)
+    except Exception:
+        live.close()
+        raise
+    _LAST_CONNECT_MS = connect_ms
+    return results
 
 
 def _electrum_request(
@@ -1009,7 +1149,7 @@ def save_scan_cache(wallet_id: int, payload: dict[str, Any]) -> None:
 
 def cached_node(has_wallets: bool) -> dict[str, Any]:
     if isinstance(_NODE, dict):
-        return dict(_NODE)
+        return _node_ready(_NODE) or dict(_NODE)
     return {
         "configured": has_wallets,
         "connected": False,
@@ -1398,13 +1538,61 @@ def _keep_previous(previous: dict[str, Any], status: str, last: str) -> dict[str
     return kept
 
 
+def _reason(exc: BaseException) -> str:
+    text = str(exc).strip()
+    if text:
+        return text
+    if isinstance(exc, TimeoutError):
+        return "tempo scaduto"
+    return type(exc).__name__
+
+
+def _node_ready(node: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Prefer a diagnostic that already reached server.version over an empty timeout."""
+    if not isinstance(node, dict):
+        return None
+    steps = {step.get("name"): step for step in node.get("steps") or []}
+    version = steps.get("server.version") or {}
+    if not node.get("connected") and not version.get("ok"):
+        return None
+    host = node.get("host") or ""
+    port = node.get("port") or ""
+    if not host:
+        return None
+    height = node.get("height")
+    headers = steps.get("blockchain.headers.subscribe") or {}
+    if height is None:
+        parts = str(headers.get("detail") or "").split()
+        if len(parts) == 2 and parts[1].isdigit():
+            height = int(parts[1])
+    detail = f"Collegato via {host}:{port}."
+    if height:
+        detail += f" Altezza blocco {height}."
+    banner = version.get("detail")
+    if banner:
+        detail += f" {banner}."
+    ready = dict(node)
+    ready["connected"] = True
+    ready["height"] = height
+    ready["detail"] = detail
+    return ready
+
+
 async def _scan_all(wallets: list[dict[str, Any]]) -> None:
     current = [preview_wallet(w) for w in wallets]
     node = cached_node(True)
     try:
-        node = await asyncio.wait_for(electrs_status(), timeout=8)
+        node = await electrs_status()
     except Exception as exc:  # noqa: BLE001
-        node = {**cached_node(True), "detail": f"Electrs non ricontrollato: {exc}", "connected": False}
+        ready = _node_ready(_NODE) or _node_ready(node)
+        if ready:
+            node = ready
+        else:
+            node = {
+                **cached_node(True),
+                "detail": f"Electrs non ricontrollato: {_reason(exc)}.",
+                "connected": False,
+            }
     for index, wallet in enumerate(wallets):
         wallet_id = int(wallet["id"])
         previous = current[index]
@@ -1429,6 +1617,9 @@ async def _scan_all(wallets: list[dict[str, Any]]) -> None:
                 ts=result.get("scanned_at"),
             )
         current[index] = result
+        ready = _node_ready(_NODE) or _node_ready(result.get("node") if isinstance(result, dict) else None)
+        if ready:
+            node = ready
         if _ON_BTC_DONE:
             try:
                 _ON_BTC_DONE(list(current), node)

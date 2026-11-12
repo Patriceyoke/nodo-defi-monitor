@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.3.1"
+version: "0.3.2"
 tagline: "Tieni d'occhio DeFi e Bitcoin in sola lettura, divisi tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -23,9 +23,15 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.3.1: se Aggiorna fallisce, la panoramica non si svuota. Resta
-  l'ultimo saldo, con l'errore in evidenza. Un problema sul Bitcoin
-  non cancella i dati DeFi. Descrittori e indirizzi restano.
+  0.3.2: la scheda Nodo / Electrs segue l'esito della diagnostica.
+  Se i passi riescono, lo stato è Connesso, con host e altezza del
+  blocco, aggiornato al termine della scansione in background. Un
+  motivo vuoto non viene più mostrato. Un host salvato con http://,
+  https://, tcp:// o ssl://, oppure con una porta nel nome, viene
+  letto come indirizzo, senza riscrivere le impostazioni. Diagnostica
+  e scansione riusano una sola connessione; ogni passo mostra il
+  proprio tempo e l'ultimo host che ha risposto viene provato per
+  primo. Il saldo Bitkey arriva in background, con Dettaglio scansione.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies:
