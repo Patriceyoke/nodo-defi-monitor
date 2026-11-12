@@ -28,7 +28,7 @@ Passi:
 2. Nel codice, sostituisci ogni `ghcr.io/patriceyoke/` e ogni `https://github.com/Patriceyoke/` con il tuo utente GitHub in minuscolo.
 3. Carica il codice dell'app nel primo repo. Nella cartella `umbrel-store/` trovi già il manifesto del negozio: il contenuto di `umbrel-store/` va nella radice del repo `nodo-app-store` (così `umbrel-app-store.yml` è in cima).
 4. Su GitHub, in **Settings > Actions > General**, consenti le Actions e la scrittura dei pacchetti. La prima pubblicazione di `ghcr.io/<tuo-utente>/nodo-defi-monitor` deve essere **public**.
-5. Lancia il workflow **Publish multi-arch image** (o crea il tag `v0.3.2`). Attendi che risultino le piattaforme `linux/amd64` e `linux/arm64`.
+5. Lancia il workflow **Publish multi-arch image** (o crea il tag `v0.3.3`). Attendi che risultino le piattaforme `linux/amd64` e `linux/arm64`.
 6. Aggiorna `umbrel-store/nodo-defi-monitor/docker-compose.yml` con il nome immagine vero, se non l'hai già fatto.
 7. Sul tuo Umbrel: **App Store → ⋯ → Community App Stores →** incolla l'URL del repo `nodo-app-store` (es. `https://github.com/<tuo-utente>/nodo-app-store`).
 8. Installa **Monitor DeFi**. Aprila dalla home. Vai a **Impostazioni**.

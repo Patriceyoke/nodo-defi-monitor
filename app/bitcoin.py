@@ -700,6 +700,49 @@ def derive_addresses(raw: str, gap: int | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def branch_heads(raw: str) -> dict[str, dict[str, Any]]:
+    """First address of each branch. Public addresses only; the descriptor stays out."""
+    heads: dict[str, dict[str, Any]] = {}
+    for role, body, branch in branch_plans(raw):
+        slot = heads.setdefault(role, {"first_address": None})
+        if slot.get("first_address"):
+            continue
+        derived = _derive_at(body, branch, 0)
+        slot["first_address"] = derived.address(NETWORKS["main"])
+    return heads
+
+
+def _public_error(exc: BaseException) -> str:
+    text = str(exc).strip() or type(exc).__name__
+    text = re.sub(r"(?i)[xtyzuv](?:pub|prv)[1-9A-HJ-NP-Za-km-z]+", "chiave", text)
+    text = re.sub(r"(?i)wsh\([^)]*\)|wpkh\([^)]*\)|sh\([^)]*\)", "descrittore", text)
+    text = re.sub(r"\[[0-9a-fA-F]{8}(?:/[0-9h']+)+\]", "", text)
+    return text[:180]
+
+
+def _merge_heads(scan: dict[str, Any] | None, descriptor: str) -> dict[str, Any]:
+    merged = dict(scan or {})
+    try:
+        heads = branch_heads(descriptor)
+    except Exception as exc:  # noqa: BLE001
+        heads = {}
+        merged["error"] = merged.get("error") or _public_error(exc)
+    for role in ("receive", "change"):
+        row = dict(merged.get(role) or {})
+        head = heads.get(role) or {}
+        row.setdefault("scanned", 0)
+        row.setdefault("last_used", None)
+        if head.get("first_address"):
+            row["first_address"] = head["first_address"]
+        merged[role] = row
+    merged.setdefault("utxo_count", 0)
+    merged.setdefault("confirmed_sats", 0)
+    merged.setdefault("unconfirmed_sats", 0)
+    merged.setdefault("error", "")
+    merged.setdefault("complete", False)
+    return merged
+
+
 def _scripthash(script_hex: str) -> str:
     raw = bytes.fromhex(script_hex)
     digest = hashlib.sha256(raw).digest()
@@ -722,6 +765,7 @@ _NODE: dict[str, Any] | None = None
 _ON_BTC_DONE = None
 _GOOD: tuple[str, int, bool] | None = None
 _LIVE: "_LiveSocket | None" = None
+_REMEMBERED: dict[str, Any] | None = None
 
 
 def _format_request(req_id: int, method: str, params: list[Any]) -> bytes:
@@ -1147,6 +1191,19 @@ def save_scan_cache(wallet_id: int, payload: dict[str, Any]) -> None:
     db.cache_set(_scan_cache_key(wallet_id), payload)
 
 
+def remember_scans(scans: list[dict[str, Any]], node: dict[str, Any] | None) -> None:
+    """Keep the latest background scan so a refresh cannot put the preview back."""
+    global _REMEMBERED
+    _REMEMBERED = {
+        "wallets": [dict(item) for item in scans],
+        "node": dict(node) if isinstance(node, dict) else node,
+    }
+
+
+def remembered_scans() -> dict[str, Any] | None:
+    return _REMEMBERED
+
+
 def cached_node(has_wallets: bool) -> dict[str, Any]:
     if isinstance(_NODE, dict):
         return _node_ready(_NODE) or dict(_NODE)
@@ -1172,8 +1229,12 @@ def preview_wallet(wallet: dict[str, Any]) -> dict[str, Any]:
         view = dict(result)
         view["scanning"] = True
         view["stale"] = True
+        view["balance_known"] = result.get("complete") is not False and bool(result.get("scanned_at"))
+        view["scan"] = _merge_heads(result.get("scan"), wallet["descriptor"])
+        view["scan"]["state"] = "In scansione"
         view.setdefault("scanned_at", cached.get("cached_at") or cached.get("ts"))
         return view
+    shell = _merge_heads({"state": "In scansione", "gap": gap_limit(), "complete": False}, wallet["descriptor"])
     return {
         "id": wallet["id"],
         "label": wallet["label"],
@@ -1181,26 +1242,21 @@ def preview_wallet(wallet: dict[str, Any]) -> dict[str, Any]:
         "kind": wallet["kind"],
         "role": wallet.get("role") or "watch",
         "key_masked": mask_key(wallet["descriptor"]),
-        "btc": 0.0,
+        "btc": None,
         "sats": 0,
         "utxo_count": 0,
         "status": "In scansione",
         "last": "Scansione in background.",
         "connected": False,
         "scanning": True,
-        "stale": False,
+        "stale": True,
+        "complete": False,
+        "balance_known": False,
         "addresses": [],
         "txs": [],
         "reuse": [],
         "dust": [],
-        "scan": {
-            "gap": gap_limit(),
-            "receive": {"scanned": 0, "last_used": None},
-            "change": {"scanned": 0, "last_used": None},
-            "utxo_count": 0,
-            "confirmed_sats": 0,
-            "unconfirmed_sats": 0,
-        },
+        "scan": shell,
         "alert_out_btc": wallet.get("alert_out_btc"),
         "alert_min_btc": wallet.get("alert_min_btc"),
         "hot_threshold_btc": wallet.get("hot_threshold_btc"),
@@ -1317,6 +1373,15 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
     status = await electrs_status()
     offline = "Electrs sta ancora indicizzando" if status.get("indexing") else "Electrs non raggiungibile"
     if not status["connected"]:
+        shell = _merge_heads(
+            {
+                "state": offline,
+                "gap": gap,
+                "error": status.get("detail") or "Electrs non è collegato.",
+                "complete": False,
+            },
+            wallet["descriptor"],
+        )
         return {
             "id": wallet["id"],
             "label": wallet["label"],
@@ -1324,16 +1389,20 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
             "kind": wallet["kind"],
             "role": wallet.get("role") or "watch",
             "key_masked": mask_key(wallet["descriptor"]),
-            "btc": 0.0,
+            "btc": None,
             "sats": 0,
             "utxo_count": 0,
             "status": offline,
-            "last": status.get("detail") or "Nessun dato: Electrs non è collegato.",
+            "last": shell["error"],
             "connected": False,
+            "complete": False,
+            "balance_known": False,
+            "stale": True,
             "addresses": [],
             "txs": [],
             "reuse": [],
             "dust": [],
+            "scan": shell,
             "alert_out_btc": wallet.get("alert_out_btc"),
             "alert_min_btc": wallet.get("alert_min_btc"),
             "hot_threshold_btc": wallet.get("hot_threshold_btc"),
@@ -1348,6 +1417,8 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
     seen_outpoints: set[tuple[str, int]] = set()
     confirmed_sats = 0
     unconfirmed_sats = 0
+    failed = False
+    failure = ""
     try:
         for role, body, branch in plans:
             known_last = (known_branches.get(role) or {}).get("last_used") if isinstance(known_branches.get(role), dict) else None
@@ -1397,20 +1468,29 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
                 if address_sats and 0 < address_sats <= 1000:
                     dust.append({"address": item["address"], "sats": address_sats})
     except Exception as exc:  # noqa: BLE001
+        failed = True
+        failure = _public_error(exc)
         if _INDEX_RE.search(str(exc)):
-            status = {**status, "indexing": True, "connected": False, "detail": str(exc)}
+            status = {**status, "indexing": True, "connected": False, "detail": failure}
         else:
             log.warning("Lettura Electrs non riuscita (%s).", type(exc).__name__)
     total = confirmed_sats + unconfirmed_sats
     utxo_count = len(seen_outpoints)
-    scan = {
-        "gap": gap,
-        "receive": branches.get("receive") or {"scanned": 0, "last_used": None},
-        "change": branches.get("change") or {"scanned": 0, "last_used": None},
-        "utxo_count": utxo_count,
-        "confirmed_sats": confirmed_sats,
-        "unconfirmed_sats": unconfirmed_sats,
-    }
+    complete = not failed and bool(status.get("connected")) and not status.get("indexing")
+    scan = _merge_heads(
+        {
+            "gap": gap,
+            "state": "Sincronizzato" if complete else ("Indicizzazione" if status.get("indexing") else "Errore"),
+            "receive": branches.get("receive") or {"scanned": 0, "last_used": None},
+            "change": branches.get("change") or {"scanned": 0, "last_used": None},
+            "utxo_count": utxo_count,
+            "confirmed_sats": confirmed_sats,
+            "unconfirmed_sats": unconfirmed_sats,
+            "error": "" if complete else (failure or "Scansione non completata."),
+            "complete": complete,
+        },
+        wallet["descriptor"],
+    )
 
     # Fetch a few recent transactions to classify incoming/outgoing roughly via status list
     txs.sort(key=lambda t: t.get("height") or 0, reverse=True)
@@ -1481,12 +1561,12 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
         if len(recent) >= 12:
             break
 
-    if status.get("indexing"):
+    if not complete:
         total = 0
         utxo_count = 0
         used = []
         recent = []
-    last = status.get("detail") if status.get("indexing") else "Nessun movimento visto nell'intervallo di derivazione."
+    last = scan.get("error") or (status.get("detail") if not complete else "Nessun movimento visto nell'intervallo di derivazione.")
     if recent:
         top = recent[0]
         btc = top["btc"]
@@ -1499,12 +1579,12 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
         "kind": wallet["kind"],
         "role": wallet.get("role") or "watch",
         "key_masked": mask_key(wallet["descriptor"]),
-        "btc": total / 100_000_000,
-        "sats": total,
+        "btc": (total / 100_000_000) if complete else None,
+        "sats": total if complete else 0,
         "utxo_count": utxo_count,
-        "status": "Electrs sta ancora indicizzando" if status.get("indexing") else "Sincronizzato",
+        "status": "Sincronizzato" if complete else scan.get("state") or "Errore",
         "last": last,
-        "connected": not status.get("indexing"),
+        "connected": complete,
         "addresses": used,
         "txs": recent,
         "reuse": reuse,
@@ -1514,13 +1594,32 @@ async def scan_wallet(wallet: dict[str, Any], gap: int | None = None) -> dict[st
         "hot_threshold_btc": wallet.get("hot_threshold_btc"),
         "scan": scan,
         "scanning": False,
-        "stale": False,
-        "scanned_at": int(time.time()),
+        "stale": not complete,
+        "complete": complete,
+        "balance_known": complete,
+        "scanned_at": int(time.time()) if complete else None,
         "node": status,
     }
-    stored = {key: value for key, value in result.items() if key != "node"}
-    save_scan_cache(wallet_id, {"result": stored, "scripts": scripts, "branches": branches, "ts": stored["scanned_at"]})
-    _progress_set(wallet_id, status="Sincronizzato", branch="", checked=scan["receive"]["scanned"] + scan["change"]["scanned"], btc=stored["btc"], stale=False, ts=stored["scanned_at"])
+    previous_cache = load_scan_cache(wallet_id)
+    if complete:
+        stored = {key: value for key, value in result.items() if key != "node"}
+        save_scan_cache(wallet_id, {"result": stored, "scripts": scripts, "branches": branches, "ts": stored["scanned_at"]})
+    else:
+        kept_scripts = scripts or (previous_cache.get("scripts") if isinstance(previous_cache.get("scripts"), dict) else {})
+        kept_branches = branches or (previous_cache.get("branches") if isinstance(previous_cache.get("branches"), dict) else {})
+        payload: dict[str, Any] = {"scripts": kept_scripts, "branches": kept_branches, "ts": previous_cache.get("ts")}
+        if isinstance(previous_cache.get("result"), dict):
+            payload["result"] = previous_cache["result"]
+        save_scan_cache(wallet_id, payload)
+    _progress_set(
+        wallet_id,
+        status=result["status"],
+        branch="",
+        checked=scan["receive"]["scanned"] + scan["change"]["scanned"],
+        btc=result.get("btc") or 0,
+        stale=not complete,
+        ts=result.get("scanned_at"),
+    )
     return result
 
 
@@ -1529,12 +1628,28 @@ def set_scan_callback(callback) -> None:
     _ON_BTC_DONE = callback
 
 
-def _keep_previous(previous: dict[str, Any], status: str, last: str) -> dict[str, Any]:
+def _keep_previous(previous: dict[str, Any], attempt: dict[str, Any]) -> dict[str, Any]:
+    """An unfinished scan must not replace a balance already read."""
     kept = dict(previous)
+    known = previous.get("balance_known") is not False and bool(previous.get("scanned_at"))
     kept["scanning"] = False
-    kept["stale"] = bool(previous.get("scanned_at") or previous.get("btc"))
-    kept["status"] = status
-    kept["last"] = last if kept["stale"] else previous.get("last") or last
+    kept["complete"] = False
+    kept["connected"] = False
+    kept["stale"] = True
+    kept["status"] = attempt.get("status") or previous.get("status") or "Errore"
+    kept["last"] = attempt.get("last") or "Ultimo saldo conservato."
+    if known:
+        kept["balance_known"] = True
+        kept["btc"] = previous.get("btc")
+    else:
+        kept["balance_known"] = False
+        kept["btc"] = None
+    scan = dict(attempt.get("scan") or previous.get("scan") or {})
+    scan["state"] = kept["status"]
+    scan["complete"] = False
+    if attempt.get("scan", {}).get("error"):
+        scan["error"] = attempt["scan"]["error"]
+    kept["scan"] = scan
     return kept
 
 
@@ -1598,14 +1713,18 @@ async def _scan_all(wallets: list[dict[str, Any]]) -> None:
         previous = current[index]
         try:
             result = await asyncio.wait_for(scan_wallet(wallet), timeout=WALLET_SCAN_TIMEOUT)
-            if not result.get("connected") and previous.get("stale"):
-                result = _keep_previous(previous, "Ultimo saldo", "Electrs non raggiungibile. Ultimo saldo conservato.")
+            if not result.get("complete"):
+                result = _keep_previous(previous, result)
         except Exception as exc:  # noqa: BLE001
             timed_out = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+            status = "Tempo scaduto" if timed_out else "Errore"
+            shell = _merge_heads(
+                {"state": status, "error": _public_error(exc), "complete": False},
+                wallet.get("descriptor") or "",
+            )
             result = _keep_previous(
                 previous,
-                "Tempo scaduto" if timed_out else "Errore",
-                "Ultimo saldo conservato.",
+                {"status": status, "last": "Ultimo saldo conservato.", "scan": shell},
             )
             _progress_set(
                 wallet_id,
@@ -1620,6 +1739,7 @@ async def _scan_all(wallets: list[dict[str, Any]]) -> None:
         ready = _node_ready(_NODE) or _node_ready(result.get("node") if isinstance(result, dict) else None)
         if ready:
             node = ready
+        remember_scans(list(current), node)
         if _ON_BTC_DONE:
             try:
                 _ON_BTC_DONE(list(current), node)

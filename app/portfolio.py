@@ -42,6 +42,26 @@ def _apply_btc_update(scans: list[dict[str, Any]], node: dict[str, Any]) -> None
     _SNAPSHOT["btc_security"] = btc_security.evaluate(scans, node, tor_flag)
 
 
+def _sync_remembered_btc(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Use the finished background scan when the refresh snapshot still has the preview."""
+    if not isinstance(data, dict):
+        return data
+    latest = bitcoin.remembered_scans()
+    if not isinstance(latest, dict) or not latest.get("wallets"):
+        return data
+    current_ids = {item.get("id") for item in data.get("btc_wallets") or []}
+    latest_ids = {item.get("id") for item in latest["wallets"]}
+    if not current_ids or current_ids != latest_ids:
+        return data
+    node = latest.get("node") if isinstance(latest.get("node"), dict) else data.get("node") or {}
+    data["btc_wallets"] = latest["wallets"]
+    data["node"] = node
+    tor_raw = db.get_setting("tor_enabled")
+    tor_flag = None if tor_raw == "" else tor_raw in {"1", "true", "yes", "on"}
+    data["btc_security"] = btc_security.evaluate(latest["wallets"], node, tor_flag)
+    return data
+
+
 def cached_snapshot() -> dict[str, Any] | None:
     """Last snapshot in memory, or the one saved on disk after a restart."""
     global _SNAPSHOT, _SNAPSHOT_AT
@@ -403,7 +423,7 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
         if not force:
             cached_snapshot()
             if _SNAPSHOT:
-                return _SNAPSHOT
+                return _sync_remembered_btc(_SNAPSHOT)
             return _empty_raw()
         _STATUS["last_started_at"] = time.time()
         _STATUS["last_ok"] = None
@@ -599,7 +619,7 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
             "sources": _source_status(rpc_ok, fx, btc_price),
             "saved": True,
         }
-        _SNAPSHOT = snapshot
+        _SNAPSHOT = _sync_remembered_btc(snapshot)
         _SNAPSHOT_AT = now
         try:
             db.cache_set("portfolio", snapshot)

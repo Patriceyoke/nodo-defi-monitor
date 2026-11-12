@@ -468,18 +468,33 @@ function btcProgressLine(wallet) {
   return `<p class="mini">Scansione ${branch} · indice ${row.index ?? 0} · ${row.checked ?? 0} indirizzi</p>`;
 }
 function branchLine(label, row) {
-  if (!row) return "";
-  const last = row.last_used == null ? "nessuno" : "#" + row.last_used;
-  return `${label}: ${row.scanned || 0} indirizzi, ultimo usato ${last}`;
+  const item = row || {};
+  const last = item.last_used == null ? "nessuno" : "#" + item.last_used;
+  const first = item.first_address || "non disponibile";
+  return `${label}: ${item.scanned || 0} indirizzi, ultimo usato ${last}, primo ${first}`;
 }
-function scanDetail(scan) {
-  if (!scan) return "";
+function btcCardAmount(wallet) {
+  if (!wallet || wallet.balance_known === false || wallet.btc == null) return "—";
+  return btcFmt(wallet.btc);
+}
+function scanDetail(wallet) {
+  const scan = (wallet && wallet.scan) || {};
+  const rows = (state.btcProgress && state.btcProgress.wallets) || [];
+  const progress = rows.find((item) => wallet && item.id === wallet.id);
+  let stateText = scan.state || (wallet && wallet.status) || "In attesa";
+  if (progress && progress.status === "In scansione") {
+    const branch = progress.branch === "change" ? "Resto" : progress.branch === "receive" ? "Ricezione" : "Avvio";
+    stateText = `In scansione · ${branch} · indice ${progress.index ?? 0} · ${progress.checked ?? 0} indirizzi`;
+  }
   const confirmed = btcFmt((scan.confirmed_sats || 0) / 100000000);
   const unconfirmed = btcFmt((scan.unconfirmed_sats || 0) / 100000000);
-  return `<details class="electrs-diag"><summary>Dettaglio scansione</summary>
+  const error = scan.error ? String(scan.error) : "nessuno";
+  return `<details class="electrs-diag scan-detail"><summary>Dettaglio scansione</summary>
+    <p class="mini">Stato: ${escapeHtml(stateText)}</p>
     <p class="mini">${escapeHtml(branchLine("Ricezione", scan.receive))}</p>
     <p class="mini">${escapeHtml(branchLine("Resto", scan.change))}</p>
     <p class="mini">${scan.utxo_count || 0} UTXO · confermati ${confirmed} · non confermati ${unconfirmed}</p>
+    <p class="mini">Ultimo errore: ${escapeHtml(error)}</p>
   </details>`;
 }
 function renderBtc(data) {
@@ -517,12 +532,12 @@ function renderBtc(data) {
     <div class="card wallet-card">
       <div class="card-head"><h3>${w.label}</h3><span class="pill ${w.connected ? "ok" : "warn"}">${w.status}</span></div>
       <p class="mini">${OWNER_LABEL[w.owner]} · ${w.kind} · ${w.key_masked}</p>
-      <div class="value" style="font-size:1.3rem;font-weight:800">${btcFmt(w.btc)}</div>
-      <p class="mini">${money(w.usd != null ? w.usd : (w.btc || 0) * price)}${w.utxo_count != null ? " · " + w.utxo_count + " UTXO" : ""}</p>
+      <div class="value" style="font-size:1.3rem;font-weight:800">${btcCardAmount(w)}</div>
+      <p class="mini">${w.balance_known === false || w.btc == null ? "saldo non ancora letto" : money(w.usd != null ? w.usd : (w.btc || 0) * price)}${w.utxo_count != null ? " · " + w.utxo_count + " UTXO" : ""}</p>
       <p class="mini">Ultimo movimento: ${escapeHtml(w.last || "—")}</p>
       ${btcProgressLine(w)}
-      ${w.stale && w.scanned_at ? `<p class="mini warn-text">dati del ${updatedClock(w.scanned_at)}</p>` : ""}
-      ${scanDetail(w.scan)}
+      ${w.stale && w.scanned_at ? `<p class="mini warn-text">dati del ${updatedClock(w.scanned_at)}</p>` : (w.balance_known === false || w.stale ? `<p class="mini warn-text">${escapeHtml(w.status || "Scansione non completata")}</p>` : "")}
+      ${scanDetail(w)}
     </div>`).join("") : `<p class="mini">Nessun xpub in questa vista. Aggiungilo in Impostazioni.</p>`;
 
   paintChart("chart-btc", {

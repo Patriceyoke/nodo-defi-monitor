@@ -70,6 +70,93 @@ def test_sortedmulti_p2wsh_sorts_keys_bip67():
     assert forward.address().startswith("bc1q")
 
 
+def test_bitkey_branches_match_explicit_paths_and_core():
+    """Receive stays the 0.2.8 path. Change is added beside it, not instead of it."""
+    import hashlib
+
+    from embit.descriptor import Descriptor
+    from embit.descriptor.checksum import add_checksum
+    from embit.networks import NETWORKS
+
+    from app.bitcoin import (
+        _chain_role,
+        _parse_public,
+        _scripthash,
+        branch_plans,
+        derive_addresses,
+        prepare_watch_descriptor,
+        verify_checksum,
+    )
+
+    origin = "[ab12cd34/48h/0h/0h/2h]"
+    key = f"{origin}{XPUB}"
+
+    def explicit(path: str) -> str:
+        body = f"wsh(sortedmulti(2,{key}/{path},{key}/{path},{key}/{path}))"
+        return Descriptor.from_string(body).derive(0).address(NETWORKS["main"])
+
+    multipath = add_checksum(f"wsh(sortedmulti(2,{key}/<0;1>/*,{key}/<0;1>/*,{key}/<0;1>/*))")
+    external = add_checksum(f"wsh(sortedmulti(2,{key}/0/*,{key}/0/*,{key}/0/*))")
+    internal = add_checksum(f"wsh(sortedmulti(2,{key}/1/*,{key}/1/*,{key}/1/*))")
+    receive_ref = explicit("0/0")
+    change_ref = explicit("1/0")
+    doubled = explicit("0/0/0")
+
+    def roles(text: str) -> dict[str, str]:
+        return {item["role"]: item["address"] for item in derive_addresses(text, gap=1)}
+
+    together = roles(multipath)
+    separate = roles(external + "\n" + internal)
+    already = roles(external)
+    assert together == separate == {"receive": receive_ref, "change": change_ref}
+    assert already == together
+    assert receive_ref != doubled
+    assert roles(multipath.split("#")[0]) == together
+
+    def legacy_receive(raw: str, gap: int) -> list[str]:
+        """The 0.2.8 loop: one branch keeps its role, a multipath uses derive(index, branch)."""
+        found: list[str] = []
+        seen: set[str] = set()
+        for line in prepare_watch_descriptor(raw).split("\n"):
+            body = verify_checksum(line)
+            kind = classify_btc_key(body)
+            desc = _parse_public(body, kind)
+            forced = _chain_role(body) if kind in {"descriptor", "multisig"} else None
+            branches = getattr(desc, "num_branches", 1) or 1
+            for branch in range(branches):
+                role = forced if forced and branches == 1 else {0: "receive", 1: "change"}.get(branch, f"branch{branch}")
+                if role != "receive":
+                    continue
+                for index in range(gap):
+                    derived = desc.derive(index, branch)
+                    addr = derived.address(NETWORKS["main"])
+                    if addr not in seen:
+                        seen.add(addr)
+                        found.append(addr)
+        return found
+
+    current_receive = [item["address"] for item in derive_addresses(external, gap=2) if item["role"] == "receive"]
+    assert current_receive == legacy_receive(external, 2)
+    assert [item["address"] for item in derive_addresses(external, gap=2) if item["role"] == "change"]
+    assert {item[0] for item in branch_plans(external)} == {"receive", "change"}
+
+    core = (
+        "wsh(sortedmulti(2,xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/*"
+        ",xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y/0/0/*))"
+    )
+    reference = Descriptor.from_string(core).derive(0)
+    witness = reference.witness_script().data.hex()
+    assert witness == (
+        "5221025d5fc65ebb8d44a5274b53bac21ff8307fec2334a32df05553459f8b1f7fe1b6"
+        "2102fbd47cc8034098f0e6a94c6aeee8528abf0a2153a5d8e46d325b7284c046784652ae"
+    )
+    got = next(item for item in derive_addresses(core, gap=1) if item["role"] == "receive" and item["index"] == 0)
+    assert got["scriptpubkey"] == reference.script_pubkey().data.hex()
+    digest = hashlib.sha256(bytes.fromhex(got["scriptpubkey"])).digest()
+    assert _scripthash(got["scriptpubkey"]) == digest[::-1].hex()
+    assert _scripthash(got["scriptpubkey"]) != digest.hex()
+
+
 def test_mask():
     masked = mask_key(XPUB)
     assert "…" in masked
