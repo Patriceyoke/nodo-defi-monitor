@@ -17,6 +17,89 @@ _SNAPSHOT: dict[str, Any] | None = None
 _SNAPSHOT_AT = 0.0
 _LOCK = asyncio.Lock()
 REFRESH_TTL = 60
+_STATUS: dict[str, Any] = {
+    "last_started_at": None,
+    "last_finished_at": None,
+    "last_ok": None,
+    "last_error": None,
+    "duration_s": None,
+    "rpc": {},
+    "wallets": [],
+    "errors": [],
+    "position_count": 0,
+    "wallet_count": 0,
+}
+
+
+def cached_snapshot() -> dict[str, Any] | None:
+    return _SNAPSHOT
+
+
+def invalidate() -> None:
+    """Drop the cached snapshot so the next read scans the wallets just saved."""
+    global _SNAPSHOT, _SNAPSHOT_AT
+    _SNAPSHOT = None
+    _SNAPSHOT_AT = 0.0
+
+
+def refresh_status() -> dict[str, Any]:
+    """Last refresh, without starting a new one. Safe to open in a browser."""
+    from .evm import rpc_status
+
+    return {
+        "last_started_at": _STATUS.get("last_started_at"),
+        "last_finished_at": _STATUS.get("last_finished_at"),
+        "last_ok": _STATUS.get("last_ok"),
+        "last_error": _STATUS.get("last_error"),
+        "duration_s": _STATUS.get("duration_s"),
+        "rpc": _STATUS.get("rpc") or rpc_status(),
+        "wallets": _STATUS.get("wallets") or [],
+        "errors": _STATUS.get("errors") or [],
+        "position_count": _STATUS.get("position_count") or 0,
+        "wallet_count": _STATUS.get("wallet_count") or 0,
+    }
+
+
+def _zero_total(owner: str) -> dict[str, Any]:
+    return {
+        "owner": owner,
+        "defi_usd": 0.0,
+        "btc": 0.0,
+        "btc_usd": 0.0,
+        "total_usd": 0.0,
+        "wapy": 0.0,
+        "year_usd": 0.0,
+    }
+
+
+def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
+    """A complete portfolio payload so the UI can render and show the banner."""
+    return {
+        "ok": False,
+        "owner": owner,
+        "ts": int(time.time()),
+        "rpc_ok": False,
+        "errors": errors,
+        "fx_eur": 0.92,
+        "gas_usd": 0.0,
+        "eth_price_usd": 0.0,
+        "btc_price_usd": None,
+        "node": {"configured": False, "connected": False, "detail": "Ricalcolo non completato."},
+        "totals": {
+            "io": _zero_total("io"),
+            "moglie": _zero_total("moglie"),
+            "tutti": _zero_total("tutti"),
+            "view": _zero_total(owner),
+        },
+        "positions": [],
+        "switches": [],
+        "security": [],
+        "btc_wallets": [],
+        "btc_security": [],
+        "btc_moves": [],
+        "history": [],
+        "wallet_count": _STATUS.get("wallet_count") or 0,
+    }
 
 
 def filter_owner(owner: str, item_owner: str) -> bool:
@@ -130,6 +213,8 @@ async def refresh(force: bool = False) -> dict[str, Any]:
         now = time.time()
         if _SNAPSHOT and not force and now - _SNAPSHOT_AT < REFRESH_TTL:
             return _SNAPSHOT
+        _STATUS["last_started_at"] = time.time()
+        _STATUS["last_ok"] = None
         evm_wallets = db.list_evm()
         btc_wallets = db.list_btc()
         positions: list[dict[str, Any]] = []
@@ -149,15 +234,58 @@ async def refresh(force: bool = False) -> dict[str, Any]:
                 errors.append(msg)
         rpc_ok = any(chains_ok.values())
 
+        from .evm import rpc_status
+
+        wallet_reports: list[dict[str, Any]] = []
         if rpc_ok:
             for w in evm_wallets:
                 try:
-                    found, notes = await evm.scan_wallet(w["address"], w["owner"], w["label"], chains_ok)
+                    found, notes, reports = await evm.scan_wallet(w["address"], w["owner"], w["label"], chains_ok)
                     positions.extend(found)
                     errors.extend(notes)
+                    by_chain: dict[str, list[str]] = {}
+                    for report in reports:
+                        by_chain.setdefault(report["chain"], []).append(f"{report['asset']}: {report['error']}")
+                    wallet_reports.append(
+                        {
+                            "label": w["label"],
+                            "owner": w["owner"],
+                            "address": w["address"],
+                            "positions": len(found),
+                            "chains": [
+                                {"chain": chain, "ok": not msgs, "errors": msgs}
+                                for chain, msgs in by_chain.items()
+                            ],
+                        }
+                    )
                 except Exception as exc:  # noqa: BLE001
                     log.warning("Lettura %s fallita: %s", w["label"], exc)
                     errors.append(f"Lettura {w['label']}: {exc}")
+                    wallet_reports.append(
+                        {
+                            "label": w["label"],
+                            "owner": w["owner"],
+                            "address": w["address"],
+                            "positions": 0,
+                            "chains": [{"chain": "ethereum", "ok": False, "errors": [str(exc)]}],
+                        }
+                    )
+        elif evm_wallets:
+            for w in evm_wallets:
+                wallet_reports.append(
+                    {
+                        "label": w["label"],
+                        "owner": w["owner"],
+                        "address": w["address"],
+                        "positions": 0,
+                        "chains": [
+                            {"chain": chain, "ok": False, "errors": ["RPC non raggiungibile"]}
+                            for chain, ok in chains_ok.items()
+                            if not ok
+                        ],
+                    }
+                )
+        if positions:
             try:
                 positions, alerts = await _enrich(positions)
                 errors.extend(alerts)
@@ -255,6 +383,12 @@ async def refresh(force: bool = False) -> dict[str, Any]:
                 "total_usd": s["total_usd"] + btc_usd,
             }
 
+        if evm_wallets and not positions:
+            errors.append(
+                "I portafogli Ethereum sono salvati, ma questo ricalcolo non ha trovato posizioni. "
+                "Controlla /api/debug/refresh-status per la rete e l'errore di ogni indirizzo."
+            )
+
         for owner in ("io", "moglie", "tutti"):
             db.save_history(owner, hist_payload(owner))
 
@@ -273,15 +407,55 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             "eth_price_usd": eth_price,
             "node": node,
             "alternatives": alts,
+            "evm_owners": [w["owner"] for w in evm_wallets],
+            "wallet_count": len(evm_wallets) + len(btc_wallets),
         }
         _SNAPSHOT = snapshot
         _SNAPSHOT_AT = now
+        _STATUS.update(
+            {
+                "last_finished_at": time.time(),
+                "last_ok": True,
+                "last_error": None,
+                "duration_s": round(time.time() - (_STATUS.get("last_started_at") or time.time()), 3),
+                "rpc": rpc_status(),
+                "wallets": wallet_reports,
+                "errors": list(errors),
+                "position_count": len(positions),
+                "wallet_count": len(evm_wallets) + len(btc_wallets),
+            }
+        )
         return snapshot
 
 
 async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
     owner = normalize_owner(owner, allow_all=True)
-    data = await refresh(force=force)
+    try:
+        data = await refresh(force=force)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("snapshot failed")
+        _STATUS["last_ok"] = False
+        _STATUS["last_error"] = str(exc)
+        _STATUS["last_finished_at"] = time.time()
+        _STATUS["errors"] = [f"Ricalcolo non riuscito: {exc}"]
+        data = {
+            "ts": int(time.time()),
+            "rpc_ok": False,
+            "errors": [f"Ricalcolo non riuscito: {exc}"],
+            "positions": [],
+            "switches": [],
+            "security": [],
+            "btc_wallets": [],
+            "btc_security": [],
+            "btc_price_usd": None,
+            "fx_eur": 0.92,
+            "gas_usd": 0.0,
+            "eth_price_usd": 0.0,
+            "node": {"configured": False, "connected": False, "detail": str(exc)},
+            "alternatives": [],
+            "evm_owners": [],
+            "wallet_count": 0,
+        }
     positions = [p for p in data["positions"] if filter_owner(owner, p["owner"])]
     btc = [w for w in data["btc_wallets"] if filter_owner(owner, w["owner"])]
     ideas = [s for s in data["switches"] if filter_owner(owner, s["owner"])]
@@ -347,4 +521,7 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
         "btc_security": btc_sec,
         "btc_moves": txs[:40],
         "history": history,
+        "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item))
+        + sum(1 for w in data.get("btc_wallets") or [] if filter_owner(owner, w.get("owner"))),
+        "ok": not data.get("errors"),
     }

@@ -38,7 +38,7 @@ body {
 }
 a { color: var(--blue); }
 header.appbar {
-  position: sticky; top: 0; z-index: 20;
+  position: sticky; top: 0; z-index: 40;
   backdrop-filter: blur(12px);
   background: rgba(244, 247, 251, 0.86);
   border-bottom: 1px solid var(--line);

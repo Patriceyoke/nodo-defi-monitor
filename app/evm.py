@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from decimal import Decimal
 from typing import Any
 
@@ -13,6 +14,16 @@ from .protocols import CHAINS, TOKENS, WETH
 log = logging.getLogger("monitor.evm")
 SELECTOR_BALANCE_OF = "70a08231"
 SELECTOR_CONVERT_TO_ASSETS = "07a2d13a"
+# Last RPC that answered, per chain. Read by /api/debug/refresh-status.
+_RPC_USED: dict[str, dict[str, Any]] = {}
+
+
+def rpc_status() -> dict[str, dict[str, Any]]:
+    return {chain: dict(info) for chain, info in _RPC_USED.items()}
+
+
+def _remember_rpc(chain: str, url: str | None, ok: bool, error: str | None) -> None:
+    _RPC_USED[chain] = {"url": url, "ok": ok, "error": error, "at": time.time()}
 
 
 def _pad(addr: str) -> str:
@@ -57,7 +68,8 @@ async def eth_rpc(method: str, params: list[Any], url: str | None = None, chain:
         if fallback not in candidates:
             candidates.append(fallback)
     label = CHAINS.get(chain, {}).get("label", chain)
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    # Keep each attempt short so Umbrel's proxy does not time out the whole refresh.
+    async with httpx.AsyncClient(timeout=8.0) as client:
         for candidate in candidates:
             try:
                 resp = await client.post(candidate, json=payload)
@@ -66,10 +78,14 @@ async def eth_rpc(method: str, params: list[Any], url: str | None = None, chain:
                 if "error" in data:
                     last_error = RuntimeError(str(data["error"]))
                     continue
+                if method == "eth_blockNumber":
+                    _remember_rpc(chain, candidate, True, None)
                 return data.get("result")
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 log.warning("RPC %s failed on %s (%s): %s", method, candidate, chain, exc)
+    if method == "eth_blockNumber":
+        _remember_rpc(chain, None, False, str(last_error))
     raise RuntimeError(f"Nessun RPC {label} disponibile: {last_error}")
 
 
@@ -123,7 +139,7 @@ async def scan_wallet(
     owner: str,
     label: str,
     chains_ok: dict[str, bool] | None = None,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, str]]]:
     """Return positions and human-readable read failures.
 
     A failed balance or convertToAssets is logged and reported. It does not
@@ -134,6 +150,7 @@ async def scan_wallet(
 
     rows: list[dict[str, Any]] = []
     notes: list[str] = []
+    reports: list[dict[str, str]] = []
     ethereum_ok = True if chains_ok is None else bool(chains_ok.get("ethereum"))
     if ethereum_ok:
         try:
@@ -142,6 +159,7 @@ async def scan_wallet(
             msg = f"Lettura ETH nativo fallita: {exc}"
             log.warning(msg)
             notes.append(msg)
+            reports.append({"chain": "ethereum", "asset": "ETH", "error": str(exc)})
         else:
             eth = human(wei, 18)
             if eth > 0.0001:
@@ -173,6 +191,7 @@ async def scan_wallet(
             msg = f"Lettura saldo fallita per {spec['protocol']} {spec['asset']} ({chain}): {exc}"
             log.warning(msg)
             notes.append(msg)
+            reports.append({"chain": chain, "asset": f"{spec['protocol']} {spec['asset']}", "error": str(exc)})
             return None
         if raw <= 0:
             return None
@@ -215,4 +234,4 @@ async def scan_wallet(
 
     found = await asyncio.gather(*[_one(spec) for spec in TOKENS])
     rows.extend([row for row in found if row])
-    return rows, notes
+    return rows, notes, reports

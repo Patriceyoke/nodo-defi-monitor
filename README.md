@@ -15,6 +15,18 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 3847
 
 Open http://127.0.0.1:3847 — then add only public Ethereum addresses and watch-only Bitcoin keys.
 
+## HTTP routes
+
+`GET /api` lists them. The ones used to see why the dashboard is empty:
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/api/health` | Process is up. Does not read wallets. |
+| GET | `/api/portfolio?owner=tutti` | Last portfolio. `refresh=true` forces a new read. |
+| POST | `/api/refresh?owner=tutti` | Force a read and return the portfolio, including `errors`. This is what Aggiorna calls. |
+| GET | `/api/alerts` | Last alerts and refresh errors. Does not start a scan, so it opens even when a read is slow. |
+| GET | `/api/debug/refresh-status` | Last refresh time, the RPC used on each chain, and per-wallet errors. |
+
 ```bash
 python -m pytest -q
 ```

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from . import bitcoin, config, db, nft
 from .config import APP_NAME, APP_VERSION
 from .mcp_server import router as mcp_router
-from .portfolio import snapshot
+from .portfolio import cached_snapshot, failed_view, invalidate, refresh_status, snapshot
 from .validation import RejectedSecretError, classify_btc_key, normalize_eth, normalize_owner
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
@@ -243,6 +243,7 @@ async def add_evm_wallet(body: EvmIn) -> dict[str, Any]:
         wid = db.add_evm(body.label.strip(), address, owner)
     except Exception as exc:
         raise HTTPException(status_code=409, detail=f"Non aggiunto: {exc}") from exc
+    invalidate()
     return {"id": wid, "ok": True}
 
 
@@ -271,6 +272,7 @@ async def add_btc_wallet(body: BtcIn) -> dict[str, Any]:
         )
     except Exception as exc:
         raise HTTPException(status_code=409, detail=f"Non aggiunto: {exc}") from exc
+    invalidate()
     return {"id": wid, "ok": True, "kind": kind}
 
 
@@ -278,6 +280,7 @@ async def add_btc_wallet(body: BtcIn) -> dict[str, Any]:
 async def remove_evm(wallet_id: int) -> dict[str, Any]:
     if not db.delete_evm(wallet_id):
         raise HTTPException(404, "Portafoglio non trovato")
+    invalidate()
     return {"ok": True}
 
 
@@ -285,6 +288,7 @@ async def remove_evm(wallet_id: int) -> dict[str, Any]:
 async def remove_btc(wallet_id: int) -> dict[str, Any]:
     if not db.delete_btc(wallet_id):
         raise HTTPException(404, "Portafoglio non trovato")
+    invalidate()
     return {"ok": True}
 
 
@@ -338,8 +342,34 @@ async def check_switch(owner: str = Query("tutti")) -> dict[str, Any]:
 
 @app.get("/api/alerts")
 async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
-    data = await snapshot(owner)
-    return {"owner": owner, "protocol_security": data["security"], "btc_security": data["btc_security"]}
+    """Always 200. Does not start a scan; open it in the browser after Aggiorna."""
+    if cached_snapshot() is None:
+        status = refresh_status()
+        return {
+            "ok": True,
+            "owner": owner,
+            "errors": status.get("errors") or ["Nessun ricalcolo ancora. Premi Aggiorna sulla dashboard."],
+            "protocol_security": [],
+            "btc_security": [],
+        }
+    try:
+        data = await snapshot(owner, force=False)
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("alerts failed")
+        return {
+            "ok": False,
+            "owner": owner,
+            "errors": [f"Avvisi non calcolati: {exc}"],
+            "protocol_security": [],
+            "btc_security": [],
+        }
+    return {
+        "ok": True,
+        "owner": owner,
+        "errors": data.get("errors") or [],
+        "protocol_security": data.get("security") or [],
+        "btc_security": data.get("btc_security") or [],
+    }
 
 
 @app.get("/api/history")
@@ -362,9 +392,60 @@ async def get_btc_sec(owner: str = Query("tutti")) -> dict[str, Any]:
 
 
 @app.post("/api/refresh")
-async def refresh_now() -> dict[str, Any]:
-    data = await snapshot("tutti", force=True)
-    return {"ok": True, "ts": data["ts"], "errors": data["errors"]}
+async def refresh_now(owner: str = Query("tutti")) -> dict[str, Any]:
+    """Force a portfolio read. The body is the portfolio, including errors."""
+    try:
+        data = await snapshot(owner, force=True)
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("refresh failed")
+        return failed_view(owner, [f"Ricalcolo non riuscito: {exc}"])
+    data["ok"] = not data.get("errors")
+    return data
+
+
+# Routes a browser can open. Kept in sync with the decorators below.
+API_ROUTES = [
+    "GET /api",
+    "GET /api/health",
+    "GET /api/settings",
+    "PUT /api/settings",
+    "GET /api/wallets",
+    "POST /api/wallets/evm",
+    "POST /api/wallets/btc",
+    "DELETE /api/wallets/evm/{id}",
+    "DELETE /api/wallets/btc/{id}",
+    "GET /api/portfolio?owner=tutti&refresh=true",
+    "POST /api/refresh?owner=tutti",
+    "GET /api/alerts",
+    "GET /api/debug/refresh-status",
+    "GET /api/balances",
+    "GET /api/apys",
+    "GET /api/check_switch",
+    "GET /api/history",
+    "GET /api/btc/wallets",
+    "GET /api/btc/security",
+    "GET /api/nfts",
+    "GET /api/backup",
+    "POST /api/backup",
+    "POST /mcp",
+]
+
+
+@app.get("/api")
+async def api_index() -> dict[str, Any]:
+    return {
+        "name": APP_NAME,
+        "version": APP_VERSION,
+        "readonly": True,
+        "routes": API_ROUTES,
+        "note": "GET /api/alerts risponde subito con l'ultimo ricalcolo. POST /api/refresh forza la lettura. GET /api/debug/refresh-status mostra RPC e errori per indirizzo.",
+    }
+
+
+@app.get("/api/debug/refresh-status")
+async def debug_refresh_status() -> dict[str, Any]:
+    """Last refresh only. Does not start a new scan."""
+    return refresh_status()
 
 
 if WEB_DIR.is_dir():

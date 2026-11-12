@@ -8,7 +8,9 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 function money(usd, cur = state.currency) {
-  const n = cur === "EUR" ? usd * (state.fx || 0.92) : usd;
+  const n0 = Number(usd);
+  if (!Number.isFinite(n0)) return "n/d";
+  const n = cur === "EUR" ? n0 * (state.fx || 0.92) : n0;
   return n.toLocaleString("it-IT", { maximumFractionDigits: 0 }) + (cur === "EUR" ? " €" : " $");
 }
 function pct(n) {
@@ -22,11 +24,26 @@ function toneClass(tone) {
   return tone === "success" ? "ok" : tone === "danger" ? "bad" : tone === "warning" ? "warn" : "info";
 }
 
-async function api(path, opts) {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+async function api(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (opts.body) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, { ...opts, headers });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || res.statusText || "Errore");
+  if (!res.ok) {
+    const detail = data && data.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((item) => item.msg || JSON.stringify(item)).join("; ")
+      : (detail || data.errors && data.errors.join("; ") || res.statusText || "Errore di rete");
+    throw new Error(typeof message === "string" ? message : "Errore di rete");
+  }
   return data;
+}
+
+function showBanner(list) {
+  const box = $("#errors");
+  if (!box) return;
+  const errs = (list || []).map((item) => String(item || "")).filter(Boolean);
+  box.innerHTML = errs.length ? `<div class="errbar">${errs.map((e) => escapeHtml(e)).join("<br>")}</div>` : "";
 }
 
 function bindSegmented() {
@@ -390,41 +407,65 @@ async function loadNfts() {
   }
 }
 
+function totalsReady(data) {
+  const t = data && data.totals;
+  return !!(t && t.io && t.moglie && t.tutti && t.view);
+}
+
 function render() {
   const data = state.data;
   if (!data) return;
-  state.fx = data.fx_eur || 0.92;
-  const hasWallets = (data.positions && data.positions.length) || (data.btc_wallets && data.btc_wallets.length);
-  const listed = true;
-  $("#empty-state").classList.toggle("hidden", !!(data.totals && (data.totals.tutti.total_usd || data.positions.length || data.btc_wallets.length)));
-  const errs = data.errors || [];
-  $("#errors").innerHTML = errs.length ? `<div class="errbar">${errs.map((e) => escapeHtml(String(e))).join("<br>")}</div>` : "";
-  renderMetrics(data);
-  renderAlloc(data);
-  renderApy(data);
-  renderHist(data);
-  renderPositions(data);
-  renderSwitches(data);
-  renderRows($("#security"), data.security || []);
-  renderBtc(data);
+  if (!totalsReady(data)) {
+    showBanner([...(data.errors || []), "Risposta incompleta dal ricalcolo: i totali mancano."]);
+    return;
+  }
+  data.positions = data.positions || [];
+  data.btc_wallets = data.btc_wallets || [];
+  data.errors = data.errors || [];
+  data.history = data.history || [];
+  data.security = data.security || [];
+  data.btc_security = data.btc_security || [];
+  try {
+    state.fx = data.fx_eur || 0.92;
+    $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.btc_wallets.length || data.wallet_count));
+    renderMetrics(data);
+    renderAlloc(data);
+    renderApy(data);
+    renderHist(data);
+    renderPositions(data);
+    renderSwitches(data);
+    renderRows($("#security"), data.security);
+    renderBtc(data);
+    const banners = [...data.errors];
+    if ((data.wallet_count || 0) > 0 && !data.positions.length && !data.btc_wallets.length) {
+      banners.unshift("I portafogli sono salvati, ma questo ricalcolo non ha prodotto posizioni.");
+    }
+    showBanner(banners);
+  } catch (err) {
+    showBanner([...(data.errors || []), "Errore nel disegno della pagina: " + (err && err.message ? err.message : err)]);
+  }
 }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 async function load(force) {
-  $("#btn-refresh").disabled = true;
+  const button = $("#btn-refresh");
+  if (button) button.disabled = true;
+  const owner = encodeURIComponent(state.owner);
+  const path = force ? "/api/refresh?owner=" + owner : "/api/portfolio?owner=" + owner;
+  const opts = force ? { method: "POST" } : {};
   try {
-    const data = await api("/api/portfolio?owner=" + encodeURIComponent(state.owner) + (force ? "&refresh=true" : ""));
+    const data = await api(path, opts);
     state.data = data;
     if (data.fx_eur) state.fx = data.fx_eur;
     render();
     loadNfts();
   } catch (err) {
-    $("#errors").innerHTML = `<div class="errbar">${escapeHtml(err.message)}</div>`;
+    showBanner([err && err.message ? err.message : "Ricalcolo non riuscito."]);
   } finally {
-    $("#btn-refresh").disabled = false;
+    if (button) button.disabled = false;
   }
 }
 
