@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false };
+const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: null, nfts: null, showHiddenNfts: false, refreshing: false };
 const charts = {};
 
 const $ = (sel) => document.querySelector(sel);
@@ -47,11 +47,24 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function showBanner(list) {
+function showBanner(list, ensAlerts) {
   const box = $("#errors");
   if (!box) return;
   const errs = (list || []).map((item) => String(item || "")).filter(Boolean);
-  box.innerHTML = errs.length ? `<div class="errbar">${errs.map((e) => escapeHtml(e)).join("<br>")}</div>` : "";
+  const ensHtml = (ensAlerts || []).map((item) => {
+    const tone = item.level === "danger" ? "bad" : "warn";
+    const who = OWNER_LABEL[item.owner] || item.label || "";
+    return `<div class="callout ${tone}"><strong>${escapeHtml(item.name || "ENS")}</strong> ${escapeHtml(item.text || "")}${who ? " · " + escapeHtml(who) : ""}</div>`;
+  }).join("");
+  const errHtml = errs.length ? `<div class="errbar">${errs.map((e) => escapeHtml(e)).join("<br>")}</div>` : "";
+  box.innerHTML = ensHtml + errHtml;
+}
+
+function updatedClock(ts) {
+  if (!ts) return "";
+  const date = new Date(Number(ts) * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
 }
 
 function bindSegmented() {
@@ -65,7 +78,11 @@ function bindSegmented() {
       el.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === btn));
       if (key === "currency") persistCurrency(state.currency);
       render();
-      if (key === "owner") loadNfts();
+      if (key === "owner") {
+        state.nfts = null;
+        const details = $("#nft-details");
+        if (details && details.open) loadNfts(false);
+      }
     });
   });
 }
@@ -171,6 +188,40 @@ function renderAlloc(data) {
 }
 
 function renderApy(data) {
+  const totals = data.totals || {};
+  const apyOf = (owner, field) => {
+    const value = totals[owner] && totals[owner][field];
+    return value == null ? null : Number(value);
+  };
+  const series = [
+    { key: "io", color: "#0D9488", border: "#0D9488", width: 0 },
+    { key: "moglie", color: "#7C3AED", border: "#7C3AED", width: 0 },
+    { key: "tutti", color: "#B45309", border: "#111827", width: 3 },
+  ];
+  paintChart("chart-apy-owners", {
+    type: "bar",
+    data: {
+      labels: ["APY attuale", "Media 30 giorni"],
+      datasets: series.map((item) => ({
+        label: OWNER_LABEL[item.key],
+        data: [apyOf(item.key, "wapy"), apyOf(item.key, "wapy30")],
+        backgroundColor: item.color,
+        borderColor: item.border,
+        borderWidth: item.width,
+      })),
+    },
+    options: {
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: {
+          callbacks: {
+            label: (c) => ` ${c.dataset.label}: ${Number(c.raw).toLocaleString("it-IT", { maximumFractionDigits: 2 })}%`,
+          },
+        },
+      },
+      scales: { y: { beginAtZero: true, ticks: { callback: (v) => v + "%" } } },
+    },
+  });
   const pos = data.positions.filter((p) => p.protocol !== "Wallet");
   const labels = pos.map((p) => p.protocol + " " + p.asset + (state.owner === "tutti" ? " · " + OWNER_LABEL[p.owner] : ""));
   paintChart("chart-apy", {
@@ -408,10 +459,17 @@ function nftCard(item) {
     <p class="mini">In vendita: ${item.listed == null ? "non disponibile" : item.listed ? nativeOrMissing(item.list_price_native, item.native_symbol) : "no"}</p>
     <p><strong>Suggerimento:</strong> ${item.suggestion_usd == null && item.suggestion_native == null ? "prezzo non disponibile" : nativeOrMissing(item.suggestion_native, item.native_symbol) + " · " + moneyOrMissing(item.suggestion_usd)}</p>
     <p class="mini">${escapeHtml(item.suggestion_reason || "")}</p>`;
+  const ens = item.ens && item.ens.expiry ? (() => {
+    const when = new Date(item.ens.expiry * 1000).toLocaleDateString("it-IT");
+    const grace = item.ens.grace_ended ? "grazia terminata" : item.ens.in_grace ? "in periodo di grazia" : `${item.ens.days_left} giorni`;
+    const tone = item.ens.level === "danger" ? "bad" : item.ens.level === "warning" ? "warn" : "ok";
+    return `<p class="mini">Scadenza .eth: ${escapeHtml(when)} · <span class="pill ${tone}">${escapeHtml(grace)}</span></p>`;
+  })() : "";
   return `<article class="nft-card ${item.hidden ? "hidden-nft" : ""}">
     ${item.image ? `<img alt="" src="${escapeHtml(item.image)}" />` : `<div class="empty">senza immagine</div>`}
     <h3>${escapeHtml(item.name || "Senza nome")}</h3>
     <p class="mini">${escapeHtml(item.collection || "")} · ${escapeHtml(item.chain_label || item.chain || "")} · ${OWNER_LABEL[item.owner] || ""}</p>
+    ${ens}
     ${sale}
     ${item.hidden ? `<p class="mini">Nascosto: ${escapeHtml(item.hidden_reason || "")}</p>` : ""}
     <p>${nftActions(item)}</p>
@@ -431,6 +489,11 @@ function renderNfts() {
   const btn = $("#btn-nft-hidden");
   if (btn) btn.textContent = state.showHiddenNfts ? "Nascondi i filtrati" : `Mostra nascosti (${hiddenCount})`;
   if (caption) caption.textContent = (data.limit_note || "") + " " + (data.listing_note || "");
+  const status = $("#nft-status");
+  if (status) {
+    const clock = updatedClock(data.cached_at);
+    status.textContent = data.from_cache && clock ? `Dati NFT in cache, aggiornati alle ${clock}.` : clock ? `NFT aggiornati alle ${clock}.` : "";
+  }
   const collectibles = all.filter((item) => !item.liquidity && (state.showHiddenNfts || !item.hidden));
   const liquidity = all.filter((item) => item.liquidity && !item.user_hidden);
   const groups = new Map();
@@ -451,13 +514,21 @@ function renderNfts() {
   box.innerHTML = grid + lp;
 }
 
-async function loadNfts() {
+async function loadNfts(force) {
   const box = $("#nft-list");
-  if (box && !state.nfts) box.innerHTML = `<p class="mini">Caricamento NFT…</p>`;
+  const status = $("#nft-status");
+  if (state.nfts && !force) {
+    renderNfts();
+    return;
+  }
+  if (box) box.innerHTML = `<p class="mini">Caricamento NFT…</p>`;
+  if (status) status.textContent = "Caricamento NFT…";
+  const query = "/api/nfts?owner=" + encodeURIComponent(state.owner) + (force ? "&refresh=true" : "");
   try {
-    state.nfts = await api("/api/nfts?owner=" + encodeURIComponent(state.owner));
+    state.nfts = await api(query);
     renderNfts();
   } catch (err) {
+    if (status) status.textContent = "";
     if (box) box.innerHTML = `<p class="mini">${escapeHtml(err.message)}</p>`;
   }
 }
@@ -493,13 +564,26 @@ function render() {
     renderHist(data);
     renderPositions(data);
     renderSwitches(data);
-    renderRows($("#security"), data.security);
+    const ensRows = (data.ens_alerts || []).map((item) => ({
+      title: (item.name || "ENS") + (OWNER_LABEL[item.owner] ? " · " + OWNER_LABEL[item.owner] : ""),
+      detail: item.text || "",
+      tone: item.level === "danger" ? "danger" : "warning",
+      label: item.level === "danger" ? "scaduto" : "in scadenza",
+    }));
+    renderRows($("#security"), ensRows.concat(data.security));
     renderBtc(data);
     const banners = [...data.errors];
-    if ((data.wallet_count || 0) > 0 && !data.positions.length && !data.btc_wallets.length) {
+    if ((data.wallet_count || 0) > 0 && !data.positions.length && !data.btc_wallets.length && !state.refreshing) {
       banners.unshift("I portafogli sono salvati, ma questo ricalcolo non ha prodotto posizioni.");
     }
-    showBanner(banners);
+    showBanner(banners, data.ens_alerts || []);
+    const pill = $("#source-pill");
+    if (pill) {
+      const clock = data.saved === false ? "" : updatedClock(data.ts);
+      pill.textContent = clock
+        ? (state.refreshing ? `aggiornato alle ${clock} · aggiornamento…` : `aggiornato alle ${clock}`)
+        : "in sola lettura";
+    }
   } catch (err) {
     showBanner([...(data.errors || []), "Errore nel disegno della pagina: " + (err && err.message ? err.message : err)]);
   }
@@ -511,20 +595,28 @@ function escapeHtml(s) {
 
 async function load(force) {
   const button = $("#btn-refresh");
-  if (button) button.disabled = true;
+  if (force && button) button.disabled = true;
+  state.refreshing = !!force;
+  if (force && state.data) render();
   const owner = encodeURIComponent(state.owner);
   const path = force ? "/api/refresh?owner=" + owner : "/api/portfolio?owner=" + owner;
   const opts = force ? { method: "POST" } : {};
   try {
     const data = await api(path, opts);
     state.data = data;
+    state.refreshing = false;
     if (data.fx_thb) state.fx = data.fx_thb;
     render();
-    loadNfts();
   } catch (err) {
     showBanner([err && err.message ? err.message : "Ricalcolo non riuscito."]);
   } finally {
+    state.refreshing = false;
     if (button) button.disabled = false;
+    const pill = $("#source-pill");
+    if (pill && state.data && state.data.saved !== false && state.data.ts) {
+      const clock = updatedClock(state.data.ts);
+      if (clock) pill.textContent = `aggiornato alle ${clock}`;
+    }
   }
 }
 
@@ -596,6 +688,19 @@ async function boot() {
       await loadSettings();
     } catch (err) { alert(err.message); }
   });
+  const nftDetails = $("#nft-details");
+  if (nftDetails) {
+    nftDetails.addEventListener("toggle", () => {
+      if (nftDetails.open) loadNfts(false);
+    });
+  }
+  const nftRefresh = $("#btn-nft-refresh");
+  if (nftRefresh) {
+    nftRefresh.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      loadNfts(true);
+    });
+  }
   $("#btn-nft-hidden").addEventListener("click", () => {
     state.showHiddenNfts = !state.showHiddenNfts;
     renderNfts();
@@ -616,7 +721,7 @@ async function boot() {
         }),
       });
       state.nfts = null;
-      await loadNfts();
+      await loadNfts(true);
     } catch (err) { alert(err.message); }
   });
   $("#btn-clear-nft-key").addEventListener("click", async () => {
@@ -691,7 +796,8 @@ async function boot() {
       if (btc) { await api("/api/wallets/btc/" + btc.dataset.delBtc, { method: "DELETE" }); await loadSettings(); await load(true); }
     } catch (err) { alert(err.message); }
   });
-  await load(true);
+  await load(false);
+  load(true);
 }
 
 boot();

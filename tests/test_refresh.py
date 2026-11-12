@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from app import config, db, evm, markets, portfolio
+from app import config, db, ens, evm, markets, portfolio
 from app.main import app
 from app.protocols import WETH
 
@@ -52,7 +52,11 @@ def _install_mocks(monkeypatch):
     monkeypatch.setattr(markets, "btc_price_usd", fake_btc)
     monkeypatch.setattr(markets, "fx_thb", fake_fx)
     monkeypatch.setattr(markets, "llama_pools", fake_pools)
+    async def fake_ens(_wallets):
+        return []
+
     monkeypatch.setattr(markets, "protocol_health", fake_health)
+    monkeypatch.setattr(ens, "scan_wallets", fake_ens)
 
 
 def test_alerts_and_debug_open_before_any_refresh(isolated_db):

@@ -27,7 +27,7 @@ ALCHEMY_DEMO_KEY = "demo"
 PAGE_SIZE = 100
 COINGECKO_CONTRACT_CAP = 25
 OPENSEA_LISTING_CAP = 12
-CACHE_TTL = 10 * 60
+CACHE_TTL = 6 * 60 * 60
 SUGGESTION_PREMIUM = 0.05
 
 # chain -> indexer hosts and the native coin used for floors.
@@ -389,9 +389,11 @@ async def _blockscout_page(client: httpx.AsyncClient, chain: str, owner: str) ->
     return [parse_blockscout_nft(raw, chain) for raw in (items or [])][:PAGE_SIZE]
 
 
-async def _wallet_nfts(client: httpx.AsyncClient, chain: str, owner: str, alchemy_key: str) -> tuple[list[dict[str, Any]], str | None]:
+async def _wallet_nfts(
+    client: httpx.AsyncClient, chain: str, owner: str, alchemy_key: str, force: bool = False
+) -> tuple[list[dict[str, Any]], str | None]:
     cache_key = f"nfts:{chain}:{owner.lower()}:{alchemy_key[:6]}"
-    cached = _cache_get(cache_key)
+    cached = None if force else _cache_get(cache_key)
     if cached is not None:
         return cached, None
     try:
@@ -494,11 +496,19 @@ async def _listing(client: httpx.AsyncClient, item: dict[str, Any], api_key: str
     item["list_price_native"] = price
 
 
-async def collect_nfts(owner: str) -> dict[str, Any]:
+async def collect_nfts(owner: str, force: bool = False) -> dict[str, Any]:
     """NFTs for the saved Ethereum-style wallets of one owner filter."""
     from .validation import normalize_owner
+    from . import ens
 
     owner = normalize_owner(owner, allow_all=True)
+    cache_key = f"nfts:{owner}"
+    if not force:
+        cached = db.cache_get(cache_key)
+        age = time.time() - float((cached or {}).get("cached_at") or 0)
+        if cached and cached.get("items") is not None and age < CACHE_TTL:
+            cached["from_cache"] = True
+            return cached
     wallets = db.list_evm(None if owner == "tutti" else owner)
     alchemy_key, source = _alchemy_key()
     opensea = _opensea_key()
@@ -509,7 +519,7 @@ async def collect_nfts(owner: str) -> dict[str, Any]:
         for wallet in wallets:
             address = wallet["address"]
             for chain in NFT_CHAINS:
-                rows, err = await _wallet_nfts(client, chain, address, alchemy_key)
+                rows, err = await _wallet_nfts(client, chain, address, alchemy_key, force=force)
                 if err:
                     errors.append(f"{wallet['label']}: {err}")
                 for row in rows:
@@ -545,13 +555,17 @@ async def collect_nfts(owner: str) -> dict[str, Any]:
         hides = db.list_nft_hides()
         for row in items:
             apply_user_hides(row, hides)
+        try:
+            await ens.annotate(items)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Scadenze ENS non allegate agli NFT: %s", exc)
     listing_note = (
         "Con una chiave OpenSea nelle impostazioni si vede anche se il pezzo è già in vendita. "
         "Senza chiave quella riga resta «non disponibile»."
         if not opensea
         else "Chiave OpenSea attiva: la quotazione è letta solo in consultazione."
     )
-    return {
+    payload = {
         "owner": owner,
         "source": source if alchemy_key != ALCHEMY_DEMO_KEY else "alchemy-demo+coingecko",
         "readonly": True,
@@ -563,4 +577,11 @@ async def collect_nfts(owner: str) -> dict[str, Any]:
         "errors": errors,
         "listing_note": listing_note,
         "items": items,
+        "cached_at": int(time.time()),
+        "from_cache": False,
     }
+    try:
+        db.cache_set(cache_key, payload)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Cache NFT non salvata: %s", exc)
+    return payload

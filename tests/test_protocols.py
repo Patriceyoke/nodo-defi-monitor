@@ -106,6 +106,7 @@ def test_erc4626_valuation_uses_convert_to_assets(monkeypatch):
         return 2_400_000  # 2.4 USDC, not 2.0
 
     monkeypatch.setattr(evm, "eth_get_balance", fake_eth_balance)
+    monkeypatch.setattr(evm, "USE_MULTICALL", False)
     monkeypatch.setattr(evm, "token_balance", fake_token_balance)
     monkeypatch.setattr(evm, "convert_to_assets", fake_convert)
 
@@ -131,6 +132,7 @@ def test_failed_conversion_keeps_the_position(monkeypatch):
         raise RuntimeError("rpc down")
 
     monkeypatch.setattr(evm, "eth_get_balance", fake_eth_balance)
+    monkeypatch.setattr(evm, "USE_MULTICALL", False)
     monkeypatch.setattr(evm, "token_balance", fake_token_balance)
     monkeypatch.setattr(evm, "convert_to_assets", fake_convert)
     rows, notes, _reports = asyncio.run(evm.scan_wallet("0x" + "22" * 20, "io", "test"))

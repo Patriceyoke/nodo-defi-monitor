@@ -9,7 +9,7 @@ services:
       PROXY_AUTH_WHITELIST: "/mcp*"
 
   web:
-    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.1.6
+    image: ghcr.io/patriceyoke/nodo-defi-monitor:0.1.7
     user: "1000:1000"
     init: true
     restart: on-failure

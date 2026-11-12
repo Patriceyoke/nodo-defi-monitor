@@ -20,8 +20,8 @@ LLAMA_TVL = "https://api.llama.fi/protocol/{slug}"
 
 # Cache live market data in process memory to avoid hammering public APIs.
 _CACHE: dict[str, tuple[float, Any]] = {}
-POOLS_TTL = 30 * 60
-PRICE_TTL = 5 * 60
+POOLS_TTL = 6 * 60 * 60
+PRICE_TTL = 15 * 60
 
 
 async def _get_json(url: str, ttl: float) -> Any:
@@ -29,7 +29,7 @@ async def _get_json(url: str, ttl: float) -> Any:
     hit = _CACHE.get(url)
     if hit and now - hit[0] < ttl:
         return hit[1]
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=12.0) as client:
         resp = await client.get(url, headers={"User-Agent": "monitor-defi/0.1 (read-only homelab)"})
         resp.raise_for_status()
         data = resp.json()
@@ -169,7 +169,7 @@ async def fx_thb() -> float | None:
     except Exception:
         stored = None
     try:
-        data = await _get_json(COINBASE_FX, 60 * 60)
+        data = await _get_json(COINBASE_FX, 6 * 60 * 60)
         thb = (data.get("data") or {}).get("rates", {}).get("THB")
         if thb:
             rate = float(thb)

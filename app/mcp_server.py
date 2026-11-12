@@ -172,7 +172,12 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
         )
     if name == "get_alerts":
         data = await snapshot(owner)
-        return _text({"owner": owner, "protocol_security": data["security"], "btc_security": data["btc_security"]})
+        return _text({
+            "owner": owner,
+            "protocol_security": data["security"],
+            "btc_security": data["btc_security"],
+            "ens": data.get("ens_alerts") or [],
+        })
     if name == "get_history":
         days = int(args.get("days") or 90)
         data = await snapshot(owner)

@@ -91,7 +91,9 @@
       </section>
       <section class="card">
         <h2>APY attuale e media a 30 giorni</h2>
-        <p class="caption">Confronto per ciascuna posizione della vista scelta.</p>
+        <p class="caption">Io, Moglie e Combinato. Combinato è la media pesata sul valore di Io e Moglie, non la media dei due tassi: un saldo più grande conta di più. Il bordo scuro è il combinato.</p>
+        <div class="chart-box owners"><canvas id="chart-apy-owners"></canvas></div>
+        <p class="caption">Ogni posizione della vista scelta.</p>
         <div class="chart-box"><canvas id="chart-apy"></canvas></div>
       </section>
     </div>
@@ -138,14 +140,21 @@
     </div>
 
     <section class="card" id="nft">
-      <div class="card-head">
-        <div>
+      <details id="nft-details">
+        <summary>
           <h2>NFT</h2>
+          <p class="caption">Chiuso all'avvio. I dati si caricano solo quando apri questa sezione. Le scadenze .eth restano negli avvisi anche da chiuso.</p>
+        </summary>
+        <div class="card-head">
           <p class="caption" id="nft-caption">Sola lettura. Il prezzo suggerito è un riferimento, non un ordine: da qui non si mette in vendita nulla.</p>
+          <div class="row-actions">
+            <button class="btn ghost" id="btn-nft-refresh" type="button">Aggiorna NFT</button>
+            <button class="btn ghost" id="btn-nft-hidden" type="button">Mostra nascosti</button>
+          </div>
         </div>
-        <button class="btn ghost" id="btn-nft-hidden" type="button">Mostra nascosti</button>
-      </div>
-      <div id="nft-list"><p class="mini">Caricamento NFT…</p></div>
+        <p class="mini" id="nft-status"></p>
+        <div id="nft-list"><p class="mini">Apri la sezione per caricare gli NFT.</p></div>
+      </details>
     </section>
 
     <section class="card" id="btc">

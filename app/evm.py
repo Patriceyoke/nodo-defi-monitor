@@ -14,6 +14,10 @@ from .protocols import CHAINS, TOKENS, WETH
 log = logging.getLogger("monitor.evm")
 SELECTOR_BALANCE_OF = "70a08231"
 SELECTOR_CONVERT_TO_ASSETS = "07a2d13a"
+SELECTOR_AGGREGATE3 = "82ad56cb"
+SELECTOR_TOKEN_OF_OWNER = "2f745c59"
+MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11"
+USE_MULTICALL = True
 # Last RPC that answered, per chain. Read by /api/debug/refresh-status.
 _RPC_USED: dict[str, dict[str, Any]] = {}
 
@@ -112,6 +116,61 @@ async def token_balance(token: str, holder: str, chain: str = "ethereum") -> int
     return await eth_call(token, _encode_balance_of(holder), chain)
 
 
+def encode_aggregate3(calls: list[tuple[str, str]]) -> str:
+    """ABI-encode Multicall3.aggregate3. calls are (target, calldata hex)."""
+    blobs: list[bytes] = []
+    for target, calldata in calls:
+        raw = bytes.fromhex(calldata[2:] if calldata.startswith("0x") else calldata)
+        pad = (32 - len(raw) % 32) % 32
+        blob = bytes.fromhex(_pad(target))
+        blob += (1).to_bytes(32, "big")
+        blob += (96).to_bytes(32, "big")
+        blob += len(raw).to_bytes(32, "big")
+        blob += raw + b"\x00" * pad
+        blobs.append(blob)
+    cursor = len(blobs) * 32
+    offsets = []
+    for blob in blobs:
+        offsets.append(cursor)
+        cursor += len(blob)
+    body = len(blobs).to_bytes(32, "big")
+    body += b"".join(item.to_bytes(32, "big") for item in offsets)
+    body += b"".join(blobs)
+    return "0x" + SELECTOR_AGGREGATE3 + (32).to_bytes(32, "big").hex() + body.hex()
+
+
+def decode_aggregate3(result: str) -> list[tuple[bool, bytes]]:
+    if not result or result == "0x":
+        raise ValueError("multicall vuoto")
+    raw = bytes.fromhex(result[2:])
+    if len(raw) < 64:
+        raise ValueError("multicall troppo corto")
+    offset = int.from_bytes(raw[0:32], "big")
+    length = int.from_bytes(raw[offset:offset + 32], "big")
+    base = offset + 32
+    out: list[tuple[bool, bytes]] = []
+    for index in range(length):
+        rel = int.from_bytes(raw[base + index * 32:base + (index + 1) * 32], "big")
+        start = base + rel
+        success = int.from_bytes(raw[start:start + 32], "big") == 1
+        data_rel = int.from_bytes(raw[start + 32:start + 64], "big")
+        data_at = start + data_rel
+        size = int.from_bytes(raw[data_at:data_at + 32], "big")
+        chunk = raw[data_at + 32:data_at + 32 + size]
+        out.append((success, chunk))
+    return out
+
+
+async def multicall(chain: str, calls: list[tuple[str, str]]) -> list[tuple[bool, bytes]]:
+    if not calls:
+        return []
+    raw = await eth_call_raw(MULTICALL3, encode_aggregate3(calls), chain)
+    decoded = decode_aggregate3(raw)
+    if len(decoded) != len(calls):
+        raise ValueError("multicall incompleto")
+    return decoded
+
+
 async def convert_to_assets(token: str, shares: int, chain: str = "ethereum") -> int:
     """ERC-4626 convertToAssets(shares). Returns underlying base units."""
     if shares <= 0:
@@ -181,18 +240,64 @@ async def scan_wallet(
                     }
                 )
 
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for spec in TOKENS:
+        chain = spec["chain"]
+        if chains_ok is not None and not chains_ok.get(chain, False):
+            continue
+        grouped.setdefault(chain, []).append(spec)
+
+    balances: dict[tuple[str, str], int] = {}
+    for chain, specs in grouped.items():
+        try:
+            if not USE_MULTICALL:
+                raise RuntimeError("multicall disattivato")
+            calls = [(spec["token"], _encode_balance_of(address)) for spec in specs]
+            decoded = await multicall(chain, calls)
+            for spec, (ok, chunk) in zip(specs, decoded):
+                if not ok or len(chunk) < 32:
+                    raise RuntimeError(f"saldo {spec['asset']} non letto")
+                balances[(chain, spec["token"])] = int.from_bytes(chunk[:32], "big")
+        except Exception as exc:  # noqa: BLE001
+            log.info("Multicall %s non usato (%s), lettura singola.", chain, exc)
+            async def _bal(spec: dict[str, Any], chain: str = chain) -> None:
+                try:
+                    balances[(chain, spec["token"])] = await token_balance(spec["token"], address, chain)
+                except Exception as bal_exc:  # noqa: BLE001
+                    msg = f"Lettura saldo fallita per {spec['protocol']} {spec['asset']} ({chain}): {bal_exc}"
+                    log.warning(msg)
+                    notes.append(msg)
+                    reports.append({"chain": chain, "asset": f"{spec['protocol']} {spec['asset']}", "error": str(bal_exc)})
+            await asyncio.gather(*[_bal(spec) for spec in specs])
+
+    vault_assets: dict[tuple[str, str], int] = {}
+    for chain, specs in grouped.items():
+        vaults = [
+            spec for spec in specs
+            if spec["kind"] == "erc4626" and balances.get((chain, spec["token"]), 0) > 0
+        ]
+        if not vaults or not USE_MULTICALL:
+            continue
+        try:
+            calls = [
+                (spec["token"], "0x" + SELECTOR_CONVERT_TO_ASSETS + balances[(chain, spec["token"])].to_bytes(32, "big").hex())
+                for spec in vaults
+            ]
+            decoded = await multicall(chain, calls)
+            for spec, (ok, chunk) in zip(vaults, decoded):
+                if ok and len(chunk) >= 32:
+                    vault_assets[(chain, spec["token"])] = int.from_bytes(chunk[:32], "big")
+        except Exception as exc:  # noqa: BLE001
+            log.info("Multicall convertToAssets %s non usato (%s).", chain, exc)
+
     async def _one(spec: dict[str, Any]) -> dict[str, Any] | None:
         chain = spec["chain"]
         if chains_ok is not None and not chains_ok.get(chain, False):
             return None
-        try:
-            raw = await token_balance(spec["token"], address, chain)
-        except Exception as exc:  # noqa: BLE001
-            msg = f"Lettura saldo fallita per {spec['protocol']} {spec['asset']} ({chain}): {exc}"
-            log.warning(msg)
-            notes.append(msg)
-            reports.append({"chain": chain, "asset": f"{spec['protocol']} {spec['asset']}", "error": str(exc)})
+        key = (chain, spec["token"])
+        if key not in balances:
             return None
+        raw = balances[key]
         if raw <= 0:
             return None
         amount = human(raw, int(spec["decimals"]))
@@ -200,7 +305,9 @@ async def scan_wallet(
         valuation_ok = True
         if spec["kind"] == "erc4626":
             try:
-                assets = await convert_to_assets(spec["token"], raw, chain)
+                assets = vault_assets.get(key)
+                if assets is None:
+                    assets = await convert_to_assets(spec["token"], raw, chain)
                 amount = human(assets, int(spec["underlying_decimals"]))
                 price_token = price_key(spec.get("price_chain") or chain, spec["underlying"])
             except Exception as exc:  # noqa: BLE001

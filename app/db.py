@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE UNIQUE INDEX IF NOT EXISTS evm_wallets_addr_owner ON evm_wallets(address, owner);
 CREATE UNIQUE INDEX IF NOT EXISTS btc_wallets_desc_owner ON btc_wallets(descriptor, owner);
 CREATE INDEX IF NOT EXISTS history_ts ON history(ts);
+CREATE TABLE IF NOT EXISTS app_cache (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS nft_hides (
     kind TEXT NOT NULL CHECK (kind IN ('token', 'collection')),
     chain TEXT NOT NULL,
@@ -303,6 +308,36 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
         if hide_nft(str(row.get("chain") or ""), str(row.get("contract") or ""), str(row.get("token_id") or ""), str(row.get("kind") or "token")):
             hides_added += 1
     return {"evm_added": added_evm, "btc_added": added_btc, "settings_updated": updated, "nft_hides_added": hides_added}
+
+
+def cache_get(key: str) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute("SELECT value, updated_at FROM app_cache WHERE key=?", (key,)).fetchone()
+    if not row:
+        return None
+    try:
+        payload = json.loads(row["value"])
+    except json.JSONDecodeError:
+        return None
+    if isinstance(payload, dict):
+        payload.setdefault("cached_at", row["updated_at"])
+    return payload
+
+
+def cache_delete_prefix(prefix: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM app_cache WHERE key LIKE ?", (prefix + "%",))
+
+
+def cache_set(key: str, payload: dict[str, Any]) -> None:
+    now = int(time.time())
+    blob = json.dumps(payload)
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO app_cache(key, value, updated_at) VALUES(?,?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+            (key, blob, now),
+        )
 
 
 def list_nft_hides() -> list[dict[str, Any]]:

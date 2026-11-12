@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from . import btc_security, bitcoin, db, evm, markets, switches
+from . import btc_security, bitcoin, db, ens, evm, markets, switches
 from .config import PROTOCOL_RISK
 from .validation import normalize_owner
 
@@ -32,6 +32,13 @@ _STATUS: dict[str, Any] = {
 
 
 def cached_snapshot() -> dict[str, Any] | None:
+    """Last snapshot in memory, or the one saved on disk after a restart."""
+    global _SNAPSHOT, _SNAPSHOT_AT
+    if _SNAPSHOT is None:
+        stored = db.cache_get("portfolio")
+        if isinstance(stored, dict) and "positions" in stored:
+            _SNAPSHOT = stored
+            _SNAPSHOT_AT = float(stored.get("ts") or stored.get("cached_at") or 0)
     return _SNAPSHOT
 
 
@@ -68,6 +75,7 @@ def _zero_total(owner: str) -> dict[str, Any]:
         "btc_usd": 0.0,
         "total_usd": 0.0,
         "wapy": 0.0,
+        "wapy30": 0.0,
         "year_usd": 0.0,
     }
 
@@ -106,6 +114,8 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
         "btc_security": [],
         "btc_moves": [],
         "history": [],
+        "ens_alerts": [],
+        "ens_names": [],
         "wallet_count": _STATUS.get("wallet_count") or 0,
     }
 
@@ -174,6 +184,10 @@ def stats(positions: list[dict[str, Any]]) -> dict[str, float]:
     known_usd = sum(float(p.get("usd") or 0) for p in known)
     year = sum(float(p.get("usd") or 0) * float(p["apy"]) / 100.0 for p in known)
     wapy = (year / known_usd * 100.0) if known_usd else 0.0
+    known30 = [p for p in defi if p.get("apy30") is not None and p.get("usd")]
+    known30_usd = sum(float(p.get("usd") or 0) for p in known30)
+    weighted30 = sum(float(p.get("usd") or 0) * float(p["apy30"]) for p in known30)
+    wapy30 = (weighted30 / known30_usd) if known30_usd else 0.0
     wallet_usd = sum(float(p.get("usd") or 0) for p in positions if p.get("protocol") == "Wallet")
     return {
         "total_usd": defi_usd + wallet_usd,
@@ -181,6 +195,7 @@ def stats(positions: list[dict[str, Any]]) -> dict[str, float]:
         "wallet_usd": wallet_usd,
         "year_usd": year,
         "wapy": wapy,
+        "wapy30": wapy30,
     }
 
 
@@ -265,12 +280,39 @@ async def _enrich(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], lis
     return out, alerts
 
 
+def _empty_raw() -> dict[str, Any]:
+    return {
+        "ts": int(time.time()),
+        "rpc_ok": False,
+        "errors": [],
+        "positions": [],
+        "switches": [],
+        "security": [],
+        "btc_wallets": [],
+        "btc_security": [],
+        "btc_price_usd": None,
+        "fx_thb": None,
+        "gas_usd": 0.0,
+        "eth_price_usd": 0.0,
+        "node": {"configured": False, "connected": False, "detail": "Nessuno snapshot salvato."},
+        "alternatives": [],
+        "evm_owners": [],
+        "wallet_count": 0,
+        "ens_names": [],
+        "ens_alerts": [],
+        "saved": False,
+    }
+
+
 async def refresh(force: bool = False) -> dict[str, Any]:
     global _SNAPSHOT, _SNAPSHOT_AT
     async with _LOCK:
         now = time.time()
-        if _SNAPSHOT and not force and now - _SNAPSHOT_AT < REFRESH_TTL:
-            return _SNAPSHOT
+        if not force:
+            cached_snapshot()
+            if _SNAPSHOT:
+                return _SNAPSHOT
+            return _empty_raw()
         _STATUS["last_started_at"] = time.time()
         _STATUS["last_ok"] = None
         evm_wallets = db.list_evm()
@@ -279,55 +321,60 @@ async def refresh(force: bool = False) -> dict[str, Any]:
         errors: list[str] = []
         chains_ok: dict[str, bool] = {}
         from .protocols import CHAINS
-        for chain_id, chain in CHAINS.items():
-            if not chain.get("scan_balances", True):
-                continue
+
+        async def _probe(chain_id: str, chain: dict[str, Any]) -> tuple[str, bool, str | None]:
             try:
                 await evm.eth_rpc("eth_blockNumber", [], chain=chain_id)
-                chains_ok[chain_id] = True
+                return chain_id, True, None
             except Exception as exc:  # noqa: BLE001
-                chains_ok[chain_id] = False
-                msg = f"RPC {chain['label']} non raggiungibile: {exc}"
-                log.warning(msg)
-                errors.append(msg)
+                return chain_id, False, f"RPC {chain['label']} non raggiungibile: {exc}"
+
+        probes = await asyncio.gather(
+            *[_probe(chain_id, chain) for chain_id, chain in CHAINS.items() if chain.get("scan_balances", True)]
+        )
+        for chain_id, ok, message in probes:
+            chains_ok[chain_id] = ok
+            if message:
+                log.warning(message)
+                errors.append(message)
         rpc_ok = any(chains_ok.values())
 
         from .evm import rpc_status
 
         wallet_reports: list[dict[str, Any]] = []
-        if rpc_ok:
-            for w in evm_wallets:
-                try:
-                    found, notes, reports = await evm.scan_wallet(w["address"], w["owner"], w["label"], chains_ok)
-                    positions.extend(found)
-                    errors.extend(notes)
-                    by_chain: dict[str, list[str]] = {}
-                    for report in reports:
-                        by_chain.setdefault(report["chain"], []).append(f"{report['asset']}: {report['error']}")
-                    wallet_reports.append(
-                        {
-                            "label": w["label"],
-                            "owner": w["owner"],
-                            "address": w["address"],
-                            "positions": len(found),
-                            "chains": [
-                                {"chain": chain, "ok": not msgs, "errors": msgs}
-                                for chain, msgs in by_chain.items()
-                            ],
-                        }
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("Lettura %s fallita: %s", w["label"], exc)
-                    errors.append(f"Lettura {w['label']}: {exc}")
-                    wallet_reports.append(
-                        {
-                            "label": w["label"],
-                            "owner": w["owner"],
-                            "address": w["address"],
-                            "positions": 0,
-                            "chains": [{"chain": "ethereum", "ok": False, "errors": [str(exc)]}],
-                        }
-                    )
+
+        async def _scan_evm(w: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+            try:
+                found, notes, reports = await evm.scan_wallet(w["address"], w["owner"], w["label"], chains_ok)
+                by_chain: dict[str, list[str]] = {}
+                for report in reports:
+                    by_chain.setdefault(report["chain"], []).append(f"{report['asset']}: {report['error']}")
+                return found, notes, {
+                    "label": w["label"],
+                    "owner": w["owner"],
+                    "address": w["address"],
+                    "positions": len(found),
+                    "chains": [
+                        {"chain": chain, "ok": not msgs, "errors": msgs}
+                        for chain, msgs in by_chain.items()
+                    ],
+                }
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Lettura %s fallita: %s", w["label"], exc)
+                return [], [f"Lettura {w['label']}: {exc}"], {
+                    "label": w["label"],
+                    "owner": w["owner"],
+                    "address": w["address"],
+                    "positions": 0,
+                    "chains": [{"chain": "ethereum", "ok": False, "errors": [str(exc)]}],
+                }
+
+        if rpc_ok and evm_wallets:
+            scanned = await asyncio.gather(*[_scan_evm(w) for w in evm_wallets])
+            for found, notes, report in scanned:
+                positions.extend(found)
+                errors.extend(notes)
+                wallet_reports.append(report)
         elif evm_wallets:
             for w in evm_wallets:
                 wallet_reports.append(
@@ -421,6 +468,15 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             health = []
             errors.append(f"Controlli di sicurezza: {exc}")
 
+        ens_names: list[dict[str, Any]] = []
+        if rpc_ok and chains_ok.get("ethereum") and evm_wallets:
+            try:
+                ens_names = await asyncio.wait_for(ens.scan_wallets(evm_wallets), timeout=12)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Scadenze ENS non lette: %s", exc)
+                errors.append(f"Scadenze ENS non lette: {exc}")
+        ens_alerts = ens.alerts_for(ens_names)
+
         tor_raw = db.get_setting("tor_enabled")
         tor_flag = None if tor_raw == "" else tor_raw in {"1", "true", "yes", "on"}
         btc_checks = btc_security.evaluate(btc_scans, node, tor_flag)
@@ -467,9 +523,16 @@ async def refresh(force: bool = False) -> dict[str, Any]:
             "alternatives": alts,
             "evm_owners": [w["owner"] for w in evm_wallets],
             "wallet_count": len(evm_wallets) + len(btc_wallets),
+            "ens_names": ens_names,
+            "ens_alerts": ens_alerts,
+            "saved": True,
         }
         _SNAPSHOT = snapshot
         _SNAPSHOT_AT = now
+        try:
+            db.cache_set("portfolio", snapshot)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Snapshot non salvato: %s", exc)
         _STATUS.update(
             {
                 "last_finished_at": time.time(),
@@ -513,6 +576,9 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
             "alternatives": [],
             "evm_owners": [],
             "wallet_count": 0,
+            "ens_names": [],
+            "ens_alerts": [],
+            "saved": False,
         }
     positions = [p for p in data["positions"] if filter_owner(owner, p["owner"])]
     btc = [w for w in data["btc_wallets"] if filter_owner(owner, w["owner"])]
@@ -543,6 +609,7 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
             "btc_usd": usd,
             "total_usd": st["total_usd"] + usd,
             "wapy": st["wapy"],
+            "wapy30": st["wapy30"],
             "year_usd": st["year_usd"],
         }
 
@@ -562,6 +629,8 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
     if currency not in {"USD", "THB"}:
         currency = "USD"
 
+    ens_alerts = [a for a in (data.get("ens_alerts") or []) if filter_owner(owner, a.get("owner"))]
+    ens_names = [a for a in (data.get("ens_names") or []) if filter_owner(owner, a.get("owner"))]
     history = db.get_history(owner, days=90)
     txs = []
     for w in btc:
@@ -597,6 +666,9 @@ async def snapshot(owner: str = "tutti", force: bool = False) -> dict[str, Any]:
         "btc_security": btc_sec,
         "btc_moves": txs[:40],
         "history": history,
+        "ens_alerts": ens_alerts,
+        "ens_names": ens_names,
+        "saved": data.get("saved") is not False,
         "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item))
         + sum(1 for w in data.get("btc_wallets") or [] if filter_owner(owner, w.get("owner"))),
         "ok": not data.get("errors"),

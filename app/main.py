@@ -181,9 +181,9 @@ def _nft_hide_target(body: NftHideIn) -> tuple[str, str, str, str]:
 
 
 @app.get("/api/nfts")
-async def get_nfts(owner: str = Query("tutti")) -> dict[str, Any]:
+async def get_nfts(owner: str = Query("tutti"), refresh: bool = Query(False)) -> dict[str, Any]:
     try:
-        return await nft.collect_nfts(owner)
+        return await nft.collect_nfts(owner, force=refresh)
     except Exception as exc:
         raise _http_secret(exc) from exc
 
@@ -193,6 +193,7 @@ async def hide_nft(body: NftHideIn) -> dict[str, Any]:
     try:
         chain, contract, token_id, kind = _nft_hide_target(body)
         db.hide_nft(chain, contract, token_id, kind)
+        db.cache_delete_prefix("nfts:")
     except Exception as exc:
         raise _http_secret(exc) from exc
     return {"ok": True}
@@ -203,6 +204,7 @@ async def unhide_nft(body: NftHideIn) -> dict[str, Any]:
     try:
         chain, contract, token_id, kind = _nft_hide_target(body)
         db.unhide_nft(chain, contract, token_id, kind)
+        db.cache_delete_prefix("nfts:")
     except Exception as exc:
         raise _http_secret(exc) from exc
     return {"ok": True}
@@ -392,6 +394,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "errors": status.get("errors") or ["Nessun ricalcolo ancora. Premi Aggiorna sulla dashboard."],
             "protocol_security": [],
             "btc_security": [],
+            "ens": [],
         }
     try:
         data = await snapshot(owner, force=False)
@@ -403,6 +406,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "errors": [f"Avvisi non calcolati: {exc}"],
             "protocol_security": [],
             "btc_security": [],
+            "ens": [],
         }
     return {
         "ok": True,
@@ -410,6 +414,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
         "errors": data.get("errors") or [],
         "protocol_security": data.get("security") or [],
         "btc_security": data.get("btc_security") or [],
+        "ens": data.get("ens_alerts") or [],
     }
 
 
