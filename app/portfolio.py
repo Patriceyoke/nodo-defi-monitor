@@ -137,6 +137,8 @@ async def refresh(force: bool = False) -> dict[str, Any]:
         chains_ok: dict[str, bool] = {}
         from .protocols import CHAINS
         for chain_id, chain in CHAINS.items():
+            if not chain.get("scan_balances", True):
+                continue
             try:
                 await evm.eth_rpc("eth_blockNumber", [], chain=chain_id)
                 chains_ok[chain_id] = True

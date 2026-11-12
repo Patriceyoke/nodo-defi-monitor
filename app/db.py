@@ -89,6 +89,13 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    """Create missing tables only.
+
+    This must never DROP, recreate, or empty evm_wallets or btc_wallets.
+    App updates call init_db on startup and the saved wallets have to stay.
+    """
+    if "DROP TABLE" in SCHEMA.upper():
+        raise RuntimeError("Lo schema non può cancellare tabelle: i portafogli devono restare.")
     with connect() as conn:
         conn.executescript(SCHEMA)
         row = conn.execute("SELECT value FROM settings WHERE key='mcp_token'").fetchone()
@@ -105,6 +112,8 @@ def init_db() -> None:
             "currency": "USD",
             "fx_eur": "0.92",
             "gas_estimate_usd": "",
+            "nft_api_provider": "",
+            "nft_api_key": "",
         }
         for key, value in defaults.items():
             exists = conn.execute("SELECT 1 FROM settings WHERE key=?", (key,)).fetchone()
@@ -201,6 +210,84 @@ def delete_evm(wallet_id: int) -> bool:
     with connect() as conn:
         cur = conn.execute("DELETE FROM evm_wallets WHERE id=?", (wallet_id,))
         return cur.rowcount > 0
+
+
+# Settings that are local secrets or regenerated. They stay out of a backup file.
+_BACKUP_SKIP_SETTINGS = {"mcp_token"}
+
+
+def export_backup() -> dict[str, Any]:
+    """Wallets and settings as JSON. The MCP token is omitted."""
+    settings = {k: v for k, v in all_settings().items() if k not in _BACKUP_SKIP_SETTINGS}
+    return {
+        "kind": "nodo-defi-monitor-backup",
+        "version": 1,
+        "exported_at": int(time.time()),
+        "evm": [
+            {"label": w["label"], "address": w["address"], "owner": w["owner"]}
+            for w in list_evm()
+        ],
+        "btc": [
+            {
+                "label": w["label"],
+                "descriptor": w["descriptor"],
+                "owner": w["owner"],
+                "role": w.get("role") or "watch",
+                "alert_out_btc": w.get("alert_out_btc"),
+                "alert_min_btc": w.get("alert_min_btc"),
+                "hot_threshold_btc": w.get("hot_threshold_btc"),
+            }
+            for w in list_btc()
+        ],
+        "settings": settings,
+    }
+
+
+def import_backup(payload: dict[str, Any]) -> dict[str, int]:
+    """Merge a backup. Existing wallets are kept; nothing is deleted."""
+    if not isinstance(payload, dict):
+        raise ValueError("Il file non è un oggetto JSON.")
+    added_evm = 0
+    added_btc = 0
+    existing_evm = {(w["address"].lower(), w["owner"]) for w in list_evm()}
+    existing_btc = {(w["descriptor"].strip(), w["owner"]) for w in list_btc()}
+    for row in payload.get("evm") or []:
+        if not isinstance(row, dict):
+            continue
+        key = (str(row.get("address") or "").lower(), str(row.get("owner") or ""))
+        if key in existing_evm or not key[0]:
+            continue
+        add_evm(str(row.get("label") or "Importato"), key[0], key[1])
+        existing_evm.add(key)
+        added_evm += 1
+    for row in payload.get("btc") or []:
+        if not isinstance(row, dict):
+            continue
+        descriptor = str(row.get("descriptor") or "").strip()
+        owner = str(row.get("owner") or "")
+        if not descriptor or (descriptor, owner) in existing_btc:
+            continue
+        add_btc(
+            str(row.get("label") or "Importato"),
+            str(row.get("kind") or "xpub"),
+            descriptor,
+            owner,
+            role=str(row.get("role") or "watch"),
+            alert_out_btc=row.get("alert_out_btc"),
+            alert_min_btc=row.get("alert_min_btc"),
+            hot_threshold_btc=row.get("hot_threshold_btc"),
+        )
+        existing_btc.add((descriptor, owner))
+        added_btc += 1
+    updated = 0
+    settings = payload.get("settings") or {}
+    if isinstance(settings, dict):
+        for key, value in settings.items():
+            if key in _BACKUP_SKIP_SETTINGS or not isinstance(key, str):
+                continue
+            set_setting(key, "" if value is None else str(value))
+            updated += 1
+    return {"evm_added": added_evm, "btc_added": added_btc, "settings_updated": updated}
 
 
 def delete_btc(wallet_id: int) -> bool:

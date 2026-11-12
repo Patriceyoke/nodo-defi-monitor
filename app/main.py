@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import bitcoin, config, db
+from . import bitcoin, config, db, nft
 from .config import APP_NAME, APP_VERSION
 from .mcp_server import router as mcp_router
 from .portfolio import snapshot
@@ -62,7 +62,23 @@ class SettingsIn(BaseModel):
     fx_eur: float | None = None
     gas_estimate_usd: float | None = None
     tor_enabled: bool | None = None
+    nft_api_provider: str | None = None
+    nft_api_key: str | None = None
     rotate_token: bool = False
+
+
+def _looks_like_wallet_secret(text: str) -> bool:
+    from .validation import looks_like_secret
+    # A 64-hex API key is not a wallet secret in this field; mnemonics and xprv are.
+    if looks_like_secret(text) and not __import__("re").fullmatch(r"(0x)?[0-9a-fA-F]{64}", text.strip()):
+        return True
+    return False
+
+
+def _mask_secret(token: str) -> str:
+    if len(token) > 8:
+        return token[:4] + "…" + token[-4:]
+    return "…" if token else ""
 
 
 def _http_secret(exc: Exception) -> HTTPException:
@@ -95,6 +111,9 @@ async def get_settings() -> dict[str, Any]:
         "fx_eur": float(raw.get("fx_eur") or 0.92),
         "gas_estimate_usd": raw.get("gas_estimate_usd") or "",
         "tor_enabled": raw.get("tor_enabled") or "",
+        "nft_api_provider": raw.get("nft_api_provider") or "",
+        "nft_api_key_set": bool(raw.get("nft_api_key")),
+        "nft_api_key_masked": _mask_secret(raw.get("nft_api_key") or ""),
         "mcp_token_masked": masked,
         "has_token": bool(token),
         "readonly": True,
@@ -120,6 +139,16 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         db.set_setting("gas_estimate_usd", "" if body.gas_estimate_usd <= 0 else str(body.gas_estimate_usd))
     if body.tor_enabled is not None:
         db.set_setting("tor_enabled", "1" if body.tor_enabled else "0")
+    if body.nft_api_provider is not None:
+        provider = body.nft_api_provider.strip().lower()
+        if provider not in {"", "alchemy", "opensea"}:
+            raise HTTPException(400, "Fonte NFT non valida")
+        db.set_setting("nft_api_provider", provider)
+    if body.nft_api_key is not None:
+        key = body.nft_api_key.strip()
+        if key and _looks_like_wallet_secret(key):
+            raise HTTPException(400, "La chiave API non può essere una seed o una chiave privata.")
+        db.set_setting("nft_api_key", key)
     token = None
     if body.rotate_token:
         token = db.rotate_mcp_token()
@@ -128,6 +157,68 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         out["mcp_token"] = token
         out["note"] = "Copia il token ora: verrà mostrato solo questa volta."
     return out
+
+
+@app.get("/api/nfts")
+async def get_nfts(owner: str = Query("tutti")) -> dict[str, Any]:
+    try:
+        return await nft.collect_nfts(owner)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+
+
+@app.get("/api/backup")
+async def download_backup() -> dict[str, Any]:
+    return db.export_backup()
+
+
+@app.post("/api/backup")
+async def upload_backup(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        cleaned = _clean_backup(body)
+        result = db.import_backup(cleaned)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True, **result}
+
+
+def _clean_backup(body: dict[str, Any]) -> dict[str, Any]:
+    from .validation import classify_btc_key, normalize_eth, normalize_owner
+
+    if not isinstance(body, dict):
+        raise ValueError("Il file non è un oggetto JSON.")
+    evm_rows = []
+    for row in body.get("evm") or []:
+        if not isinstance(row, dict):
+            continue
+        evm_rows.append(
+            {
+                "label": str(row.get("label") or "Importato")[:80],
+                "address": normalize_eth(str(row.get("address") or "")),
+                "owner": normalize_owner(str(row.get("owner") or "")),
+            }
+        )
+    btc_rows = []
+    for row in body.get("btc") or []:
+        if not isinstance(row, dict):
+            continue
+        descriptor = str(row.get("descriptor") or "")
+        kind = classify_btc_key(descriptor)
+        bitcoin.derive_addresses(descriptor, gap=1)
+        btc_rows.append(
+            {
+                "label": str(row.get("label") or "Importato")[:80],
+                "descriptor": descriptor.strip(),
+                "owner": normalize_owner(str(row.get("owner") or "")),
+                "kind": kind,
+                "role": str(row.get("role") or "watch"),
+                "alert_out_btc": row.get("alert_out_btc"),
+                "alert_min_btc": row.get("alert_min_btc"),
+                "hot_threshold_btc": row.get("hot_threshold_btc"),
+            }
+        )
+    settings = body.get("settings") if isinstance(body.get("settings"), dict) else {}
+    return {"evm": evm_rows, "btc": btc_rows, "settings": settings}
 
 
 @app.get("/api/wallets")

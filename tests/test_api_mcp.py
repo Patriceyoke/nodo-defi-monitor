@@ -46,7 +46,7 @@ def test_mcp_initialize_and_tools(client):
     names = {t["name"] for t in r.json()["result"]["tools"]}
     assert names == {
         "get_portfolio", "get_balances", "get_apys", "check_switch",
-        "get_alerts", "get_history", "get_btc_wallets", "get_btc_security",
+        "get_alerts", "get_history", "get_btc_wallets", "get_btc_security", "get_nfts",
     }
     assert "sign" not in names and "send" not in names
 

@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: 0.92 };
+const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", btcTab: "all", data: null, fx: 0.92, nfts: null, showHiddenNfts: false };
 const charts = {};
 
 const $ = (sel) => document.querySelector(sel);
@@ -40,6 +40,7 @@ function bindSegmented() {
       el.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === btn));
       if (key === "currency") persistCurrency(state.currency);
       render();
+      if (key === "owner") loadNfts();
     });
   });
 }
@@ -324,6 +325,71 @@ function renderBtc(data) {
   renderRows($("#btc-security"), data.btc_security || []);
 }
 
+function moneyOrMissing(usd) {
+  if (usd == null || Number.isNaN(Number(usd))) return "prezzo non disponibile";
+  return money(usd);
+}
+function nativeOrMissing(amount, symbol) {
+  if (amount == null) return "non disponibile";
+  return Number(amount).toLocaleString("it-IT", { maximumFractionDigits: 4 }) + (symbol ? " " + symbol : "");
+}
+function renderNfts() {
+  const box = $("#nft-list");
+  const caption = $("#nft-caption");
+  if (!box) return;
+  const data = state.nfts;
+  if (!data) {
+    box.innerHTML = `<p class="mini">Caricamento NFT…</p>`;
+    return;
+  }
+  const items = (data.items || []).filter((item) => state.showHiddenNfts || !item.hidden);
+  if (caption) {
+    caption.textContent = (data.limit_note || "") + " " + (data.listing_note || "");
+  }
+  const hiddenCount = (data.items || []).filter((item) => item.hidden).length;
+  const btn = $("#btn-nft-hidden");
+  if (btn) btn.textContent = state.showHiddenNfts ? "Nascondi i filtrati" : `Mostra nascosti (${hiddenCount})`;
+  if (!items.length) {
+    box.innerHTML = `<p class="mini">${data.errors && data.errors.length ? escapeHtml(data.errors.join(" ")) : "Nessun NFT in questa vista, oppure sono stati filtrati come spam."}</p>`;
+    return;
+  }
+  const groups = new Map();
+  items.forEach((item) => {
+    const key = state.owner === "tutti" ? item.owner : "vista";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  });
+  box.innerHTML = [...groups.entries()].map(([key, rows]) => `
+    ${key === "vista" ? "" : `<h3>${OWNER_LABEL[key] || escapeHtml(key)}</h3>`}
+    <div class="nft-grid">
+      ${rows.map((item) => `
+        <article class="nft-card ${item.hidden ? "hidden-nft" : ""}">
+          ${item.image ? `<img alt="" src="${escapeHtml(item.image)}" />` : `<div class="empty">senza immagine</div>`}
+          <h3>${escapeHtml(item.name || "Senza nome")}</h3>
+          <p class="mini">${escapeHtml(item.collection || "")} · ${escapeHtml(item.chain_label || item.chain || "")} · ${OWNER_LABEL[item.owner] || ""}</p>
+          <p class="mini">Floor: ${nativeOrMissing(item.floor_native, item.native_symbol)} · ${moneyOrMissing(item.floor_usd)}</p>
+          <p class="mini">Vendite recenti (media 24h): ${nativeOrMissing(item.recent_sale_native, item.native_symbol)} · ${moneyOrMissing(item.recent_sale_usd)}</p>
+          <p class="mini">In vendita: ${item.listed == null ? "non disponibile" : item.listed ? nativeOrMissing(item.list_price_native, item.native_symbol) : "no"}</p>
+          <p><strong>Suggerimento:</strong> ${item.suggestion_usd == null && item.suggestion_native == null ? "prezzo non disponibile" : nativeOrMissing(item.suggestion_native, item.native_symbol) + " · " + moneyOrMissing(item.suggestion_usd)}</p>
+          <p class="mini">${escapeHtml(item.suggestion_reason || "")}</p>
+          ${item.hidden ? `<p class="mini">Nascosto: ${escapeHtml(item.hidden_reason || "")}</p>` : ""}
+        </article>
+      `).join("")}
+    </div>
+  `).join("");
+}
+
+async function loadNfts() {
+  const box = $("#nft-list");
+  if (box && !state.nfts) box.innerHTML = `<p class="mini">Caricamento NFT…</p>`;
+  try {
+    state.nfts = await api("/api/nfts?owner=" + encodeURIComponent(state.owner));
+    renderNfts();
+  } catch (err) {
+    if (box) box.innerHTML = `<p class="mini">${escapeHtml(err.message)}</p>`;
+  }
+}
+
 function render() {
   const data = state.data;
   if (!data) return;
@@ -354,6 +420,7 @@ async function load(force) {
     state.data = data;
     if (data.fx_eur) state.fx = data.fx_eur;
     render();
+    loadNfts();
   } catch (err) {
     $("#errors").innerHTML = `<div class="errbar">${escapeHtml(err.message)}</div>`;
   } finally {
@@ -372,6 +439,14 @@ async function loadSettings() {
   form.eth_rpc_url.value = s.eth_rpc_url || "";
   form.electrs_host.value = s.electrs_host || "";
   form.electrs_port.value = s.electrs_port || 50001;
+  if (form.nft_api_provider) form.nft_api_provider.value = s.nft_api_provider || "";
+  if (form.nft_api_key) form.nft_api_key.value = "";
+  const keyLine = $("#nft-key-line");
+  if (keyLine) {
+    keyLine.textContent = s.nft_api_key_set
+      ? `Chiave NFT salvata nel database locale (${s.nft_api_provider || "fonte"}): ${s.nft_api_key_masked}`
+      : "Chiave NFT: non impostata. Senza chiave la lista funziona lo stesso e il prezzo può restare non disponibile.";
+  }
   form.gas_estimate_usd.value = s.gas_estimate_usd || "";
   form.tor_enabled.value = s.tor_enabled || "";
   $("#token-line").textContent = "Token MCP (mascherato): " + (s.mcp_token_masked || "—") + ". Lo vedi per intero solo quando lo generi di nuovo.";
@@ -412,12 +487,49 @@ async function boot() {
       electrs_port: Number(f.electrs_port || 50001),
       gas_estimate_usd: f.gas_estimate_usd === "" ? 0 : Number(f.gas_estimate_usd),
       tor_enabled: f.tor_enabled === "" ? null : f.tor_enabled === "1",
+      nft_api_provider: f.nft_api_provider || "",
     };
+    if (f.nft_api_key) body.nft_api_key = f.nft_api_key;
     try {
       await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
       await load(true);
       await loadSettings();
     } catch (err) { alert(err.message); }
+  });
+  $("#btn-nft-hidden").addEventListener("click", () => {
+    state.showHiddenNfts = !state.showHiddenNfts;
+    renderNfts();
+  });
+  $("#btn-clear-nft-key").addEventListener("click", async () => {
+    try {
+      await api("/api/settings", { method: "PUT", body: JSON.stringify({ nft_api_key: "", nft_api_provider: "" }) });
+      await loadSettings();
+    } catch (err) { alert(err.message); }
+  });
+  $("#btn-export").addEventListener("click", async () => {
+    try {
+      const data = await api("/api/backup");
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "nodo-defi-monitor-backup.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert(err.message); }
+  });
+  $("#import-file").addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const body = JSON.parse(text);
+      const result = await api("/api/backup", { method: "POST", body: JSON.stringify(body) });
+      alert(`Importati ${result.evm_added} indirizzi e ${result.btc_added} conti Bitcoin. I portafogli già presenti non sono stati cancellati.`);
+      await loadSettings();
+      await load(true);
+    } catch (err) { alert(err.message); }
+    ev.target.value = "";
   });
   $("#btn-rotate").addEventListener("click", async () => {
     try {

@@ -28,6 +28,26 @@ CHAINS: dict[str, dict] = {
             "https://1rpc.io/bnb",
         ],
     },
+    # Extra chains are for the NFT section. scan_balances stays off so the DeFi
+    # refresh does not probe them or warn when their RPC is quiet.
+    "polygon": {
+        "label": "Polygon",
+        "llama": "polygon",
+        "scan_balances": False,
+        "rpcs": ["https://polygon-bor.publicnode.com"],
+    },
+    "arbitrum": {
+        "label": "Arbitrum",
+        "llama": "arbitrum",
+        "scan_balances": False,
+        "rpcs": ["https://arbitrum-one.publicnode.com"],
+    },
+    "base": {
+        "label": "Base",
+        "llama": "base",
+        "scan_balances": False,
+        "rpcs": ["https://base.publicnode.com"],
+    },
 }
 
 WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"

@@ -111,6 +111,17 @@
       </section>
     </div>
 
+    <section class="card" id="nft">
+      <div class="card-head">
+        <div>
+          <h2>NFT</h2>
+          <p class="caption" id="nft-caption">Sola lettura. Il prezzo suggerito è un riferimento, non un ordine: da qui non si mette in vendita nulla.</p>
+        </div>
+        <button class="btn ghost" id="btn-nft-hidden" type="button">Mostra nascosti</button>
+      </div>
+      <div id="nft-list"><p class="mini">Caricamento NFT…</p></div>
+    </section>
+
     <section class="card" id="btc">
       <div class="card-head">
         <div>
@@ -181,11 +192,33 @@
           </select>
         </div>
       </div>
+      <label>Chiave API NFT (facoltativa, Alchemy oppure OpenSea)</label>
+      <div class="row">
+        <div>
+          <label>Fonte della chiave</label>
+          <select name="nft_api_provider">
+            <option value="">Nessuna: solo fonti pubbliche</option>
+            <option value="alchemy">Alchemy</option>
+            <option value="opensea">OpenSea</option>
+          </select>
+        </div>
+        <div>
+          <label>Chiave (vuoto = non cambiare)</label>
+          <input name="nft_api_key" type="password" autocomplete="off" placeholder="non è una chiave del portafoglio" />
+        </div>
+      </div>
+      <p class="mini" id="nft-key-line">Chiave NFT: non impostata. Senza chiave la lista funziona lo stesso e il prezzo può restare non disponibile.</p>
+      <button class="btn" type="button" id="btn-clear-nft-key">Rimuovi chiave NFT</button>
       <p class="mini" id="token-line">Token MCP: —</p>
       <button class="btn primary" type="submit">Salva impostazioni</button>
       <button class="btn" type="button" id="btn-rotate">Genera un nuovo token MCP</button>
     </form>
 
+    <h3 style="margin-top:22px">Copia di indirizzi e impostazioni</h3>
+    <p class="caption">Il file resta sul tuo computer. Contiene gli indirizzi pubblici e, se l'hai salvata, la chiave API NFT. Non contiene il token MCP. L'importazione aggiunge, non cancella.</p>
+    <button class="btn" type="button" id="btn-export">Esporta JSON</button>
+    <label>Importa JSON</label>
+    <input id="import-file" type="file" accept="application/json,.json" />
     <h3 style="margin-top:22px">Indirizzi Ethereum</h3>
     <form id="form-evm">
       <div class="row">

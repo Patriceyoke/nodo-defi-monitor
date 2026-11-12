@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import db
 from .config import APP_VERSION
+from .nft import collect_nfts
 from .portfolio import snapshot
 from .validation import normalize_owner
 
@@ -76,6 +77,17 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {"owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"}},
+        },
+    },
+    {
+        "name": "get_nfts",
+        "description": "NFT in sola lettura dei portafogli salvati, con spam nascosto e un prezzo suggerito. Non mette in vendita e non firma.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"},
+                "include_hidden": {"type": "boolean", "default": False},
+            },
         },
     },
     {
@@ -172,6 +184,38 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
     if name == "get_btc_wallets":
         data = await snapshot(owner)
         return _text({"owner": owner, "node": data["node"], "btc_price_usd": data["btc_price_usd"], "wallets": data["btc_wallets"], "moves": data["btc_moves"]})
+    if name == "get_nfts":
+        data = await collect_nfts(owner)
+        include_hidden = bool(args.get("include_hidden"))
+        items = data["items"] if include_hidden else [item for item in data["items"] if not item.get("hidden")]
+        return _text(
+            {
+                "owner": owner,
+                "readonly": True,
+                "source": data.get("source"),
+                "limit_note": data.get("limit_note"),
+                "listing_note": data.get("listing_note"),
+                "errors": data.get("errors"),
+                "nfts": [
+                    {
+                        "owner": item.get("owner"),
+                        "chain": item.get("chain"),
+                        "collection": item.get("collection"),
+                        "name": item.get("name"),
+                        "token_id": item.get("token_id"),
+                        "hidden": item.get("hidden"),
+                        "hidden_reason": item.get("hidden_reason"),
+                        "floor_usd": item.get("floor_usd"),
+                        "recent_sale_usd": item.get("recent_sale_usd"),
+                        "listed": item.get("listed"),
+                        "list_price_usd": item.get("list_price_usd"),
+                        "suggestion_usd": item.get("suggestion_usd"),
+                        "suggestion_reason": item.get("suggestion_reason"),
+                    }
+                    for item in items
+                ],
+            }
+        )
     if name == "get_btc_security":
         data = await snapshot(owner)
         return _text({"owner": owner, "node": data["node"], "checks": data["btc_security"]})
