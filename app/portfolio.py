@@ -1,7 +1,8 @@
-"""Assemble the portfolio view: DeFi positions, Bitcoin, history, alerts, switches."""
+"""Assemble the portfolio view: DeFi positions, history, alerts, switches."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -127,6 +128,17 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
         "position_summary": {"io": {"count": 0, "usd": 0.0}, "moglie": {"count": 0, "usd": 0.0}},
         "sources": {},
     }
+
+
+def _dismissed_alerts() -> list[str]:
+    raw = db.get_setting("alert_dismissed", "[]") or "[]"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if isinstance(item, str)]
 
 
 def _positions_open_setting() -> bool:
@@ -700,6 +712,7 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "ens_alerts": ens_alerts,
         "ens_names": ens_names,
         "security_summary": _security_summary(owner),
+        "alert_dismissed": _dismissed_alerts(),
         "saved": data.get("saved") is not False,
         "kept_previous": bool(data.get("kept_previous")),
         "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item)),

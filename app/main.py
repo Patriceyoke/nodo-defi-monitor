@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,7 @@ class SettingsIn(BaseModel):
     outflow_drop_pct: float | None = None
     outflow_usd: float | None = None
     positions_open: bool | None = None
+    alert_dismissed: list[str] | None = None
     rotate_token: bool = False
 
 
@@ -132,6 +134,15 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         db.set_setting("outflow_usd", str(body.outflow_usd))
     if body.positions_open is not None:
         db.set_setting("positions_open", "1" if body.positions_open else "0")
+    if body.alert_dismissed is not None:
+        keys = []
+        for item in body.alert_dismissed[:200]:
+            text = str(item or "").strip().lower()
+            parts = text.split("|")
+            if len(parts) != 4 or any(len(part) > 80 for part in parts):
+                continue
+            keys.append("|".join(parts))
+        db.set_setting("alert_dismissed", json.dumps(keys))
     if body.currency is not None:
         cur = body.currency.upper()
         if cur not in {"USD", "THB"}:

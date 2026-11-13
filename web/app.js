@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", period: "30", currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
+const state = { owner: "tutti", chartOwner: "tutti", currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
 let loadGen = 0;
 let applyingPositions = false;
 const charts = {};
@@ -82,15 +82,41 @@ function liveSecuritySummary(fallback) {
   return pack.view || pack;
 }
 
+function dismissedAlerts(data) {
+  const raw = data && data.alert_dismissed;
+  return Array.isArray(raw) ? raw : [];
+}
+function currentRiskyKeys(summary) {
+  return (summary && summary.risky_keys) || [];
+}
+function bannerHasNew(summary, data) {
+  const current = currentRiskyKeys(summary);
+  if (!current.length) return false;
+  const known = new Set(dismissedAlerts(data));
+  return current.some((key) => !known.has(key));
+}
 function renderSecuritySummary(summary) {
   const box = $("#security-summary");
   if (!box) return;
-  const visible = summary && Number(summary.visible || 0);
-  if (!visible) {
+  const approvals = summary && Number(summary.approvals || 0);
+  if (!approvals || !bannerHasNew(summary, state.data)) {
     box.innerHTML = "";
     return;
   }
-  box.innerHTML = `<div class="callout warn"><a href="#wallet-security" data-goto-security>${escapeHtml(securityLine(summary))} · Vai a Sicurezza</a></div>`;
+  box.innerHTML = `<div class="callout warn alert-banner"><a href="#wallet-security" data-goto-security>${escapeHtml(securityLine(summary))} · Vai a Sicurezza</a><button class="btn ghost" id="btn-dismiss-alert" type="button">Nascondi avviso</button></div>`;
+}
+async function dismissAlert() {
+  const pack = (state.data && state.data.security_summary) || {};
+  const tutti = (pack.tutti && pack.tutti.risky_keys) || [];
+  const view = currentRiskyKeys(liveSecuritySummary(pack));
+  const keys = [...new Set([...tutti, ...view])];
+  if (state.data) state.data.alert_dismissed = keys;
+  renderSecuritySummary(liveSecuritySummary(pack));
+  try {
+    await api("/api/settings", { method: "PUT", body: JSON.stringify({ alert_dismissed: keys }) });
+  } catch (err) {
+    showBanner([err && err.message ? err.message : "Non sono riuscito a nascondere l'avviso."]);
+  }
 }
 
 function updatedClock(ts) {
@@ -148,6 +174,40 @@ function commonChart() {
   Chart.defaults.color = "#475569";
 }
 
+function renderSplit(data) {
+  const owner = state.chartOwner || "tutti";
+  const rows = (data.positions || []).filter((row) => owner === "tutti" || row.owner === owner);
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const value = Number(row.usd) || 0;
+    if (value <= 0) return;
+    const label = `${row.protocol || "Posizione"} · ${row.asset || ""}`.trim();
+    grouped.set(label, (grouped.get(label) || 0) + value);
+  });
+  const parts = [...grouped.entries()].sort((a, b) => b[1] - a[1]);
+  const total = parts.reduce((sum, item) => sum + item[1], 0);
+  const legend = $("#chart-legend");
+  const canvas = document.getElementById("chart-split");
+  if (!parts.length || !canvas) {
+    if (charts["chart-split"]) { charts["chart-split"].destroy(); charts["chart-split"] = null; }
+    if (legend) legend.innerHTML = `<li class="mini">Nessuna posizione con un valore in questa vista.</li>`;
+    return;
+  }
+  const colors = parts.map((_, index) => PALETTE[index % PALETTE.length]);
+  if (legend) {
+    legend.innerHTML = parts.map(([label, value], index) => `
+      <li><span class="swatch" style="background:${colors[index]}"></span>${escapeHtml(label)} · ${pct((value / total) * 100)}</li>
+    `).join("");
+  }
+  paintChart("chart-split", {
+    type: "doughnut",
+    data: { labels: parts.map(([label]) => label), datasets: [{ data: parts.map((item) => item[1]), backgroundColor: colors, borderWidth: 0 }] },
+    options: {
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${c.label}: ${money(c.raw)} · ${pct((c.raw / total) * 100)}` } } },
+      cutout: "58%",
+    },
+  });
+}
 function renderMetrics(data) {
   const box = $("#owner-cards");
   if (!box) return;
@@ -259,15 +319,15 @@ function renderApy(data) {
 }
 
 function renderHist(data) {
-  const days = Number(state.period);
+  const days = 7;
   const cutoff = (data.ts || Math.floor(Date.now() / 1000)) - days * 86400;
   const wanted = state.owner === "tutti" ? "tutti" : state.owner;
   const rawHist = (data.history || []).filter((h) => h.ts >= cutoff && (!h.owner || h.owner === wanted));
   const byBucket = new Map();
   rawHist.forEach((h) => byBucket.set(Math.floor(h.ts / 3600), h));
-  const hist = [...byBucket.values()].slice(-12).reverse();
+  const hist = [...byBucket.values()].reverse();
   const caption = $("#hist-caption");
-  if (caption) caption.textContent = `Ultimi punti locali, ${days} giorni, ${OWNER_LABEL[state.owner]}.`;
+  if (caption) caption.textContent = `Ultimi 7 giorni, ${OWNER_LABEL[state.owner]}.`;
   const body = $("#hist-body");
   if (!body) return;
   if (!hist.length) {
@@ -609,6 +669,7 @@ function render() {
     });
     $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.wallet_count));
     renderMetrics(data);
+    renderSplit(data);
     renderPositions(data);
     renderHist(data);
     renderSwitches(data);
@@ -670,10 +731,9 @@ async function load(force, extra) {
   if (force) state.refreshing = true;
   else state.stale = true;
   if (state.data) render();
-  const owner = encodeURIComponent(state.owner);
   const path = force
-    ? "/api/refresh?owner=" + owner + (full ? "&full=1" : "")
-    : "/api/portfolio?owner=" + owner;
+    ? "/api/refresh?owner=tutti" + (full ? "&full=1" : "")
+    : "/api/portfolio?owner=tutti";
   const opts = force ? { method: "POST" } : {};
   try {
     const data = await api(path, opts);
@@ -752,6 +812,15 @@ async function boot() {
   commonChart();
   bindSegmented();
   $("#btn-refresh").addEventListener("click", () => load(true, { full: true }));
+  document.addEventListener("click", (ev) => {
+    const dismiss = ev.target.closest("#btn-dismiss-alert");
+    if (dismiss) { ev.preventDefault(); dismissAlert(); }
+    const chartBtn = ev.target.closest("#chart-owner button");
+    if (!chartBtn) return;
+    state.chartOwner = chartBtn.dataset.value;
+    chartBtn.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === chartBtn));
+    if (state.data) renderSplit(state.data);
+  });
   $("#btn-settings").addEventListener("click", async () => { await loadSettings(); openSettings(true); });
   $("#btn-close-settings").addEventListener("click", () => openSettings(false));
   $("#settings-backdrop").addEventListener("click", () => openSettings(false));

@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from app.security import (
+    banner_has_new,
     PERMIT2,
     aave_frozen_paused,
     annotate_hidden,
@@ -110,6 +111,14 @@ def test_only_risky_approvals_count_as_todo(tmp_path, monkeypatch):
     assert [row["risk_class"] for row in view["approvals"]] == ["rischiosa", "normale"]
     assert view["approvals"][0]["risk_reason"]
     assert view["summary"]["approvals"] == 1
+
+
+def test_dismissed_banner_returns_only_for_a_new_approval():
+    seen = ["0x" + "11" * 20 + "|ethereum|0x" + "22" * 20 + "|0x" + "33" * 20]
+    assert banner_has_new(seen, seen) is False
+    fresh = seen + ["0x" + "11" * 20 + "|ethereum|0x" + "44" * 20 + "|0x" + "55" * 20]
+    assert banner_has_new(fresh, seen) is True
+    assert banner_has_new([], seen) is False
 
 
 def test_unlimited_allowance_is_capped_by_the_balance():

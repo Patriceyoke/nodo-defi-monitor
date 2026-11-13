@@ -45,6 +45,22 @@
       <p class="empty hidden" id="empty-state">Nessun indirizzo ancora. Apri Impostazioni e aggiungi solo indirizzi Ethereum pubblici, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
     </section>
 
+    <section class="card" id="split">
+      <div class="card-head">
+        <div>
+          <h2>Ripartizione</h2>
+          <p class="caption">Quota di ogni posizione sul valore. Il selettore cambia solo questo grafico.</p>
+        </div>
+        <div class="segmented" id="chart-owner">
+          <button data-value="tutti" class="on" type="button">Combinato</button>
+          <button data-value="io" type="button">Io</button>
+          <button data-value="moglie" type="button">Moglie</button>
+        </div>
+      </div>
+      <div class="chart-box donut"><canvas id="chart-split"></canvas></div>
+      <ul class="legend" id="chart-legend"></ul>
+    </section>
+
     <section class="card" id="positions">
       <h2>Posizioni</h2>
       <p class="caption" id="pos-summary">Una tabella per titolare. Il reddito annuo è valore per APY attuale.</p>
@@ -55,12 +71,7 @@
       <div class="card-head">
         <div>
           <h2>Variazioni recenti</h2>
-          <p class="caption" id="hist-caption">Storico locale di questo server.</p>
-        </div>
-        <div class="segmented" data-key="period">
-          <button data-value="7" type="button">7 giorni</button>
-          <button data-value="30" class="on" type="button">30 giorni</button>
-          <button data-value="90" type="button">90 giorni</button>
+          <p class="caption" id="hist-caption">Ultimi 7 giorni, da questo server.</p>
         </div>
       </div>
       <div class="table-scroll">

@@ -80,6 +80,7 @@ def test_upgrade_keeps_addresses_owners_and_settings(isolated_db):
     db.add_evm("Esempio", address, "moglie")
     db.set_setting("eth_rpc_url", "http://rpc.example")
     db.set_setting("positions_open", "0")
+    db.set_setting("alert_dismissed", '["0x' + "ab" * 20 + '|ethereum|0x' + "cd" * 20 + '|0x' + "ef" * 20 + '"]')
     db.hide_approval(address, "ethereum", "0x" + "cd" * 20, "0x" + "ef" * 20, "unlimited")
     db.init_db()
     saved = db.list_evm()
@@ -89,6 +90,7 @@ def test_upgrade_keeps_addresses_owners_and_settings(isolated_db):
     assert saved[0]["label"] == "Esempio"
     assert db.get_setting("eth_rpc_url") == "http://rpc.example"
     assert db.get_setting("positions_open") == "0"
+    assert "ab" * 20 in db.get_setting("alert_dismissed")
     hides = db.list_approval_hides()
     assert len(hides) == 1
     assert hides[0]["wallet"] == address.lower()

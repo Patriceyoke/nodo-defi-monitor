@@ -474,6 +474,20 @@ def approval_identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
+def approval_key(row: dict[str, Any]) -> str:
+    return "|".join(approval_identity(row))
+
+
+def risky_keys(rows: list[dict[str, Any]]) -> list[str]:
+    return sorted({approval_key(row) for row in _risky_visible(rows) if approval_key(row).strip("|")})
+
+
+def banner_has_new(current: list[str], dismissed: list[str] | None) -> bool:
+    """True when a risky approval is on screen that was not in the dismissed set."""
+    known = set(dismissed or [])
+    return any(key and key not in known for key in current)
+
+
 def dedupe_approvals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One row per wallet, chain, token and spender."""
     rank = {"ok": 0, "warning": 1, "danger": 2}
@@ -507,7 +521,7 @@ def annotate_hidden(rows: list[dict[str, Any]], hides: list[dict[str, Any]] | No
     return out
 
 
-def security_summary(owner: str = "tutti") -> dict[str, int]:
+def security_summary(owner: str = "tutti") -> dict[str, Any]:
     owner = normalize_owner(owner, allow_all=True)
     report = cached_report() or {}
     approvals = annotate_risk(
@@ -525,6 +539,7 @@ def security_summary(owner: str = "tutti") -> dict[str, int]:
         "incidents": len(incidents),
         "outflows": len(outflows),
         "visible": len(visible_approvals) + len(incidents) + len(outflows),
+        "risky_keys": risky_keys(approvals),
     }
 
 
@@ -1000,6 +1015,7 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
         "incidents": len(incidents),
         "outflows": len(outflows),
         "visible": len(visible_approvals) + len(incidents) + len(outflows),
+        "risky_keys": risky_keys(approvals),
     }
     return {
         "owner": owner,
