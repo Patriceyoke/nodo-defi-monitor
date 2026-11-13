@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.5.4" />
+  <link rel="icon" href="/static/favicon.svg?v=0.5.4" type="image/svg+xml" />
 </head>
 <body>
   <header class="appbar">
@@ -152,6 +152,10 @@
       <button class="btn ghost" id="btn-close-settings" type="button">Chiudi</button>
     </div>
     <p class="caption">Inserisci solo indirizzi Ethereum pubblici, con titolare Io o Moglie. Non incollare mai una seed o una chiave privata: verranno rifiutate.</p>
+    <div class="callout warn">
+      <strong>Disinstallare cancella i dati</strong>
+      Su Umbrel, disinstallare l'app cancella gli indirizzi salvati. Per una versione nuova usa Aggiorna, non Disinstalla. Tieni una copia con Esporta indirizzi.
+    </div>
     <form id="form-settings">
       <label>RPC Ethereum (facoltativo, altrimenti un RPC pubblico)</label>
       <input name="eth_rpc_url" placeholder="https://… o il tuo nodo locale" />
@@ -191,6 +195,17 @@
       <button class="btn" type="button" id="btn-rotate">Genera un nuovo token MCP</button>
     </form>
 
+    <h3 style="margin-top:22px">Copia degli indirizzi</h3>
+    <p class="caption">Solo indirizzo, titolare ed etichetta. Nessuna impostazione, nessuna chiave, nessun token. L'importazione aggiunge e salta i doppioni.</p>
+    <button class="btn" type="button" id="btn-export-addresses">Esporta indirizzi</button>
+    <label>Importa un file JSON o di testo</label>
+    <input id="import-addresses-file" type="file" accept="application/json,.json,.txt,text/plain" />
+    <label for="import-addresses-text">Oppure incolla un elenco, una riga per indirizzo</label>
+    <p class="mini">Formato: indirizzo, titolare, etichetta. Il titolare è io oppure moglie. L'etichetta è facoltativa.</p>
+    <textarea id="import-addresses-text" rows="4" spellcheck="false" placeholder="0x1111111111111111111111111111111111111111, io, Esempio&#10;0x000000000000000000000000000000000000dEaD, moglie"></textarea>
+    <button class="btn" type="button" id="btn-import-addresses">Importa elenco</button>
+    <p class="mini" id="import-addresses-result"></p>
+
     <h3 style="margin-top:22px">Copia di indirizzi e impostazioni</h3>
     <p class="caption">Il file resta sul tuo computer. Contiene gli indirizzi Ethereum pubblici e, se l'hai salvata, la chiave API NFT. Non contiene il token MCP e non contiene chiavi private. L'importazione aggiunge, non cancella.</p>
     <button class="btn" type="button" id="btn-export">Esporta JSON</button>
@@ -213,7 +228,7 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.5.4"></script>
+  <script src="/static/app.js?v=0.5.4"></script>
 </body>
 </html>

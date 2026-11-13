@@ -169,7 +169,7 @@ tr:hover td { background: #F8FAFC; }
 .chart-box.owners { height: 220px; margin-bottom: 8px; }
 .chart-box.tall { height: 320px; }
 .mini { font-size: 0.82rem; color: var(--muted); }
-input, select {
+input, select, textarea {
   width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line);
   font-family: inherit; font-size: 1rem; background: white;
 }

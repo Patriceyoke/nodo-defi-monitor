@@ -4,13 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -18,7 +19,7 @@ from . import config, db, nft, security
 from .config import APP_NAME, APP_VERSION
 from .mcp_server import router as mcp_router
 from .portfolio import cached_snapshot, failed_view, invalidate, refresh_status, snapshot
-from .validation import RejectedSecretError, normalize_eth, normalize_owner
+from .validation import RejectedSecretError, normalize_eth, normalize_owner, prepare_address_import
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 _log = logging.getLogger("app")
@@ -516,8 +517,48 @@ API_ROUTES = [
     "POST /api/nfts/unhide",
     "GET /api/backup",
     "POST /api/backup",
+    "GET /api/addresses/export",
+    "POST /api/addresses/import",
     "POST /mcp",
 ]
+
+
+_STATIC_REF = re.compile(r'((?:href|src)=")/static/([^"?]+)(?:\?[^"]*)?"')
+
+
+def versioned_index() -> str:
+    """Every static URL carries the app version so a new release is a new URL."""
+    raw = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    version = APP_VERSION
+    return _STATIC_REF.sub(lambda match: f'{match.group(1)}/static/{match.group(2)}?v={version}"', raw)
+
+
+@app.middleware("http")
+async def cache_headers(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith("/index.html"):
+        response.headers["Cache-Control"] = "no-store"
+    elif path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.get("/api/addresses/export")
+async def download_addresses() -> dict[str, Any]:
+    return db.export_addresses()
+
+
+@app.post("/api/addresses/import")
+async def upload_addresses(body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        rows, errors = prepare_address_import(body)
+        result = db.import_addresses(rows)
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    if result["added"]:
+        invalidate()
+    return {"ok": True, "added": result["added"], "skipped": result["skipped"], "invalid": len(errors), "errors": errors[:8]}
 
 
 @app.get("/api")
@@ -542,5 +583,5 @@ if WEB_DIR.is_dir():
 
 
 @app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+async def index() -> HTMLResponse:
+    return HTMLResponse(versioned_index(), headers={"Cache-Control": "no-store"})

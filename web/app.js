@@ -1073,6 +1073,77 @@ async function boot() {
       await loadSettings();
     } catch (err) { alert(err.message); }
   });
+  function addressImportMessage(result) {
+    const added = Number(result.added || 0);
+    const skipped = Number(result.skipped || 0);
+    const invalid = Number(result.invalid || 0);
+    const parts = [added === 1 ? "Aggiunto 1 indirizzo." : `Aggiunti ${added} indirizzi.`];
+    if (skipped === 1) parts.push("1 già presente, ignorato.");
+    else if (skipped) parts.push(`${skipped} già presenti, ignorati.`);
+    if (invalid === 1) parts.push("1 non valido.");
+    else if (invalid) parts.push(`${invalid} non validi.`);
+    const extra = (result.errors || []).filter(Boolean).join(" ");
+    return parts.join(" ") + (extra ? " " + extra : "");
+  }
+  async function importAddresses(body) {
+    const result = await api("/api/addresses/import", { method: "POST", body: JSON.stringify(body) });
+    const message = addressImportMessage(result);
+    const line = $("#import-addresses-result");
+    if (line) line.textContent = message;
+    alert(message);
+    await loadSettings();
+    if (Number(result.added || 0) > 0) await load(true);
+  }
+  $("#btn-export-addresses").addEventListener("click", async () => {
+    try {
+      const data = await api("/api/addresses/export");
+      const file = {
+        kind: "nodo-defi-monitor-addresses",
+        version: 1,
+        addresses: (data.addresses || []).map((row) => ({
+          address: row.address,
+          owner: row.owner,
+          label: row.label,
+        })),
+      };
+      const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "nodo-defi-monitor-indirizzi.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert(err.message); }
+  });
+  $("#import-addresses-file").addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      let body;
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) body = { addresses: parsed };
+        else if (parsed && typeof parsed === "object") body = parsed;
+        else body = { text };
+      } catch (_) {
+        body = { text };
+      }
+      await importAddresses(body);
+    } catch (err) { alert(err.message); }
+  });
+  $("#btn-import-addresses").addEventListener("click", async () => {
+    const text = ($("#import-addresses-text") && $("#import-addresses-text").value || "").trim();
+    if (!text) {
+      alert("Incolla almeno una riga: indirizzo, io oppure moglie, etichetta facoltativa.");
+      return;
+    }
+    try {
+      await importAddresses({ text });
+      $("#import-addresses-text").value = "";
+    } catch (err) { alert(err.message); }
+  });
   $("#btn-export").addEventListener("click", async () => {
     try {
       const data = await api("/api/backup");

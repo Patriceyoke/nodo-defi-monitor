@@ -348,6 +348,34 @@ def import_backup(payload: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def export_addresses() -> dict[str, Any]:
+    """Addresses, owners and labels only. No settings, hides or tokens."""
+    return {
+        "kind": "nodo-defi-monitor-addresses",
+        "version": 1,
+        "addresses": [
+            {"address": row["address"], "owner": row["owner"], "label": row["label"]}
+            for row in list_evm()
+        ],
+    }
+
+
+def import_addresses(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Add public addresses. Existing address+owner pairs are left as they are."""
+    added = 0
+    skipped = 0
+    existing = {(row["address"].lower(), row["owner"]) for row in list_evm()}
+    for row in rows:
+        key = (str(row.get("address") or "").lower(), str(row.get("owner") or ""))
+        if not key[0] or not key[1] or key in existing:
+            skipped += 1
+            continue
+        add_evm(str(row.get("label") or "Importato")[:80], key[0], key[1])
+        existing.add(key)
+        added += 1
+    return {"added": added, "skipped": skipped}
+
+
 def list_balance_marks() -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
