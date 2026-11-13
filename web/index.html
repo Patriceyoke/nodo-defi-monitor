@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.5.6" />
-  <link rel="icon" href="/static/favicon.svg?v=0.5.6" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.5.7" />
+  <link rel="icon" href="/static/favicon.svg?v=0.5.7" type="image/svg+xml" />
 </head>
 <body>
   <header class="appbar">
@@ -109,17 +109,11 @@
       </details>
     </section>
 
-    <section class="card">
-      <h2>Avvisi</h2>
-      <p class="caption">Protocolli nella vista scelta e scadenze .eth. Le approvazioni da revocare sono nel riquadro in alto; l'elenco completo è in Sicurezza.</p>
-      <div class="rows" id="security"></div>
-    </section>
-
     <section class="card" id="wallet-security">
       <details id="security-details">
         <summary>
-          <h2>Sicurezza del portafoglio</h2>
-          <p class="caption">Chiuso all'avvio. Approvazioni, incidenti dei protocolli che hai e uscite impreviste, per Io, Moglie e Combinato. Nessuna firma parte da qui.</p>
+          <h2>Sicurezza</h2>
+          <p class="caption" id="sec-summary">Tutto nella norma</p>
         </summary>
         <div class="card-head">
           <p class="caption" id="sec-caption">Il controllo gira in background una volta al giorno. Aggiorna per leggerlo adesso.</p>
@@ -129,7 +123,8 @@
           </div>
         </div>
         <p class="mini" id="sec-status"></p>
-        <div id="sec-list"><p class="mini">Apri la sezione per vedere l'ultimo controllo.</p></div>
+        <div class="rows" id="sec-notes"></div>
+        <div id="sec-list"><p class="mini">Apri la sezione per vedere l'ultimo controllo delle approvazioni.</p></div>
       </details>
     </section>
 
@@ -137,7 +132,7 @@
       <details id="nft-details">
         <summary>
           <h2>NFT</h2>
-          <p class="caption">Chiuso all'avvio. I dati si caricano solo quando apri questa sezione. Le scadenze .eth restano negli avvisi anche da chiuso.</p>
+          <p class="caption">Chiuso all'avvio. I dati si caricano solo quando apri questa sezione. Le scadenze .eth restano in Sicurezza anche da chiuso.</p>
         </summary>
         <div class="card-head">
           <p class="caption" id="nft-caption">Sola lettura. Il prezzo suggerito è un riferimento, non un ordine: da qui non si mette in vendita nulla.</p>
@@ -236,7 +231,7 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js?v=0.5.6"></script>
-  <script src="/static/app.js?v=0.5.6"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.5.7"></script>
+  <script src="/static/app.js?v=0.5.7"></script>
 </body>
 </html>

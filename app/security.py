@@ -482,6 +482,103 @@ def risky_keys(rows: list[dict[str, Any]]) -> list[str]:
     return sorted({approval_key(row) for row in _risky_visible(rows) if approval_key(row).strip("|")})
 
 
+def _key_part(value: Any) -> str:
+    text = str(value or "").replace("|", " ").strip().lower()
+    return (text or "-")[:80]
+
+
+def protocol_is_urgent(item: dict[str, Any]) -> bool:
+    """A held-asset peg break. High utilization and missing data stay informational."""
+    if item.get("tone") != "danger":
+        return False
+    label = str(item.get("label") or "")
+    title = str(item.get("title") or "")
+    return label == "Peg allontanato" or title.startswith("Peg ")
+
+
+def incident_is_urgent(item: dict[str, Any]) -> bool:
+    """Recent exploit or an on-chain pause. Older warnings stay in the list only."""
+    return item.get("severity") == "danger"
+
+
+def ens_is_urgent(item: dict[str, Any]) -> bool:
+    """Expired or in the grace period. A name that merely expires soon is not urgent."""
+    return item.get("level") == "danger"
+
+
+def protocol_urgent_key(item: dict[str, Any]) -> str:
+    return "|".join(("protocol", "peg", _key_part(item.get("protocol")), "danger"))
+
+
+def incident_urgent_key(item: dict[str, Any]) -> str:
+    return "|".join(("incident", _key_part(item.get("protocol")), _key_part(item.get("name") or item.get("detail")), "danger"))
+
+
+def outflow_urgent_key(item: dict[str, Any]) -> str:
+    return "|".join(("outflow", _key_part(item.get("wallet")), _key_part(item.get("chain")), _key_part(item.get("token") or item.get("symbol"))))
+
+
+def ens_urgent_key(item: dict[str, Any]) -> str:
+    return "|".join(("ens", _key_part(item.get("owner") or "tutti"), _key_part(item.get("name")), "danger"))
+
+
+def _four_part(keys: list[str]) -> list[str]:
+    return sorted({key for key in keys if key.count("|") == 3 and all(len(part) <= 80 for part in key.split("|"))})
+
+
+def heavy_urgent_keys(approvals: list[dict[str, Any]], incidents: list[dict[str, Any]], outflows: list[dict[str, Any]]) -> list[str]:
+    keys = list(risky_keys(approvals))
+    keys.extend(incident_urgent_key(row) for row in incidents if incident_is_urgent(row))
+    keys.extend(outflow_urgent_key(row) for row in outflows)
+    return _four_part(keys)
+
+
+def annotate_light_alerts(
+    protocols: list[dict[str, Any]],
+    ens_alerts: list[dict[str, Any]],
+    summaries: dict[str, Any],
+    positions: list[dict[str, Any]],
+    view_owner: str,
+) -> None:
+    """Mark informational rows and add their urgent keys to each owner summary."""
+    for row in protocols:
+        row["urgent"] = protocol_is_urgent(row)
+        if row["urgent"]:
+            row["urgent_key"] = protocol_urgent_key(row)
+    for row in ens_alerts:
+        row["urgent"] = ens_is_urgent(row)
+        if row["urgent"]:
+            row["urgent_key"] = ens_urgent_key(row)
+
+    def held(owner: str) -> set[str]:
+        names: set[str] = set()
+        for row in positions:
+            if owner != "tutti" and row.get("owner") != owner:
+                continue
+            if row.get("protocol"):
+                names.add(str(row["protocol"]))
+            if row.get("asset"):
+                names.add(str(row["asset"]))
+        return names
+
+    owners = {"io": "io", "moglie": "moglie", "tutti": "tutti", "view": view_owner}
+    for slot, owner in owners.items():
+        summary = summaries.get(slot)
+        if not isinstance(summary, dict):
+            continue
+        keys = list(summary.get("urgent_keys") or [])
+        names = held(owner)
+        for row in protocols:
+            if row.get("urgent") and str(row.get("protocol") or "") in names:
+                keys.append(str(row.get("urgent_key") or ""))
+        for row in ens_alerts:
+            if row.get("urgent") and (owner == "tutti" or row.get("owner") == owner):
+                keys.append(str(row.get("urgent_key") or ""))
+        unique = _four_part(keys)
+        summary["urgent_keys"] = unique
+        summary["urgent"] = len(unique)
+
+
 def banner_has_new(current: list[str], dismissed: list[str] | None) -> bool:
     """True when a risky approval is on screen that was not in the dismissed set."""
     known = set(dismissed or [])
@@ -533,6 +630,7 @@ def security_summary(owner: str = "tutti") -> dict[str, Any]:
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
     visible_approvals = _risky_visible(approvals)
+    urgent = heavy_urgent_keys(visible_approvals, incidents, outflows)
     return {
         "approvals": len(visible_approvals),
         "hidden": sum(1 for row in approvals if row.get("hidden")),
@@ -540,6 +638,8 @@ def security_summary(owner: str = "tutti") -> dict[str, Any]:
         "outflows": len(outflows),
         "visible": len(visible_approvals) + len(incidents) + len(outflows),
         "risky_keys": risky_keys(approvals),
+        "urgent_keys": urgent,
+        "urgent": len(urgent),
     }
 
 
@@ -995,7 +1095,7 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
             "outflows": [],
             "alerts": [],
             "errors": [],
-            "summary": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
+            "summary": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0, "urgent": 0, "urgent_keys": [], "risky_keys": []},
             "counts": {"io": 0, "moglie": 0, "tutti": 0},
         }
     approvals = annotate_risk(
@@ -1009,6 +1109,7 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
     visible_approvals = _risky_visible(approvals)
+    urgent = heavy_urgent_keys(visible_approvals, incidents, outflows)
     summary = {
         "approvals": len(visible_approvals),
         "hidden": sum(1 for row in approvals if row.get("hidden")),
@@ -1016,6 +1117,8 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
         "outflows": len(outflows),
         "visible": len(visible_approvals) + len(incidents) + len(outflows),
         "risky_keys": risky_keys(approvals),
+        "urgent_keys": urgent,
+        "urgent": len(urgent),
     }
     return {
         "owner": owner,

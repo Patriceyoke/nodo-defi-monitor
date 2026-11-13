@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from . import db, ens, evm, markets, nft, switches
+from .security import annotate_light_alerts
 from .validation import normalize_owner
 
 log = logging.getLogger("monitor.portfolio")
@@ -691,6 +692,8 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "view": totals(owner),
     }
     notes = consistency_notes(data["positions"], built_totals, income)
+    summaries = _security_summary(owner)
+    annotate_light_alerts(security, ens_alerts, summaries, data["positions"], owner)
     return {
         "owner": owner,
         "ts": data["ts"],
@@ -711,7 +714,7 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "history": history,
         "ens_alerts": ens_alerts,
         "ens_names": ens_names,
-        "security_summary": _security_summary(owner),
+        "security_summary": summaries,
         "alert_dismissed": _dismissed_alerts(),
         "saved": data.get("saved") is not False,
         "kept_previous": bool(data.get("kept_previous")),

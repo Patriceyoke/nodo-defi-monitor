@@ -59,59 +59,95 @@ function showBanner(list, ensAlerts) {
   box.innerHTML = ensHtml + errHtml;
 }
 
-function securityLine(summary) {
-  const approvals = Number(summary.approvals || 0);
-  const other = Number(summary.incidents || 0) + Number(summary.outflows || 0);
-  const approvazioni = approvals === 1 ? "1 approvazione da fare" : `${approvals} approvazioni da fare`;
-  const avvisi = other === 1 ? "1 avviso" : `${other} avvisi`;
-  if (approvals && other) return `${approvazioni} e ${avvisi} da controllare`;
-  if (approvals) return approvazioni;
-  return `${avvisi} da controllare`;
+function urgentLine(count) {
+  const n = Number(count || 0);
+  if (!n) return "Tutto nella norma";
+  return n === 1 ? "1 problema da fare" : `${n} problemi da fare`;
 }
 
-function liveSecuritySummary(fallback) {
-  const data = state.security;
-  if (data && data.ready) {
-    const approvals = securityRows(data.approvals).filter((row) => !row.hidden && row.risk_class === "rischiosa");
-    const outflows = securityRows(data.outflows);
-    const incidents = (data.incidents || []).filter((row) => state.owner === "tutti" || (row.owners || []).includes(state.owner));
-    return { approvals: approvals.length, incidents: incidents.length, outflows: outflows.length, visible: approvals.length + incidents.length + outflows.length };
+function renderSecurityNotes(data) {
+  const box = $("#sec-notes");
+  if (!box || !data) return;
+  const owner = state.owner;
+  const held = new Set();
+  (data.positions || []).forEach((row) => {
+    if (owner !== "tutti" && row.owner !== owner) return;
+    if (row.protocol) held.add(row.protocol);
+    if (row.asset) held.add(row.asset);
+  });
+  const protocols = (data.security || []).filter((row) => held.has(row.protocol)).map((row) => ({
+    title: row.title || row.protocol || "",
+    detail: row.detail || "",
+    tone: row.tone === "danger" ? "danger" : row.tone === "success" ? "success" : "warning",
+    label: row.label || "",
+  }));
+  const ens = (data.ens_alerts || []).filter((row) => owner === "tutti" || row.owner === owner).map((item) => ({
+    title: (item.name || "ENS") + (OWNER_LABEL[item.owner] ? " · " + OWNER_LABEL[item.owner] : ""),
+    detail: item.text || "",
+    tone: item.level === "danger" ? "danger" : "warning",
+    label: item.level === "danger" ? "scaduto" : "in scadenza",
+  }));
+  const notes = (data.errors || []).filter(Boolean).map((text) => ({
+    title: "Aggiornamento",
+    detail: String(text),
+    tone: "warning",
+    label: "nota",
+  }));
+  if ((data.wallet_count || 0) > 0 && !(data.positions || []).length && !state.refreshing) {
+    notes.unshift({
+      title: "Posizioni",
+      detail: "I portafogli sono salvati, ma questo ricalcolo non ha prodotto posizioni.",
+      tone: "warning",
+      label: "nota",
+    });
   }
-  const pack = fallback || {};
-  if (pack[state.owner]) return pack[state.owner];
-  return pack.view || pack;
+  const rows = protocols.concat(ens, notes);
+  if (!rows.length) {
+    box.innerHTML = "";
+    return;
+  }
+  renderRows(box, rows);
 }
 
 function dismissedAlerts(data) {
   const raw = data && data.alert_dismissed;
   return Array.isArray(raw) ? raw : [];
 }
-function currentRiskyKeys(summary) {
-  return (summary && summary.risky_keys) || [];
+function summaryKeys(summary) {
+  if (!summary) return [];
+  if (Array.isArray(summary.urgent_keys)) return summary.urgent_keys;
+  return summary.risky_keys || [];
 }
-function bannerHasNew(summary, data) {
-  const current = currentRiskyKeys(summary);
+function viewSummary(data) {
+  const pack = (data && data.security_summary) || {};
+  return pack[state.owner] || pack.view || pack;
+}
+function bannerHasNew(keys, data) {
+  const current = keys || [];
   if (!current.length) return false;
   const known = new Set(dismissedAlerts(data));
   return current.some((key) => !known.has(key));
 }
-function renderSecuritySummary(summary) {
+function renderSecuritySummary(data) {
   const box = $("#security-summary");
+  const summary = viewSummary(data || state.data);
+  const keys = summaryKeys(summary);
+  const line = $("#sec-summary");
+  if (line) line.textContent = urgentLine(keys.length);
   if (!box) return;
-  const approvals = summary && Number(summary.approvals || 0);
-  if (!approvals || !bannerHasNew(summary, state.data)) {
+  if (!bannerHasNew(keys, data || state.data)) {
     box.innerHTML = "";
     return;
   }
-  box.innerHTML = `<div class="callout warn alert-banner"><a href="#wallet-security" data-goto-security>${escapeHtml(securityLine(summary))} · Vai a Sicurezza</a><button class="btn ghost" id="btn-dismiss-alert" type="button">Nascondi avviso</button></div>`;
+  box.innerHTML = `<div class="callout warn alert-banner"><a href="#wallet-security" data-goto-security>${escapeHtml(urgentLine(keys.length))} · Vai a Sicurezza</a><button class="btn ghost" id="btn-dismiss-alert" type="button">Nascondi avviso</button></div>`;
 }
 async function dismissAlert() {
   const pack = (state.data && state.data.security_summary) || {};
-  const tutti = (pack.tutti && pack.tutti.risky_keys) || [];
-  const view = currentRiskyKeys(liveSecuritySummary(pack));
+  const tutti = summaryKeys(pack.tutti);
+  const view = summaryKeys(viewSummary(state.data));
   const keys = [...new Set([...tutti, ...view])];
   if (state.data) state.data.alert_dismissed = keys;
-  renderSecuritySummary(liveSecuritySummary(pack));
+  renderSecuritySummary(state.data);
   try {
     await api("/api/settings", { method: "PUT", body: JSON.stringify({ alert_dismissed: keys }) });
   } catch (err) {
@@ -725,8 +761,19 @@ async function loadSecurity(force) {
       data = await api("/api/security?owner=tutti");
     }
     state.security = data;
-    if (state.data) state.data.security_summary = data.summary || state.data.security_summary;
-    renderSecuritySummary(data.summary);
+    if (state.data && data.summary) {
+      const pack = Object.assign({}, state.data.security_summary || {});
+      const apply = (slot) => {
+        const previous = pack[slot] || {};
+        const light = summaryKeys(previous).filter((key) => key.startsWith("protocol|") || key.startsWith("ens|"));
+        const urgentKeys = [...new Set(light.concat(summaryKeys(data.summary)))];
+        pack[slot] = Object.assign({}, previous, data.summary, { urgent_keys: urgentKeys, urgent: urgentKeys.length });
+      };
+      apply("tutti");
+      if (state.owner === "tutti") apply("view");
+      state.data.security_summary = pack;
+    }
+    renderSecuritySummary(state.data);
     renderSecurity();
   } catch (err) {
     if (status) status.textContent = "";
@@ -787,19 +834,8 @@ function render() {
     renderPositions(data);
     renderHist(data);
     renderSwitches(data);
-    const ensRows = (data.ens_alerts || []).map((item) => ({
-      title: (item.name || "ENS") + (OWNER_LABEL[item.owner] ? " · " + OWNER_LABEL[item.owner] : ""),
-      detail: item.text || "",
-      tone: item.level === "danger" ? "danger" : "warning",
-      label: item.level === "danger" ? "scaduto" : "in scadenza",
-    }));
-    renderRows($("#security"), ensRows.concat(data.security));
-    const banners = [...data.errors];
-    if ((data.wallet_count || 0) > 0 && !data.positions.length && !state.refreshing) {
-      banners.unshift("I portafogli sono salvati, ma questo ricalcolo non ha prodotto posizioni.");
-    }
-    showBanner(banners, data.ens_alerts || []);
-    renderSecuritySummary(liveSecuritySummary(data.security_summary));
+    renderSecurityNotes(data);
+    renderSecuritySummary(data);
     paintFreshness(data);
   } catch (err) {
     showBanner([...(data.errors || []), "Errore nel disegno della pagina: " + (err && err.message ? err.message : err)]);
@@ -1254,6 +1290,7 @@ async function boot() {
   });
   rememberFold("positions-details");
   rememberFold("switches-details");
+  rememberFold("security-details");
   await load(false);
   load(true);
 }
