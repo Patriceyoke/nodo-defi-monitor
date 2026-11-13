@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.5.4"
+version: "0.5.5"
 tagline: "Tieni d'occhio la DeFi in sola lettura, divisa tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -22,9 +22,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.5.4: la pagina non resta in cache, così l'aggiornamento si
-  vede subito. In Impostazioni si esportano e si importano solo
-  gli indirizzi. Disinstallare cancella i dati: usa Aggiorna.
+  0.5.5: le schede Io, Moglie e Combinato stanno affiancate, e
+  dentro ognuna stablecoin ed ETH sono su due colonne. Gli
+  indirizzi salvati restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

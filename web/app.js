@@ -256,8 +256,10 @@ function renderMetrics(data) {
         <dt>Reddito mensile</dt><dd>${month}</dd>
         <dt>Reddito annuo</dt><dd>${year}</dd>
       </dl>
-      ${splitBlock("Stablecoin", stable, base)}
-      ${splitBlock("ETH", eth, base)}
+      <div class="split-row">
+        ${splitBlock("Stablecoin", stable, base)}
+        ${splitBlock("ETH", eth, base)}
+      </div>
     </article>`;
   }).join("");
 }

@@ -92,21 +92,32 @@ h2 { font-size: 1.25rem; }
 .grid.two { grid-template-columns: 1fr 1fr; }
 .grid.three { grid-template-columns: 1fr 1fr 1fr; }
 .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.owner-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.owner-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .owner-card {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 14px 14px 12px;
+  padding: 8px 10px;
   background: #fff;
 }
 .owner-card.sum { background: #FAFAF9; }
-.owner-card h3 { margin: 0 0 8px; font-size: 0.95rem; }
-.owner-card .figure { font-size: 1.45rem; font-weight: 750; letter-spacing: -0.03em; }
-.owner-card dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 10px 0 0; }
-.owner-card dt { color: var(--muted); font-size: 0.82rem; }
-.owner-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
-.split-group { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
-.split-group h4 { margin: 0 0 4px; font-size: 0.82rem; }
+.owner-card h3 { margin: 0 0 2px; font-size: 0.88rem; }
+.owner-card .figure { font-size: 1.15rem; font-weight: 750; letter-spacing: -0.03em; line-height: 1.15; }
+.owner-card dl { display: block; margin: 4px 0 0; }
+.owner-card dt { display: inline; color: var(--muted); font-size: 0.75rem; }
+.owner-card dd { display: inline; margin: 0 0 0 6px; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.owner-card dd::after { content: ""; display: block; }
+.split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.split-group { min-width: 0; margin: 0; padding: 0; }
+.split-group h4 { margin: 0 0 2px; font-size: 0.75rem; }
+.split-group dl { margin: 0; }
 tr.sum td { font-weight: 750; background: #FAFAF9; }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .pos-block { margin-top: 8px; }
@@ -209,14 +220,17 @@ form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .electrs-diag li { margin: 2px 0; word-break: break-word; }
 .nft-card p { margin: 4px 0; }
 @media (max-width: 960px) {
-  .metrics, .owner-cards { grid-template-columns: 1fr; }
+  .metrics { grid-template-columns: 1fr; }
   .grid.two, .grid.three, form .row { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
-  .metrics, .metrics.compact, .owner-cards { grid-template-columns: 1fr; }
+  .metrics, .metrics.compact { grid-template-columns: 1fr; }
   header.appbar .wrap { flex-wrap: wrap; }
   .btn, button.btn { min-height: 44px; }
   th, td { padding: 8px 4px; font-size: 0.85rem; }
+}
+@media (max-width: 600px) {
+  .owner-cards { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
