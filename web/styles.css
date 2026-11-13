@@ -180,6 +180,9 @@ tr:hover td { background: #F8FAFC; }
 .chart-box.owners { height: 220px; margin-bottom: 8px; }
 .chart-box.tall { height: 320px; }
 .mini { font-size: 0.82rem; color: var(--muted); }
+.addr-row { margin: 8px 0; }
+.addr-edit { margin: 8px 0 12px; }
+.addr-row .btn, .addr-edit .btn { margin: 4px 6px 0 0; }
 input, select, textarea {
   width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line);
   font-family: inherit; font-size: 1rem; background: white;

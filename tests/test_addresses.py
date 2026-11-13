@@ -95,6 +95,55 @@ def test_import_text_skips_duplicates_and_secrets(client):
     assert before <= set(fresh)
 
 
+def test_edit_keeps_history_unless_the_address_changes(client):
+    original = "0x" + "66" * 20
+    renamed = "0x" + "77" * 20
+    other = "0x" + "88" * 20
+    token = "0x" + "aa" * 20
+    wid = db.add_evm("Prima", original, "io")
+    db.add_evm("Altro", other, "io")
+    db.upsert_balance_mark(original, "ethereum", token, "io", "USDC", 1, 1)
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO history(ts, owner, payload) VALUES(?,?,?)",
+            (int(__import__("time").time()) - 5, "io", '{"total_usd": 10}'),
+        )
+        history_ids = [row["id"] for row in conn.execute("SELECT id FROM history ORDER BY id")]
+    res = client.put(f"/api/wallets/evm/{wid}", json={"label": "Dopo", "address": original, "owner": "io"})
+    assert res.status_code == 200, res.text
+    row = next(item for item in db.list_evm() if item["id"] == wid)
+    assert row["label"] == "Dopo" and row["address"] == original and row["owner"] == "io"
+    res = client.put(f"/api/wallets/evm/{wid}", json={"label": "Dopo", "address": original, "owner": "moglie"})
+    assert res.status_code == 200, res.text
+    row = next(item for item in db.list_evm() if item["id"] == wid)
+    assert row["owner"] == "moglie" and row["id"] == wid
+    marks = db.list_balance_marks()
+    assert any(mark["wallet"] == original and mark["owner"] == "moglie" for mark in marks)
+    res = client.put(f"/api/wallets/evm/{wid}", json={"label": "Dopo", "address": renamed, "owner": "moglie"})
+    assert res.status_code == 200, res.text
+    row = next(item for item in db.list_evm() if item["id"] == wid)
+    assert row["address"] == renamed and row["label"] == "Dopo" and row["owner"] == "moglie"
+    marks = db.list_balance_marks()
+    assert any(mark["wallet"] == original for mark in marks)
+    assert not any(mark["wallet"] == renamed for mark in marks)
+    with db.connect() as conn:
+        assert [item["id"] for item in conn.execute("SELECT id FROM history ORDER BY id")] == history_ids
+    clash = client.put(f"/api/wallets/evm/{wid}", json={"label": "Dopo", "address": other, "owner": "io"})
+    assert clash.status_code == 409
+    assert next(item for item in db.list_evm() if item["id"] == wid)["address"] == renamed
+    invalid = client.put(f"/api/wallets/evm/{wid}", json={"label": "Dopo", "address": "0x123", "owner": "moglie"})
+    assert invalid.status_code == 400
+    secret = client.put(
+        f"/api/wallets/evm/{wid}",
+        json={"label": "Dopo", "address": "0x" + "ab" * 32, "owner": "moglie"},
+    )
+    assert secret.status_code == 400
+    assert "abab" not in secret.text
+    assert next(item for item in db.list_evm() if item["id"] == wid)["address"] == renamed
+    missing = client.put("/api/wallets/evm/999999", json={"label": "No", "address": original, "owner": "io"})
+    assert missing.status_code == 404
+
+
 def test_import_json_file_adds_without_deleting(client):
     kept = "0x" + "44" * 20
     db.add_evm("Resta", kept, "moglie")

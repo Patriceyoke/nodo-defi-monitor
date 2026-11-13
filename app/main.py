@@ -279,6 +279,26 @@ async def add_evm_wallet(body: EvmIn) -> dict[str, Any]:
     return {"id": wid, "ok": True}
 
 
+@app.put("/api/wallets/evm/{wallet_id}")
+async def edit_evm_wallet(wallet_id: int, body: EvmIn) -> dict[str, Any]:
+    try:
+        owner = normalize_owner(body.owner)
+        address = normalize_eth(body.address)
+        label = body.label.strip()
+        if not label:
+            raise ValueError("Scrivi un'etichetta.")
+        ok = db.update_evm(wallet_id, label, address, owner)
+    except ValueError as exc:
+        status = 409 if "già salvato" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    if not ok:
+        raise HTTPException(404, "Indirizzo non trovato")
+    invalidate()
+    return {"ok": True}
+
+
 @app.delete("/api/wallets/evm/{wallet_id}")
 async def remove_evm(wallet_id: int) -> dict[str, Any]:
     if not db.delete_evm(wallet_id):
@@ -497,6 +517,7 @@ API_ROUTES = [
     "PUT /api/settings",
     "GET /api/wallets",
     "POST /api/wallets/evm",
+    "PUT /api/wallets/evm/{id}",
     "DELETE /api/wallets/evm/{id}",
     "GET /api/portfolio?owner=tutti&refresh=true",
     "POST /api/refresh?owner=tutti",

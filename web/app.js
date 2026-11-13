@@ -909,9 +909,26 @@ async function loadSettings() {
     $("#token-line").textContent = "Nuovo token MCP (copialo ora): " + s.mcp_token;
   }
   const wallets = await api("/api/wallets");
-  $("#evm-list").innerHTML = (wallets.evm || []).map((w) =>
-    `<p class="mini">${escapeHtml(w.label)} · ${OWNER_LABEL[w.owner]} · ${escapeHtml(w.address)} <button class="btn" data-del-evm="${w.id}" type="button">Rimuovi</button></p>`
-  ).join("") || `<p class="mini">Nessun indirizzo Ethereum.</p>`;
+  $("#evm-list").innerHTML = (wallets.evm || []).map(evmRow).join("") || `<p class="mini">Nessun indirizzo Ethereum.</p>`;
+}
+function evmRow(w) {
+  return `<div class="addr-row"><p class="mini">${escapeHtml(w.label)} · ${OWNER_LABEL[w.owner] || ""} · ${escapeHtml(w.address)}
+    <button class="btn" type="button" data-edit-evm="${w.id}" data-label="${escapeHtml(w.label)}" data-owner="${escapeHtml(w.owner)}" data-address="${escapeHtml(w.address)}">Modifica</button>
+    <button class="btn" type="button" data-del-evm="${w.id}">Rimuovi</button></p></div>`;
+}
+function evmEditForm(id, label, owner, address) {
+  const io = owner === "io" ? " selected" : "";
+  const moglie = owner === "moglie" ? " selected" : "";
+  return `<form class="addr-edit" data-id="${escapeHtml(id)}">
+    <div class="row">
+      <div><label>Etichetta</label><input name="label" required maxlength="80" value="${escapeHtml(label)}" /></div>
+      <div><label>Titolare</label><select name="owner"><option value="io"${io}>Io</option><option value="moglie"${moglie}>Moglie</option></select></div>
+    </div>
+    <label>Indirizzo pubblico 0x…</label>
+    <input name="address" required value="${escapeHtml(address)}" autocomplete="off" />
+    <button class="btn primary" type="submit">Salva</button>
+    <button class="btn" type="button" data-cancel-evm>Annulla</button>
+  </form>`;
 }
 
 function formData(form) {
@@ -1190,6 +1207,29 @@ async function boot() {
       await load(true);
     } catch (err) { alert(err.message); }
   });
+  const evmList = $("#evm-list");
+  if (evmList) {
+    evmList.addEventListener("click", (ev) => {
+      const edit = ev.target.closest("[data-edit-evm]");
+      if (edit) {
+        const row = edit.closest(".addr-row");
+        if (row) row.innerHTML = evmEditForm(edit.dataset.editEvm, edit.dataset.label, edit.dataset.owner, edit.dataset.address);
+        return;
+      }
+      if (ev.target.closest("[data-cancel-evm]")) loadSettings();
+    });
+    evmList.addEventListener("submit", async (ev) => {
+      const form = ev.target.closest(".addr-edit");
+      if (!form) return;
+      ev.preventDefault();
+      const f = formData(form);
+      try {
+        await api("/api/wallets/evm/" + form.dataset.id, { method: "PUT", body: JSON.stringify(f) });
+        await loadSettings();
+        await load(true);
+      } catch (err) { alert(err.message); }
+    });
+  }
   document.addEventListener("click", async (ev) => {
     const evm = ev.target.closest("[data-del-evm]");
     if (!evm) return;

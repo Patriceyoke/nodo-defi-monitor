@@ -23,8 +23,9 @@ description: >-
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
   0.5.5: le schede Io, Moglie e Combinato stanno affiancate, e
-  dentro ognuna stablecoin ed ETH sono su due colonne. Gli
-  indirizzi salvati restano.
+  dentro ognuna stablecoin ed ETH sono su due colonne. In
+  Impostazioni, Modifica cambia etichetta, indirizzo e titolare.
+  Gli indirizzi salvati restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

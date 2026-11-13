@@ -257,6 +257,47 @@ def delete_evm(wallet_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def update_evm(wallet_id: int, label: str, address: str, owner: str) -> bool:
+    """Update one saved address in place.
+
+    A label or owner change keeps the same row, so balance marks and the
+    owner history stay linked to that address. A new address string is stored
+    on the same row with the chosen label and owner, and the old marks are
+    left where they were.
+    """
+    label = (label or "").strip()[:80]
+    if not label:
+        raise ValueError("Scrivi un'etichetta.")
+    address = address.lower()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, address, owner FROM evm_wallets WHERE id=?",
+            (wallet_id,),
+        ).fetchone()
+        if not row:
+            return False
+        clash = conn.execute(
+            "SELECT id FROM evm_wallets WHERE address=? AND owner=? AND id<>?",
+            (address, owner, wallet_id),
+        ).fetchone()
+        if clash:
+            raise ValueError("Questo indirizzo è già salvato per questo titolare.")
+        try:
+            conn.execute(
+                "UPDATE evm_wallets SET label=?, address=?, owner=? WHERE id=?",
+                (label, address, owner, wallet_id),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Questo indirizzo è già salvato per questo titolare.") from exc
+        old_address = str(row["address"]).lower()
+        if old_address == address and str(row["owner"]) != owner:
+            conn.execute(
+                "UPDATE balance_marks SET owner=? WHERE wallet=?",
+                (owner, old_address),
+            )
+        return True
+
+
 # Settings that are local secrets, regenerated, or leftover Bitcoin options.
 # Bitcoin rows stay in the database and are never exported, imported, or shown.
 _BACKUP_SKIP_SETTINGS = {"mcp_token", "electrs_host", "electrs_port", "btc_gap_limit", "tor_enabled"}
