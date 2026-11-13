@@ -25,9 +25,8 @@
     <section class="card" id="overview">
       <div class="card-head">
         <div>
-          <h2>Panoramica</h2>
-          <p class="caption">I totali Io, Moglie e Combinato restano sempre visibili. Il selettore filtra il resto della pagina. L'APY si riferisce alla DeFi della vista scelta.</p>
-          <p class="caption" id="source-line"></p>
+          <h2>Totale combinato</h2>
+          <p class="caption">Io, Moglie e il totale restano sempre visibili. Le stime usano l'APY di adesso. <span id="source-line"></span></p>
         </div>
         <span class="pill muted" id="source-pill" aria-live="polite">in sola lettura</span>
       </div>
@@ -37,117 +36,59 @@
           <button data-value="moglie" type="button">Moglie</button>
           <button data-value="tutti" class="on" type="button">Combinato</button>
         </div>
-        <div class="segmented" data-key="period">
-          <button data-value="7" type="button">7 giorni</button>
-          <button data-value="30" class="on" type="button">30 giorni</button>
-          <button data-value="90" type="button">90 giorni</button>
-        </div>
         <div class="segmented" data-key="currency">
           <button data-value="USD" class="on" type="button">USD</button>
           <button data-value="THB" type="button">THB</button>
         </div>
       </div>
-      <div class="metrics" id="metrics"></div>
+      <div class="owner-cards" id="owner-cards"></div>
       <p class="empty hidden" id="empty-state">Nessun indirizzo ancora. Apri Impostazioni e aggiungi solo indirizzi Ethereum pubblici, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
     </section>
 
-    <section class="card" id="income">
+    <section class="card" id="positions">
+      <h2>Posizioni</h2>
+      <p class="caption" id="pos-summary">Una tabella per titolare. Il reddito annuo è valore per APY attuale.</p>
+      <div id="pos-groups"></div>
+    </section>
+
+    <section class="card" id="changes">
       <div class="card-head">
         <div>
-          <h2>Reddito</h2>
-          <p class="caption">Stima agli APY attuali. Il dollaro o il baht è l'anno diviso in settimana e mese. La percentuale mensile è (1+APY)<sup>1/12</sup>−1. Io, Moglie e Combinato restano visibili.</p>
+          <h2>Variazioni recenti</h2>
+          <p class="caption" id="hist-caption">Storico locale di questo server.</p>
+        </div>
+        <div class="segmented" data-key="period">
+          <button data-value="7" type="button">7 giorni</button>
+          <button data-value="30" class="on" type="button">30 giorni</button>
+          <button data-value="90" type="button">90 giorni</button>
         </div>
       </div>
-      <div class="metrics" id="income-cards"></div>
-      <div style="overflow:auto">
+      <div class="table-scroll">
         <table>
           <thead>
-            <tr>
-              <th>Protocollo</th>
-              <th class="num">Valore</th>
-              <th class="num">% mese</th>
-              <th class="num">APY</th>
-              <th class="num">Settimana</th>
-              <th class="num">Mese</th>
-              <th class="num">Anno</th>
-            </tr>
+            <tr><th scope="col">Quando</th><th scope="col" class="num">Valore</th><th scope="col" class="num">APY</th><th scope="col" class="num">Reddito annuo</th></tr>
           </thead>
-          <tbody id="income-body"></tbody>
+          <tbody id="hist-body"></tbody>
         </table>
       </div>
     </section>
 
-    <div class="grid two">
-      <section class="card">
-        <div class="card-head">
-          <div>
-            <h2 id="alloc-title">Ripartizione per protocollo</h2>
-            <p class="caption">In vista Combinato puoi passare da protocollo a titolare.</p>
-          </div>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Suggerimenti di switch</h2>
+          <p class="caption">Solo se il rendimento sale a rischio uguale o inferiore, dopo il gas. Nessuna transazione parte da qui.</p>
         </div>
-        <div class="segmented hidden" id="alloc-mode" data-key="alloc">
-          <button data-value="protocollo" class="on" type="button">Per protocollo</button>
-          <button data-value="titolare" type="button">Per titolare</button>
-        </div>
-        <div class="chart-box"><canvas id="chart-alloc"></canvas></div>
-      </section>
-      <section class="card">
-        <h2>APY attuale e media a 30 giorni</h2>
-        <p class="caption">Io, Moglie e Combinato. Combinato è la media pesata sul valore di Io e Moglie, non la media dei due tassi: un saldo più grande conta di più. Il bordo scuro è il combinato.</p>
-        <div class="chart-box owners"><canvas id="chart-apy-owners"></canvas></div>
-        <p class="caption">Ogni posizione della vista scelta.</p>
-        <div class="chart-box"><canvas id="chart-apy"></canvas></div>
-      </section>
-    </div>
+        <button class="btn ghost" id="btn-switch-hidden" type="button">Mostra nascosti (0)</button>
+      </div>
+      <div id="switches"></div>
+    </section>
 
     <section class="card">
-      <h2>Andamento del valore e del reddito stimato</h2>
-      <p class="caption" id="hist-caption">Serie costruita dallo storico locale salvato su questo server.</p>
-      <div class="chart-box tall"><canvas id="chart-hist"></canvas></div>
+      <h2>Avvisi</h2>
+      <p class="caption">Protocolli nella vista scelta e scadenze .eth. Le approvazioni da revocare sono nel riquadro in alto; l'elenco completo è in Sicurezza.</p>
+      <div class="rows" id="security"></div>
     </section>
-
-    <section class="card" id="positions">
-      <details id="positions-details">
-        <summary>
-          <h2>Posizioni</h2>
-          <p class="caption" id="pos-summary">Le posizioni si aggiornano anche da chiuse.</p>
-        </summary>
-        <div class="card-head">
-          <p class="caption">Ogni riga ha un titolare. Badge di rischio: verde basso, ambra medio, rosso alto.</p>
-          <div>
-            <span class="pill ok">Basso</span>
-            <span class="pill warn">Medio</span>
-            <span class="pill bad">Alto</span>
-          </div>
-        </div>
-        <div style="overflow:auto">
-          <table>
-            <thead>
-              <tr><th scope="col">Titolare</th><th scope="col">Protocollo</th><th scope="col">Asset</th><th scope="col" class="num">Valore</th><th scope="col" class="num">APY</th><th scope="col" class="num">vs media 30g</th><th scope="col">Rischio</th></tr>
-            </thead>
-            <tbody id="pos-body"></tbody>
-          </table>
-        </div>
-      </details>
-    </section>
-
-    <div class="grid two">
-      <section class="card">
-        <div class="card-head">
-          <div>
-            <h2>Suggerimenti di switch</h2>
-            <p class="caption">Solo proposte sulla vista scelta, a rischio uguale o inferiore e dopo il gas. Nessuna transazione parte da qui.</p>
-          </div>
-          <button class="btn ghost" id="btn-switch-hidden" type="button">Mostra nascosti (0)</button>
-        </div>
-        <div id="switches"></div>
-      </section>
-      <section class="card">
-        <h2>Sicurezza</h2>
-        <p class="caption">Stato sui protocolli presenti nella vista scelta.</p>
-        <div class="rows" id="security"></div>
-      </section>
-    </div>
 
     <section class="card" id="wallet-security">
       <details id="security-details">

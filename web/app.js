@@ -149,49 +149,23 @@ function commonChart() {
 }
 
 function renderMetrics(data) {
-  const t = data.totals;
-  const view = t.view;
-  $("#metrics").innerHTML = [
-    metric("Io", money(t.io.total_usd), `DeFi ${money(t.io.defi_usd)}`, "io"),
-    metric("Moglie", money(t.moglie.total_usd), `DeFi ${money(t.moglie.defi_usd)}`, "moglie"),
-    metric("Combinato", money(t.tutti.total_usd), `DeFi ${money(t.tutti.defi_usd)}`, "tutti"),
-    metric("APY DeFi (" + OWNER_LABEL[state.owner] + ")", pct(view.wapy), ""),
-  ].join("");
-  renderIncome(data);
-}
-function renderIncome(data) {
-  const box = $("#income-cards");
-  const body = $("#income-body");
-  if (!box || !body) return;
-  const inc = data.income;
-  if (!inc) {
-    box.innerHTML = "";
-    body.innerHTML = "";
-    return;
-  }
-  box.innerHTML = ["io", "moglie", "tutti"].map((key) => {
-    const row = inc[key] || {};
-    const selected = state.owner === key ? " selected" : "";
-    return `<div class="metric${selected}">
-      <div class="label">Reddito · ${OWNER_LABEL[key]}</div>
-      <div class="value">${money(row.month_usd)}</div>
-      <div class="detail">al mese · settimana ${money(row.week_usd)} · anno ${money(row.year_usd)}</div>
-      <div class="detail">${pct(row.apy_month)} al mese · ${pct(row.apy_year)} annuo</div>
-    </div>`;
+  const box = $("#owner-cards");
+  if (!box) return;
+  const totals = data.totals || {};
+  const keys = ["io", "moglie", "tutti"];
+  box.innerHTML = keys.map((key) => {
+    const row = totals[key] || {};
+    const apy = row.wapy == null ? "–" : pct(row.wapy);
+    const year = row.year_usd == null ? "–" : money(row.year_usd);
+    return `<article class="owner-card${key === "tutti" ? " sum" : ""}">
+      <h3>${OWNER_LABEL[key] || key}</h3>
+      <div class="figure">${money(row.total_usd || 0)}</div>
+      <dl>
+        <dt>APY ponderato</dt><dd>${apy}</dd>
+        <dt>Reddito annuo</dt><dd>${year}</dd>
+      </dl>
+    </article>`;
   }).join("");
-  const table = inc.by_protocol || {};
-  const rows = Array.isArray(table) ? table : (table[state.owner] || []);
-  body.innerHTML = rows.length ? rows.map((row) => `
-    <tr>
-      <td>${escapeHtml(row.protocol)}</td>
-      <td class="num">${money(row.usd)}</td>
-      <td class="num">${pct(row.apy_month)}</td>
-      <td class="num">${pct(row.apy_year)}</td>
-      <td class="num">${money(row.week_usd)}</td>
-      <td class="num">${money(row.month_usd)}</td>
-      <td class="num">${money(row.year_usd)}</td>
-    </tr>
-  `).join("") : `<tr><td colspan="7" class="mini">Nessun reddito stimato in questa vista. Serve un APY sulla posizione.</td></tr>`;
 }
 function metric(label, value, detail, klass) {
   return `<div class="metric ${klass || ""}"><div class="value">${value}</div><div class="label">${label}</div>${detail ? `<div class="detail">${detail}</div>` : ""}</div>`;
@@ -287,42 +261,26 @@ function renderApy(data) {
 function renderHist(data) {
   const days = Number(state.period);
   const cutoff = (data.ts || Math.floor(Date.now() / 1000)) - days * 86400;
-  const rawHist = (data.history || []).filter((h) => h.ts >= cutoff);
+  const wanted = state.owner === "tutti" ? "tutti" : state.owner;
+  const rawHist = (data.history || []).filter((h) => h.ts >= cutoff && (!h.owner || h.owner === wanted));
   const byBucket = new Map();
-  rawHist.forEach((h) => {
-    const bucket = Math.floor(h.ts / 3600);
-    byBucket.set(bucket, h);
-  });
-  const hist = [...byBucket.values()];
-  const unit = state.currency === "THB" ? "฿" : "$";
-  const fx = state.currency === "THB" ? (state.fx || 0) : 1;
-  const labels = hist.map((h) => {
-    const d = new Date(h.ts * 1000);
-    return d.toLocaleDateString("it-IT", { day: "numeric", month: "short" });
-  });
-  const vals = hist.map((h) => (h.defi_usd || 0) * fx);
-  const inc = hist.map((h) => (h.year_usd || 0) * fx);
-  $("#hist-caption").textContent = `Storico locale degli ultimi ${days} giorni, per ${OWNER_LABEL[state.owner]}. La linea principale è il valore DeFi; quella secondaria è il reddito annuo stimato.`;
-  paintChart("chart-hist", {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        { label: "Valore DeFi", data: vals, borderColor: "#0D9488", backgroundColor: "rgba(13,148,136,0.12)", fill: true, tension: 0.3, yAxisID: "y" },
-        { label: "Reddito annuo stimato", data: inc, borderColor: "#F59E0B", backgroundColor: "transparent", tension: 0.3, yAxisID: "y1" },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: { legend: { position: "bottom" } },
-      scales: {
-        y: { ticks: { callback: (v) => v.toLocaleString("it-IT") + " " + unit } },
-        y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: (v) => v.toLocaleString("it-IT") + " " + unit } },
-      },
-    },
-  });
+  rawHist.forEach((h) => byBucket.set(Math.floor(h.ts / 3600), h));
+  const hist = [...byBucket.values()].slice(-12).reverse();
+  const caption = $("#hist-caption");
+  if (caption) caption.textContent = `Ultimi punti locali, ${days} giorni, ${OWNER_LABEL[state.owner]}.`;
+  const body = $("#hist-body");
+  if (!body) return;
+  if (!hist.length) {
+    body.innerHTML = `<tr><td colspan="4" class="mini">Ancora nessuno storico. Resta dopo il primo aggiornamento riuscito.</td></tr>`;
+    return;
+  }
+  body.innerHTML = hist.map((h) => `
+    <tr>
+      <td>${escapeHtml(updatedClock(h.ts))}</td>
+      <td class="num">${money(h.total_usd != null ? h.total_usd : h.defi_usd)}</td>
+      <td class="num">${h.wapy == null ? "–" : pct(h.wapy)}</td>
+      <td class="num">${money(h.year_usd || 0)}</td>
+    </tr>`).join("");
 }
 
 function apyDelta(now, avg) {
@@ -338,40 +296,55 @@ function riskBadge(risk) {
   return `<span class="pill ${cls}">${label}</span>`;
 }
 
+function yearIncome(row) {
+  if (row.apy == null || row.usd == null) return "–";
+  if (!row.apy) return "–";
+  return money(Number(row.usd) * Number(row.apy) / 100);
+}
+function positionTable(title, rows) {
+  const body = rows.length ? rows.map((p) => `
+    <tr>
+      <td>${escapeHtml(p.protocol || "")}</td>
+      <td>${escapeHtml(p.asset || "")}</td>
+      <td class="num">${p.usd == null ? "n/d" : money(p.usd)}</td>
+      <td class="num">${p.apy == null ? "–" : pct(p.apy)}</td>
+      <td class="num">${p.apy30 == null ? "–" : pct(p.apy30)}</td>
+      <td class="num">${yearIncome(p)}</td>
+    </tr>`).join("") : `<tr><td colspan="6" class="mini">Nessuna posizione.</td></tr>`;
+  return `<div class="pos-block">
+    <h3>${escapeHtml(title)}</h3>
+    <div class="table-scroll">
+      <table class="positions">
+        <thead>
+          <tr>
+            <th scope="col">Protocollo</th>
+            <th scope="col">Asset</th>
+            <th scope="col" class="num">Valore</th>
+            <th scope="col" class="num">APY</th>
+            <th scope="col" class="num">Media 30 giorni</th>
+            <th scope="col" class="num">Reddito annuo</th>
+          </tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
 function renderPositions(data) {
   const summary = $("#pos-summary");
-  const pack = data.position_summary || {};
+  const pos = data.positions || [];
   if (summary) {
-    const io = pack.io || {};
-    const moglie = pack.moglie || {};
-    const count = (io.count || 0) + (moglie.count || 0);
-    summary.textContent = count
-      ? `${count} posizioni · Io ${money(io.usd || 0)} · Moglie ${money(moglie.usd || 0)}`
-      : "Nessuna posizione";
+    summary.textContent = pos.length
+      ? `${pos.length} posizioni nella vista ${OWNER_LABEL[state.owner]}.`
+      : "Nessuna posizione in questa vista.";
   }
-  const details = $("#positions-details");
-  if (details && !state.positionsOpenApplied && typeof data.positions_open === "boolean") {
-    applyingPositions = true;
-    details.open = data.positions_open;
-    applyingPositions = false;
-    state.positionsOpenApplied = true;
-  }
-  const pos = data.positions;
-  const body = $("#pos-body");
-  if (!pos.length) {
-    body.innerHTML = `<tr><td colspan="7" class="mini">Nessuna posizione in questa vista.</td></tr>`;
-    return;
-  }
-  body.innerHTML = pos.map((p) => `
-    <tr>
-      <td>${OWNER_LABEL[p.owner] || p.owner}</td>
-      <td>${p.protocol}</td>
-      <td>${p.asset}</td>
-      <td class="num">${p.usd == null ? "n/d" : money(p.usd)}</td>
-      <td class="num">${p.protocol !== "Wallet" && p.apy == null ? "non disponibile" : pct(p.apy)}</td>
-      <td class="num">${apyDelta(p.apy, p.apy30)}</td>
-      <td>${riskBadge(p.risk)}</td>
-    </tr>`).join("");
+  const host = $("#pos-groups");
+  if (!host) return;
+  const groups = state.owner === "tutti" ? ["io", "moglie"] : [state.owner];
+  host.innerHTML = groups.map((owner) => {
+    const rows = pos.filter((row) => row.owner === owner).slice().sort((a, b) => (Number(b.usd) || 0) - (Number(a.usd) || 0));
+    return positionTable(OWNER_LABEL[owner] || owner, rows);
+  }).join("");
 }
 
 const YIELD_HOSTS = new Set([
@@ -386,7 +359,7 @@ function yieldLink(url) {
 }
 function renderSwitches(data) {
   const box = $("#switches");
-  const all = data.switches || [];
+  const all = (data.switches || []).filter((item) => state.owner === "tutti" || item.owner === state.owner);
   const hidden = all.filter((item) => item.hidden);
   const items = state.showHiddenSwitches ? all : all.filter((item) => !item.hidden);
   const toggle = $("#btn-switch-hidden");
@@ -636,10 +609,8 @@ function render() {
     });
     $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.wallet_count));
     renderMetrics(data);
-    renderAlloc(data);
-    renderApy(data);
-    renderHist(data);
     renderPositions(data);
+    renderHist(data);
     renderSwitches(data);
     const ensRows = (data.ens_alerts || []).map((item) => ({
       title: (item.name || "ENS") + (OWNER_LABEL[item.owner] ? " · " + OWNER_LABEL[item.owner] : ""),
