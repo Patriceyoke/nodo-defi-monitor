@@ -105,6 +105,9 @@ h2 { font-size: 1.25rem; }
 .owner-card dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 10px 0 0; }
 .owner-card dt { color: var(--muted); font-size: 0.82rem; }
 .owner-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.split-group { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+.split-group h4 { margin: 0 0 4px; font-size: 0.82rem; }
+tr.sum td { font-weight: 750; background: #FAFAF9; }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .pos-block { margin-top: 8px; }
 .pos-block + .pos-block { margin-top: 22px; }

@@ -208,22 +208,56 @@ function renderSplit(data) {
     },
   });
 }
+const ETH_ASSETS = ["wsteth", "weeth", "steth", "weth", "cbeth", "rseth", "ezeth", "reth", "meth", "eth"];
+const STABLE_ASSETS = ["crvusd", "pyusd", "usdc", "usdt", "usds", "lusd", "frax", "gho", "dai"];
+function assetKind(asset) {
+  const text = String(asset || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (ETH_ASSETS.some((name) => text === name || text.endsWith(name))) return "eth";
+  if (STABLE_ASSETS.some((name) => text === name || text.endsWith(name))) return "stable";
+  return "other";
+}
+function groupIncome(rows) {
+  const usd = rows.reduce((sum, row) => sum + (Number(row.usd) || 0), 0);
+  const year = rows.reduce((sum, row) => sum + ((Number(row.usd) || 0) * (Number(row.apy) || 0) / 100), 0);
+  return { usd, year, month: year / 12, apy: usd ? (year / usd) * 100 : 0 };
+}
+function splitBlock(label, stats, total) {
+  const share = total > 0 ? pct((stats.usd / total) * 100) : "–";
+  return `<div class="split-group">
+    <h4>${label}</h4>
+    <dl>
+      <dt>Valore</dt><dd>${money(stats.usd)} · ${share}</dd>
+      <dt>APY ponderato</dt><dd>${pct(stats.apy)}</dd>
+      <dt>Reddito mensile</dt><dd>${money(stats.month)}</dd>
+      <dt>Reddito annuo</dt><dd>${money(stats.year)}</dd>
+    </dl>
+  </div>`;
+}
 function renderMetrics(data) {
   const box = $("#owner-cards");
   if (!box) return;
   const totals = data.totals || {};
+  const positions = data.positions || [];
   const keys = ["io", "moglie", "tutti"];
   box.innerHTML = keys.map((key) => {
     const row = totals[key] || {};
     const apy = row.wapy == null ? "–" : pct(row.wapy);
     const year = row.year_usd == null ? "–" : money(row.year_usd);
+    const month = row.year_usd == null ? "–" : money(Number(row.year_usd) / 12);
+    const rows = positions.filter((item) => key === "tutti" || item.owner === key);
+    const stable = groupIncome(rows.filter((item) => assetKind(item.asset) === "stable"));
+    const eth = groupIncome(rows.filter((item) => assetKind(item.asset) === "eth"));
+    const base = Number(row.total_usd) || (stable.usd + eth.usd);
     return `<article class="owner-card${key === "tutti" ? " sum" : ""}">
       <h3>${OWNER_LABEL[key] || key}</h3>
       <div class="figure">${money(row.total_usd || 0)}</div>
       <dl>
         <dt>APY ponderato</dt><dd>${apy}</dd>
+        <dt>Reddito mensile</dt><dd>${month}</dd>
         <dt>Reddito annuo</dt><dd>${year}</dd>
       </dl>
+      ${splitBlock("Stablecoin", stable, base)}
+      ${splitBlock("ETH", eth, base)}
     </article>`;
   }).join("");
 }
@@ -356,21 +390,32 @@ function riskBadge(risk) {
   return `<span class="pill ${cls}">${label}</span>`;
 }
 
-function yearIncome(row) {
-  if (row.apy == null || row.usd == null) return "–";
-  if (!row.apy) return "–";
-  return money(Number(row.usd) * Number(row.apy) / 100);
+function incomeAmounts(row) {
+  if (row.apy == null || row.usd == null || !Number(row.apy)) return null;
+  const year = Number(row.usd) * Number(row.apy) / 100;
+  return { year, month: year / 12 };
 }
 function positionTable(title, rows) {
-  const body = rows.length ? rows.map((p) => `
-    <tr>
+  const totals = groupIncome(rows);
+  const body = rows.length ? rows.map((p) => {
+    const income = incomeAmounts(p);
+    return `<tr>
       <td>${escapeHtml(p.protocol || "")}</td>
       <td>${escapeHtml(p.asset || "")}</td>
       <td class="num">${p.usd == null ? "n/d" : money(p.usd)}</td>
       <td class="num">${p.apy == null ? "–" : pct(p.apy)}</td>
       <td class="num">${p.apy30 == null ? "–" : pct(p.apy30)}</td>
-      <td class="num">${yearIncome(p)}</td>
-    </tr>`).join("") : `<tr><td colspan="6" class="mini">Nessuna posizione.</td></tr>`;
+      <td class="num">${income ? money(income.month) : "–"}</td>
+      <td class="num">${income ? money(income.year) : "–"}</td>
+    </tr>`;
+  }).join("") + `<tr class="sum">
+      <td colspan="2">Totale</td>
+      <td class="num">${money(totals.usd)}</td>
+      <td class="num">${pct(totals.apy)}</td>
+      <td></td>
+      <td class="num">${money(totals.month)}</td>
+      <td class="num">${money(totals.year)}</td>
+    </tr>` : `<tr><td colspan="7" class="mini">Nessuna posizione.</td></tr>`;
   return `<div class="pos-block">
     <h3>${escapeHtml(title)}</h3>
     <div class="table-scroll">
@@ -382,6 +427,7 @@ function positionTable(title, rows) {
             <th scope="col" class="num">Valore</th>
             <th scope="col" class="num">APY</th>
             <th scope="col" class="num">Media 30 giorni</th>
+            <th scope="col" class="num">Reddito mensile</th>
             <th scope="col" class="num">Reddito annuo</th>
           </tr>
         </thead>
