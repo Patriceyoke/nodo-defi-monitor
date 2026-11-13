@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.5.5" />
-  <link rel="icon" href="/static/favicon.svg?v=0.5.5" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.5.6" />
+  <link rel="icon" href="/static/favicon.svg?v=0.5.6" type="image/svg+xml" />
 </head>
 <body>
   <header class="appbar">
@@ -62,9 +62,14 @@
     </section>
 
     <section class="card" id="positions">
-      <h2>Posizioni</h2>
-      <p class="caption" id="pos-summary">Una tabella per titolare. Il reddito annuo è valore per APY attuale.</p>
-      <div id="pos-groups"></div>
+      <details id="positions-details">
+        <summary>
+          <h2>Posizioni</h2>
+          <p class="caption" id="pos-summary">Nessuna posizione.</p>
+        </summary>
+        <p class="caption">Una tabella per titolare. Il reddito annuo è valore per APY attuale.</p>
+        <div id="pos-groups"></div>
+      </details>
     </section>
 
     <section class="card" id="changes">
@@ -90,15 +95,18 @@
       <p class="mini hidden" id="hist-empty">Ancora nessuno storico in questo periodo. Resta dopo il primo aggiornamento riuscito.</p>
     </section>
 
-    <section class="card">
-      <div class="card-head">
-        <div>
+    <section class="card" id="switches-card">
+      <details id="switches-details">
+        <summary>
           <h2>Suggerimenti di switch</h2>
+          <p class="caption" id="switch-summary">Nessun suggerimento.</p>
+        </summary>
+        <div class="card-head">
           <p class="caption">Solo se il rendimento sale a rischio uguale o inferiore, dopo il gas. Nessuna transazione parte da qui.</p>
+          <button class="btn ghost" id="btn-switch-hidden" type="button">Mostra nascosti (0)</button>
         </div>
-        <button class="btn ghost" id="btn-switch-hidden" type="button">Mostra nascosti (0)</button>
-      </div>
-      <div id="switches"></div>
+        <div id="switches"></div>
+      </details>
     </section>
 
     <section class="card">
@@ -228,7 +236,7 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js?v=0.5.5"></script>
-  <script src="/static/app.js?v=0.5.5"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.5.6"></script>
+  <script src="/static/app.js?v=0.5.6"></script>
 </body>
 </html>

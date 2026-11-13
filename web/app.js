@@ -504,9 +504,8 @@ function renderPositions(data) {
   const summary = $("#pos-summary");
   const pos = data.positions || [];
   if (summary) {
-    summary.textContent = pos.length
-      ? `${pos.length} posizioni nella vista ${OWNER_LABEL[state.owner]}.`
-      : "Nessuna posizione in questa vista.";
+    const n = pos.length;
+    summary.textContent = n === 1 ? "1 posizione." : n ? `${n} posizioni.` : "Nessuna posizione.";
   }
   const host = $("#pos-groups");
   if (!host) return;
@@ -530,6 +529,11 @@ function yieldLink(url) {
 function renderSwitches(data) {
   const box = $("#switches");
   const all = (data.switches || []).filter((item) => state.owner === "tutti" || item.owner === state.owner);
+  const summary = $("#switch-summary");
+  if (summary) {
+    const n = all.length;
+    summary.textContent = n === 1 ? "1 suggerimento." : n ? `${n} suggerimenti.` : "Nessun suggerimento.";
+  }
   const hidden = all.filter((item) => item.hidden);
   const items = state.showHiddenSwitches ? all : all.filter((item) => !item.hidden);
   const toggle = $("#btn-switch-hidden");
@@ -934,6 +938,15 @@ function evmEditForm(id, label, owner, address) {
 function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
+function rememberFold(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const key = "nodo-section-" + id;
+  try { el.open = localStorage.getItem(key) === "1"; } catch (_) {}
+  el.addEventListener("toggle", () => {
+    try { localStorage.setItem(key, el.open ? "1" : "0"); } catch (_) {}
+  });
+}
 
 async function boot() {
   commonChart();
@@ -1239,19 +1252,8 @@ async function boot() {
       await load(true);
     } catch (err) { alert(err.message); }
   });
-  const posDetails = $("#positions-details");
-  if (posDetails) {
-    posDetails.addEventListener("toggle", () => {
-      if (applyingPositions) return;
-      api("/api/settings", {
-        method: "PUT",
-        body: JSON.stringify({ positions_open: posDetails.open }),
-      }).catch(() => {
-        const existing = (state.data && state.data.errors) || [];
-        showBanner(existing.concat(["Non sono riuscito a ricordare se Posizioni è aperta. Gli indirizzi non sono stati toccati."]));
-      });
-    });
-  }
+  rememberFold("positions-details");
+  rememberFold("switches-details");
   await load(false);
   load(true);
 }

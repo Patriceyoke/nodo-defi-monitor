@@ -206,14 +206,14 @@ form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .nft-card h3 { margin: 8px 0 2px; font-size: 1rem; }
 .lp-fold { margin-top: 16px; }
 .lp-fold summary { cursor: pointer; font-weight: 700; }
-#nft-details > summary, #security-details > summary, #positions-details > summary {
+#nft-details > summary, #security-details > summary, #positions-details > summary, #switches-details > summary {
   cursor: pointer; list-style: none; display: block; min-height: 44px; padding: 2px 0 6px;
 }
 .metrics.compact { grid-template-columns: repeat(3, 1fr); }
-#nft-details > summary::-webkit-details-marker, #security-details > summary::-webkit-details-marker, #positions-details > summary::-webkit-details-marker { display: none; }
-#nft-details > summary h2, #security-details > summary h2, #positions-details > summary h2 { display: inline; }
-#nft-details > summary h2::before, #security-details > summary h2::before, #positions-details > summary h2::before { content: "▸ "; }
-#nft-details[open] > summary h2::before, #security-details[open] > summary h2::before, #positions-details[open] > summary h2::before { content: "▾ "; }
+#nft-details > summary::-webkit-details-marker, #security-details > summary::-webkit-details-marker, #positions-details > summary::-webkit-details-marker, #switches-details > summary::-webkit-details-marker { display: none; }
+#nft-details > summary h2, #security-details > summary h2, #positions-details > summary h2, #switches-details > summary h2 { display: inline; }
+#nft-details > summary h2::before, #security-details > summary h2::before, #positions-details > summary h2::before, #switches-details > summary h2::before { content: "▸ "; }
+#nft-details[open] > summary h2::before, #security-details[open] > summary h2::before, #positions-details[open] > summary h2::before, #switches-details[open] > summary h2::before { content: "▾ "; }
 .warn-text { color: #B45309; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .electrs-diag { margin-top: 8px; }
