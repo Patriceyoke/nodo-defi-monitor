@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", chartOwner: "tutti", currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
+const state = { owner: "tutti", chartOwner: "tutti", histOwner: "tutti", histDays: 7, currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
 let loadGen = 0;
 let applyingPositions = false;
 const charts = {};
@@ -352,29 +352,91 @@ function renderApy(data) {
   });
 }
 
+function formatHistDate(ts, withYear) {
+  const date = new Date(Number(ts) * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("it-IT", withYear
+    ? { day: "numeric", month: "short", year: "numeric" }
+    : { day: "numeric", month: "short" });
+}
+function historyPoints(data) {
+  const days = Number(state.histDays) || 7;
+  const owner = state.histOwner || "tutti";
+  const now = Number(data.ts) || Math.floor(Date.now() / 1000);
+  const cutoff = now - days * 86400;
+  const byDay = new Map();
+  (data.history || [])
+    .filter((row) => Number(row.ts) >= cutoff && (row.owner || "tutti") === owner)
+    .sort((a, b) => Number(a.ts) - Number(b.ts))
+    .forEach((row) => {
+      const date = new Date(Number(row.ts) * 1000);
+      const key = date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
+      const value = Number(row.total_usd != null ? row.total_usd : row.defi_usd);
+      byDay.set(key, { ts: Number(row.ts), value: Number.isFinite(value) ? value : 0 });
+    });
+  return { days, owner, cutoff, points: [...byDay.values()] };
+}
 function renderHist(data) {
-  const days = 7;
-  const cutoff = (data.ts || Math.floor(Date.now() / 1000)) - days * 86400;
-  const wanted = state.owner === "tutti" ? "tutti" : state.owner;
-  const rawHist = (data.history || []).filter((h) => h.ts >= cutoff && (!h.owner || h.owner === wanted));
-  const byBucket = new Map();
-  rawHist.forEach((h) => byBucket.set(Math.floor(h.ts / 3600), h));
-  const hist = [...byBucket.values()].reverse();
+  const series = historyPoints(data);
+  const label = OWNER_LABEL[series.owner] || "Combinato";
   const caption = $("#hist-caption");
-  if (caption) caption.textContent = `Ultimi 7 giorni, ${OWNER_LABEL[state.owner]}.`;
-  const body = $("#hist-body");
-  if (!body) return;
-  if (!hist.length) {
-    body.innerHTML = `<tr><td colspan="4" class="mini">Ancora nessuno storico. Resta dopo il primo aggiornamento riuscito.</td></tr>`;
+  const empty = $("#hist-empty");
+  const box = $("#hist-chart-box");
+  const points = series.points;
+  if (!points.length) {
+    if (charts["chart-hist"]) { charts["chart-hist"].destroy(); charts["chart-hist"] = null; }
+    if (caption) caption.textContent = label + " · ultimi " + series.days + " giorni. Il selettore cambia solo questo grafico.";
+    if (box) box.classList.add("hidden");
+    if (empty) {
+      empty.classList.remove("hidden");
+      empty.textContent = "Ancora nessuno storico in questo periodo. Resta dopo il primo aggiornamento riuscito.";
+    }
     return;
   }
-  body.innerHTML = hist.map((h) => `
-    <tr>
-      <td>${escapeHtml(updatedClock(h.ts))}</td>
-      <td class="num">${money(h.total_usd != null ? h.total_usd : h.defi_usd)}</td>
-      <td class="num">${h.wapy == null ? "–" : pct(h.wapy)}</td>
-      <td class="num">${money(h.year_usd || 0)}</td>
-    </tr>`).join("");
+  if (box) box.classList.remove("hidden");
+  if (empty) empty.classList.add("hidden");
+  const from = points[0].ts > series.cutoff + 86400 ? " · dati dal " + formatHistDate(points[0].ts) : "";
+  if (caption) caption.textContent = label + " · ultimi " + series.days + " giorni" + from + ". Il selettore cambia solo questo grafico.";
+  paintChart("chart-hist", {
+    type: "line",
+    data: {
+      labels: points.map((point) => formatHistDate(point.ts)),
+      datasets: [{
+        label: "Valore",
+        data: points.map((point) => point.value),
+        borderColor: "#0D9488",
+        backgroundColor: "rgba(13, 148, 136, 0.12)",
+        fill: true,
+        tension: 0.25,
+        pointRadius: points.length > 24 ? 0 : 3,
+        pointHoverRadius: 4,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => formatHistDate(points[items[0].dataIndex].ts, true),
+            label: (item) => "Valore: " + money(item.parsed.y),
+            afterLabel: (item) => {
+              const prev = points[item.dataIndex - 1];
+              if (!prev) return "Variazione giornaliera: –";
+              const delta = item.parsed.y - prev.value;
+              const sign = delta > 0 ? "+" : "";
+              return "Variazione giornaliera: " + sign + money(delta);
+            },
+          },
+        },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 6 } },
+        y: { ticks: { maxTicksLimit: 4, callback: (value) => money(value) }, grace: "10%" },
+      },
+    },
+  });
 }
 
 function apyDelta(now, avg) {
@@ -862,10 +924,24 @@ async function boot() {
     const dismiss = ev.target.closest("#btn-dismiss-alert");
     if (dismiss) { ev.preventDefault(); dismissAlert(); }
     const chartBtn = ev.target.closest("#chart-owner button");
-    if (!chartBtn) return;
-    state.chartOwner = chartBtn.dataset.value;
-    chartBtn.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === chartBtn));
-    if (state.data) renderSplit(state.data);
+    if (chartBtn) {
+      state.chartOwner = chartBtn.dataset.value;
+      chartBtn.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === chartBtn));
+      if (state.data) renderSplit(state.data);
+      return;
+    }
+    const histOwner = ev.target.closest("#hist-owner button");
+    if (histOwner) {
+      state.histOwner = histOwner.dataset.value;
+      histOwner.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === histOwner));
+      if (state.data) renderHist(state.data);
+      return;
+    }
+    const histRange = ev.target.closest("#hist-range button");
+    if (!histRange) return;
+    state.histDays = Number(histRange.dataset.value) || 7;
+    histRange.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === histRange));
+    if (state.data) renderHist(state.data);
   });
   $("#btn-settings").addEventListener("click", async () => { await loadSettings(); openSettings(true); });
   $("#btn-close-settings").addEventListener("click", () => openSettings(false));

@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.5.2"
+version: "0.5.3"
 tagline: "Tieni d'occhio la DeFi in sola lettura, divisa tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -22,10 +22,9 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.5.2: accanto al reddito annuo c'è il reddito mensile, sulle
-  schede e nelle tabelle. Per Io, Moglie e il combinato si vede
-  anche quanto è in stablecoin e quanto in ETH, con valore, quota,
-  APY e reddito. Gli indirizzi salvati restano.
+  0.5.3: le variazioni recenti sono un grafico del valore, con
+  7, 30 o 90 giorni e il selettore Io, Moglie o combinato.
+  Lo storico già salvato resta. Gli indirizzi salvati restano.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

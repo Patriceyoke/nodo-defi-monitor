@@ -71,17 +71,23 @@
       <div class="card-head">
         <div>
           <h2>Variazioni recenti</h2>
-          <p class="caption" id="hist-caption">Ultimi 7 giorni, da questo server.</p>
+          <p class="caption" id="hist-caption">Valore del portafoglio nel tempo. Il selettore cambia solo questo grafico.</p>
         </div>
       </div>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr><th scope="col">Quando</th><th scope="col" class="num">Valore</th><th scope="col" class="num">APY</th><th scope="col" class="num">Reddito annuo</th></tr>
-          </thead>
-          <tbody id="hist-body"></tbody>
-        </table>
+      <div class="toolbar">
+        <div class="segmented" id="hist-owner">
+          <button data-value="tutti" class="on" type="button">Combinato</button>
+          <button data-value="io" type="button">Io</button>
+          <button data-value="moglie" type="button">Moglie</button>
+        </div>
+        <div class="segmented" id="hist-range">
+          <button data-value="7" class="on" type="button">7 giorni</button>
+          <button data-value="30" type="button">30 giorni</button>
+          <button data-value="90" type="button">90 giorni</button>
+        </div>
       </div>
+      <div class="chart-box line" id="hist-chart-box"><canvas id="chart-hist"></canvas></div>
+      <p class="mini hidden" id="hist-empty">Ancora nessuno storico in questo periodo. Resta dopo il primo aggiornamento riuscito.</p>
     </section>
 
     <section class="card">
