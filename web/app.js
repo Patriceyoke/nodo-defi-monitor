@@ -178,18 +178,17 @@ function renderOutflowBanners(data) {
 function renderFlowHistory(data) {
   const box = $("#sec-flows");
   if (!box) return;
-  const rows = ((data && data.fund_flows) || []).filter((row) => state.owner === "tutti" || row.owner === state.owner);
+  const rows = flowRows(data).filter((row) => row.status === "mine" || row.status === "suspicious");
   if (!rows.length) {
     box.innerHTML = "";
     return;
   }
   const line = (row) => {
     const when = updatedClock(row.detected_at);
-    const verb = row.direction === "in" ? "Entrati" : "Usciti";
-    const stateLabel = row.status === "mine" ? "riconosciuta" : row.status === "suspicious" ? "non riconosciuta" : row.status === "noted" ? "registrata" : "in attesa";
-    return `<p class="flow-line"><strong>${verb} ${escapeHtml(qty(row.delta))} ${escapeHtml(row.asset || "")}</strong> ${escapeHtml(flowWhere(row))}. ${escapeHtml(when)} · ${stateLabel}</p>`;
+    const stateLabel = row.status === "mine" ? "eri tu" : "non eri tu";
+    return `<p class="flow-line"><strong>Usciti ${escapeHtml(qty(row.delta))} ${escapeHtml(row.asset || "")}</strong> ${escapeHtml(flowWhere(row))}. ${escapeHtml(when)} · ${stateLabel}</p>`;
   };
-  box.innerHTML = `<h3>Movimenti di quantità</h3>${rows.map(line).join("")}`;
+  box.innerHTML = `<h3>Uscite già controllate</h3>${rows.map(line).join("")}`;
 }
 function renderSecuritySummary(data) {
   const source = data || state.data;

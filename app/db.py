@@ -166,6 +166,12 @@ def init_db() -> None:
         raise RuntimeError("Lo schema non può cancellare tabelle: i portafogli devono restare.")
     with connect() as conn:
         conn.executescript(SCHEMA)
+        conn.execute("DELETE FROM fund_flows WHERE direction='in'")
+        conn.execute(
+            """DELETE FROM fund_flows
+               WHERE direction='out' AND status='open'
+                 AND ABS(delta) < 0.005 AND usd_delta < 500"""
+        )
         row = conn.execute("SELECT value FROM settings WHERE key='mcp_token'").fetchone()
         if not row:
             token = secrets.token_urlsafe(24)

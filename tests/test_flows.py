@@ -53,14 +53,36 @@ def test_withdrawal_of_token_quantity_is_an_outflow(isolated):
     assert len(db.list_fund_flows()) == 1
 
 
-def test_small_quantity_change_stays_quiet_and_inflows_are_not_urgent(isolated):
+def test_interest_and_small_drops_are_not_recorded(isolated):
+    observe_positions([_position(1000, 1000, asset="sUSDS", protocol="Sky")], now=1)
+    observe_positions([_position(1000.02, 1000.02, asset="sUSDS", protocol="Sky")], now=2)
+    observe_positions([_position(0, 0, asset="WETH", protocol="Compound")], now=1)
+    observe_positions([_position(0.00001, 0.03, asset="WETH", protocol="Compound")], now=2)
     observe_positions([_position(100, 100)], now=1)
     observe_positions([_position(99.5, 99.5)], now=2)
     assert db.list_fund_flows() == []
-    observe_positions([_position(150, 150)], now=3)
-    rows = db.list_fund_flows()
-    assert rows[0]["direction"] == "in"
-    assert public_flow(rows[0])["urgent"] is False
+    marks = {row["asset"]: row["amount"] for row in db.list_position_marks()}
+    assert marks["sUSDS"] == 1000.02
+
+
+def test_upgrade_drops_stored_inflows(isolated):
+    db.insert_fund_flow({
+        "flow_key": "in|old",
+        "direction": "in",
+        "owner": "io",
+        "protocol": "Sky",
+        "asset": "sUSDS",
+        "wallet": "0x" + "11" * 20,
+        "chain": "ethereum",
+        "previous_amount": 1,
+        "amount": 1.02,
+        "delta": 0.02,
+        "usd_delta": 0.02,
+        "detected_at": 1,
+        "status": "noted",
+    })
+    db.init_db()
+    assert db.list_fund_flows() == []
 
 
 def test_answer_is_kept_when_the_same_balance_is_read_again(isolated):

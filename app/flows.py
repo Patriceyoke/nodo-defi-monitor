@@ -53,11 +53,19 @@ def _flow_key(direction: str, key: str, previous: float, amount: float) -> str:
     return f"{direction}|{key}|{previous:.8f}|{amount:.8f}"
 
 
-def observe_positions(positions: list[dict[str, Any]], *, now: int | None = None) -> list[dict[str, Any]]:
-    """Compare token quantities with the last refresh and store marks plus events.
+def _worth_showing(delta: float, usd_delta: float, usd_min: float) -> bool:
+    """Hide a quantity that would print as 0, unless the dollars are already meaningful."""
+    if abs(float(delta)) >= 0.005:
+        return True
+    return float(usd_delta) >= float(usd_min) and float(usd_delta) > 0
 
-    The first time a position is seen, only the mark is stored. A later increase
-    is an inflow and stays out of the banner. A meaningful decrease is an outflow.
+
+def observe_positions(positions: list[dict[str, Any]], *, now: int | None = None) -> list[dict[str, Any]]:
+    """Compare token quantities with the last refresh.
+
+    Interest and rebasing only move the saved quantity forward. They are not
+    stored as events. A later decrease is an outflow only when it passes the
+    quantity threshold.
     """
     now = int(time.time() if now is None else now)
     drop_pct, usd_min = _thresholds()
@@ -87,57 +95,34 @@ def observe_positions(positions: list[dict[str, Any]], *, now: int | None = None
     created: list[dict[str, Any]] = []
     for key, current in grouped.items():
         previous = known.get(key)
-        if previous is None:
-            db.upsert_position_mark(
-                key, current["owner"], current["protocol"], current["asset"],
-                current["wallet"], current["chain"], current["amount"], current["usd"],
-            )
-            continue
-        prev_amount = float(previous["amount"])
-        if current["amount"] > prev_amount + max(prev_amount * _DUST, 1e-9):
-            delta = current["amount"] - prev_amount
-            frac = delta / prev_amount if prev_amount else 0
-            row = {
-                "flow_key": _flow_key("in", key, prev_amount, current["amount"]),
-                "direction": "in",
-                "owner": current["owner"],
-                "protocol": current["protocol"],
-                "asset": current["asset"],
-                "wallet": current["wallet"],
-                "chain": current["chain"],
-                "previous_amount": prev_amount,
-                "amount": current["amount"],
-                "delta": delta,
-                "usd_delta": frac * float(previous.get("usd") or 0),
-                "detected_at": now,
-                "status": "noted",
-            }
-            if db.insert_fund_flow(row):
-                created.append(row)
-        else:
-            drop = meaningful_quantity_drop(prev_amount, float(previous.get("usd") or 0), current["amount"], drop_pct, usd_min)
-            if drop:
-                row = {
-                    "flow_key": _flow_key("out", key, prev_amount, current["amount"]),
-                    "direction": "out",
-                    "owner": current["owner"],
-                    "protocol": current["protocol"],
-                    "asset": current["asset"],
-                    "wallet": current["wallet"],
-                    "chain": current["chain"],
-                    "previous_amount": prev_amount,
-                    "amount": current["amount"],
-                    "delta": drop["delta"],
-                    "usd_delta": drop["usd_delta"],
-                    "detected_at": now,
-                    "status": "open",
-                }
-                if db.insert_fund_flow(row):
-                    created.append(row)
         db.upsert_position_mark(
             key, current["owner"], current["protocol"], current["asset"],
             current["wallet"], current["chain"], current["amount"], current["usd"],
         )
+        if previous is None:
+            continue
+        drop = meaningful_quantity_drop(
+            float(previous["amount"]), float(previous.get("usd") or 0), current["amount"], drop_pct, usd_min,
+        )
+        if not drop or not _worth_showing(drop["delta"], drop["usd_delta"], usd_min):
+            continue
+        row = {
+            "flow_key": _flow_key("out", key, float(previous["amount"]), current["amount"]),
+            "direction": "out",
+            "owner": current["owner"],
+            "protocol": current["protocol"],
+            "asset": current["asset"],
+            "wallet": current["wallet"],
+            "chain": current["chain"],
+            "previous_amount": float(previous["amount"]),
+            "amount": current["amount"],
+            "delta": drop["delta"],
+            "usd_delta": drop["usd_delta"],
+            "detected_at": now,
+            "status": "open",
+        }
+        if db.insert_fund_flow(row):
+            created.append(row)
     return created
 
 
@@ -165,4 +150,11 @@ def list_public_flows(owner: str = "tutti") -> list[dict[str, Any]]:
     rows = db.list_fund_flows()
     if owner and owner != "tutti":
         rows = [row for row in rows if row.get("owner") == owner]
-    return [public_flow(row) for row in rows]
+    visible = []
+    for row in rows:
+        if row.get("direction") != "out":
+            continue
+        if not _worth_showing(float(row.get("delta") or 0), float(row.get("usd_delta") or 0), 500):
+            continue
+        visible.append(public_flow(row))
+    return visible
