@@ -652,7 +652,7 @@ def filter_owner_rows(rows: list[dict[str, Any]], owner: str) -> list[dict[str, 
 
 def _thresholds() -> tuple[float, float]:
     try:
-        drop = float(db.get_setting("outflow_drop_pct") or "5")
+        drop = float(db.get_setting("outflow_drop_pct") or "2")
     except ValueError:
         drop = 5.0
     try:

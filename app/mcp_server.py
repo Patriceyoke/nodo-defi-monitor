@@ -174,6 +174,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
             "owner": owner,
             "protocol_security": data["security"],
             "ens": data.get("ens_alerts") or [],
+            "outflows": data.get("fund_flows") or [],
             "security_summary": data.get("security_summary") or security_checks.security_summary(owner),
         })
     if name == "get_security":

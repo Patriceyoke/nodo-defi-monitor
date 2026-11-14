@@ -76,6 +76,33 @@ CREATE TABLE IF NOT EXISTS approval_hides (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (wallet, chain, token, spender)
 );
+CREATE TABLE IF NOT EXISTS position_marks (
+    position_key TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    wallet TEXT NOT NULL,
+    chain TEXT NOT NULL,
+    amount REAL NOT NULL,
+    usd REAL NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fund_flows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flow_key TEXT NOT NULL UNIQUE,
+    direction TEXT NOT NULL CHECK (direction IN ('out', 'in')),
+    owner TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    asset TEXT NOT NULL,
+    wallet TEXT NOT NULL,
+    chain TEXT NOT NULL,
+    previous_amount REAL NOT NULL,
+    amount REAL NOT NULL,
+    delta REAL NOT NULL,
+    usd_delta REAL NOT NULL,
+    detected_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'mine', 'suspicious', 'noted'))
+);
 CREATE TABLE IF NOT EXISTS nft_hides (
     kind TEXT NOT NULL CHECK (kind IN ('token', 'collection')),
     chain TEXT NOT NULL,
@@ -151,7 +178,7 @@ def init_db() -> None:
             "electrs_host": "",
             "electrs_port": "50001",
             "btc_gap_limit": "50",
-            "outflow_drop_pct": "5",
+            "outflow_drop_pct": "2",
             "outflow_usd": "500",
             "currency": "USD",
             "fx_thb": "",
@@ -438,6 +465,70 @@ def upsert_balance_mark(
                  usd=excluded.usd, updated_at=excluded.updated_at""",
             (wallet.lower(), chain, token.lower(), owner, symbol, float(amount), float(usd), now),
         )
+
+
+def list_position_marks() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT position_key, owner, protocol, asset, wallet, chain, amount, usd, updated_at FROM position_marks"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_position_mark(
+    position_key: str, owner: str, protocol: str, asset: str, wallet: str, chain: str, amount: float, usd: float
+) -> None:
+    now = int(time.time())
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO position_marks(position_key, owner, protocol, asset, wallet, chain, amount, usd, updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(position_key) DO UPDATE SET
+                 owner=excluded.owner, protocol=excluded.protocol, asset=excluded.asset,
+                 wallet=excluded.wallet, chain=excluded.chain, amount=excluded.amount,
+                 usd=excluded.usd, updated_at=excluded.updated_at""",
+            (position_key, owner, protocol, asset, wallet.lower(), chain, float(amount), float(usd), now),
+        )
+
+
+def list_fund_flows() -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT id, flow_key, direction, owner, protocol, asset, wallet, chain,
+                      previous_amount, amount, delta, usd_delta, detected_at, status
+               FROM fund_flows ORDER BY detected_at DESC, id DESC"""
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def insert_fund_flow(row: dict[str, Any]) -> bool:
+    """Store one quantity change. Returns False when that exact change is already stored."""
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO fund_flows(
+                 flow_key, direction, owner, protocol, asset, wallet, chain,
+                 previous_amount, amount, delta, usd_delta, detected_at, status
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(flow_key) DO NOTHING""",
+            (
+                row["flow_key"], row["direction"], row["owner"], row["protocol"], row["asset"],
+                str(row.get("wallet") or "").lower(), row["chain"],
+                float(row["previous_amount"]), float(row["amount"]), float(row["delta"]),
+                float(row["usd_delta"]), int(row["detected_at"]), row["status"],
+            ),
+        )
+        return cur.rowcount > 0
+
+
+def set_fund_flow_status(flow_id: int, status: str) -> bool:
+    if status not in {"mine", "suspicious"}:
+        raise ValueError("Risposta non valida.")
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE fund_flows SET status=? WHERE id=? AND direction='out'",
+            (status, int(flow_id)),
+        )
+        return cur.rowcount > 0
 
 
 def cache_get(key: str) -> dict[str, Any] | None:

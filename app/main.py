@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, nft, security
+from . import config, db, flows, nft, security
 from .config import APP_NAME, APP_VERSION
 from .mcp_server import router as mcp_router
 from .portfolio import cached_snapshot, failed_view, invalidate, refresh_status, snapshot
@@ -412,6 +412,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "errors": status.get("errors") or ["Nessun ricalcolo ancora. Premi Aggiorna sulla dashboard."],
             "protocol_security": [],
             "ens": [],
+            "outflows": flows.list_public_flows(owner),
             "security_summary": security.security_summary(owner),
         }
     try:
@@ -424,6 +425,7 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
             "errors": [f"Avvisi non calcolati: {exc}"],
             "protocol_security": [],
             "ens": [],
+            "outflows": [],
             "security_summary": {"approvals": 0, "hidden": 0, "incidents": 0, "outflows": 0, "visible": 0},
         }
     return {
@@ -432,8 +434,25 @@ async def get_alerts(owner: str = Query("tutti")) -> dict[str, Any]:
         "errors": data.get("errors") or [],
         "protocol_security": data.get("security") or [],
         "ens": data.get("ens_alerts") or [],
+        "outflows": data.get("fund_flows") or flows.list_public_flows(owner),
         "security_summary": data.get("security_summary") or security.security_summary(owner),
     }
+
+
+class OutflowAnswerIn(BaseModel):
+    status: str
+
+
+@app.post("/api/outflows/{flow_id}")
+async def answer_outflow(flow_id: int, body: OutflowAnswerIn) -> dict[str, Any]:
+    try:
+        if not db.set_fund_flow_status(flow_id, body.status):
+            raise HTTPException(404, "Uscita non trovata")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _http_secret(exc) from exc
+    return {"ok": True, "outflows": flows.list_public_flows("tutti")}
 
 
 @app.get("/api/history")

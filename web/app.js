@@ -128,14 +128,81 @@ function bannerHasNew(keys, data) {
   const known = new Set(dismissedAlerts(data));
   return current.some((key) => !known.has(key));
 }
-function renderSecuritySummary(data) {
-  const box = $("#security-summary");
-  const summary = viewSummary(data || state.data);
-  const keys = summaryKeys(summary);
-  const line = $("#sec-summary");
-  if (line) line.textContent = urgentLine(keys.length);
+function flowRows(data) {
+  return ((data && data.fund_flows) || []).filter((row) => row.direction === "out" && (state.owner === "tutti" || row.owner === state.owner));
+}
+function openFlows(data) {
+  return flowRows(data).filter((row) => row.status === "open" || row.status === "suspicious");
+}
+function qty(n) {
+  const value = Number(n);
+  if (!Number.isFinite(value)) return "–";
+  const negative = value < 0;
+  const [whole, frac] = Math.abs(value).toFixed(2).split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const tail = frac === "00" ? "" : "," + frac.replace(/0+$/, "");
+  return (negative ? "−" : "") + grouped + tail;
+}
+function flowWhere(flow) {
+  return flow.protocol === "Wallet" ? "dal portafoglio" : "da " + (flow.protocol || "una posizione");
+}
+function flowSentence(flow) {
+  return `Sono usciti ${qty(flow.delta)} ${flow.asset || ""} ${flowWhere(flow)}.`.replace(/\s+/g, " ").trim();
+}
+function renderOutflowBanners(data) {
+  const box = $("#outflow-banners");
   if (!box) return;
-  if (!bannerHasNew(keys, data || state.data)) {
+  box.innerHTML = openFlows(data).map((row) => {
+    if (row.status === "suspicious") {
+      return `<div class="callout bad outflow-banner">
+        <strong>Uscita di fondi non riconosciuta</strong>
+        <p>${escapeHtml(flowSentence(row))}</p>
+        <ol>
+          <li>Revoca le approvazioni su <a href="https://revoke.cash" target="_blank" rel="noopener">revoke.cash</a>. La firma la fai tu sul tuo hardware, per esempio OneKey.</li>
+          <li>Sposta i fondi rimasti su un portafoglio sicuro. Firmi tu, da OneKey.</li>
+          <li>Controlla lo stato ufficiale del protocollo sul suo sito.</li>
+        </ol>
+        <p>L'app non chiede e non accetta la seed né la chiave privata.</p>
+      </div>`;
+    }
+    return `<div class="callout warn outflow-banner">
+      <strong>Uscita di fondi</strong>
+      <p>${escapeHtml(flowSentence(row))} Sei stato tu?</p>
+      <div class="outflow-actions">
+        <button class="btn primary" type="button" data-flow-answer="${row.id}" data-flow-status="mine">Sì, sono stato io</button>
+        <button class="btn" type="button" data-flow-answer="${row.id}" data-flow-status="suspicious">No, non sono stato io</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+function renderFlowHistory(data) {
+  const box = $("#sec-flows");
+  if (!box) return;
+  const rows = ((data && data.fund_flows) || []).filter((row) => state.owner === "tutti" || row.owner === state.owner);
+  if (!rows.length) {
+    box.innerHTML = "";
+    return;
+  }
+  const line = (row) => {
+    const when = updatedClock(row.detected_at);
+    const verb = row.direction === "in" ? "Entrati" : "Usciti";
+    const stateLabel = row.status === "mine" ? "riconosciuta" : row.status === "suspicious" ? "non riconosciuta" : row.status === "noted" ? "registrata" : "in attesa";
+    return `<p class="flow-line"><strong>${verb} ${escapeHtml(qty(row.delta))} ${escapeHtml(row.asset || "")}</strong> ${escapeHtml(flowWhere(row))}. ${escapeHtml(when)} · ${stateLabel}</p>`;
+  };
+  box.innerHTML = `<h3>Movimenti di quantità</h3>${rows.map(line).join("")}`;
+}
+function renderSecuritySummary(data) {
+  const source = data || state.data;
+  const box = $("#security-summary");
+  const summary = viewSummary(source);
+  const keys = summaryKeys(summary).filter((key) => !String(key).startsWith("outflow|"));
+  const count = keys.length + openFlows(source).length;
+  const line = $("#sec-summary");
+  if (line) line.textContent = urgentLine(count);
+  renderOutflowBanners(source);
+  renderFlowHistory(source);
+  if (!box) return;
+  if (!bannerHasNew(keys, source)) {
     box.innerHTML = "";
     return;
   }
@@ -207,7 +274,7 @@ function paintChart(id, config) {
 
 function commonChart() {
   Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-  Chart.defaults.color = "#475569";
+  Chart.defaults.color = "#1C1917";
 }
 
 function renderSplit(data) {
@@ -257,17 +324,15 @@ function groupIncome(rows) {
   const year = rows.reduce((sum, row) => sum + ((Number(row.usd) || 0) * (Number(row.apy) || 0) / 100), 0);
   return { usd, year, month: year / 12, apy: usd ? (year / usd) * 100 : 0 };
 }
-function splitBlock(label, stats, total) {
+function splitRow(label, stats, total) {
   const share = total > 0 ? pct((stats.usd / total) * 100) : "–";
-  return `<div class="split-group">
-    <h4>${label}</h4>
-    <dl>
-      <dt>Valore</dt><dd>${money(stats.usd)} · ${share}</dd>
-      <dt>APY ponderato</dt><dd>${pct(stats.apy)}</dd>
-      <dt>Reddito mensile</dt><dd>${money(stats.month)}</dd>
-      <dt>Reddito annuo</dt><dd>${money(stats.year)}</dd>
-    </dl>
-  </div>`;
+  return `<tr>
+    <th scope="row">${label}</th>
+    <td class="num">${money(stats.usd)}</td>
+    <td class="num">${share}</td>
+    <td class="num">${pct(stats.apy)}</td>
+    <td class="num">${money(stats.month)}</td>
+  </tr>`;
 }
 function renderMetrics(data) {
   const box = $("#owner-cards");
@@ -278,7 +343,6 @@ function renderMetrics(data) {
   box.innerHTML = keys.map((key) => {
     const row = totals[key] || {};
     const apy = row.wapy == null ? "–" : pct(row.wapy);
-    const year = row.year_usd == null ? "–" : money(row.year_usd);
     const month = row.year_usd == null ? "–" : money(Number(row.year_usd) / 12);
     const rows = positions.filter((item) => key === "tutti" || item.owner === key);
     const stable = groupIncome(rows.filter((item) => assetKind(item.asset) === "stable"));
@@ -286,15 +350,23 @@ function renderMetrics(data) {
     const base = Number(row.total_usd) || (stable.usd + eth.usd);
     return `<article class="owner-card${key === "tutti" ? " sum" : ""}">
       <h3>${OWNER_LABEL[key] || key}</h3>
-      <div class="figure">${money(row.total_usd || 0)}</div>
-      <dl>
-        <dt>APY ponderato</dt><dd>${apy}</dd>
+      <p class="total-label">Totale</p>
+      <p class="figure">${money(row.total_usd || 0)}</p>
+      <dl class="headline">
         <dt>Reddito mensile</dt><dd>${month}</dd>
-        <dt>Reddito annuo</dt><dd>${year}</dd>
+        <dt>APY ponderato</dt><dd>${apy}</dd>
       </dl>
-      <div class="split-row">
-        ${splitBlock("Stablecoin", stable, base)}
-        ${splitBlock("ETH", eth, base)}
+      <div class="table-scroll">
+        <table class="split-table">
+          <caption>Stablecoin e ETH</caption>
+          <thead>
+            <tr><th scope="col"></th><th scope="col" class="num">Valore</th><th scope="col" class="num">Quota</th><th scope="col" class="num">APY</th><th scope="col" class="num">Al mese</th></tr>
+          </thead>
+          <tbody>
+            ${splitRow("Stablecoin", stable, base)}
+            ${splitRow("ETH", eth, base)}
+          </tbody>
+        </table>
       </div>
     </article>`;
   }).join("");
@@ -933,7 +1005,7 @@ async function loadSettings() {
   const s = await api("/api/settings");
   const form = $("#form-settings");
   form.eth_rpc_url.value = s.eth_rpc_url || "";
-  if (form.outflow_drop_pct) form.outflow_drop_pct.value = s.outflow_drop_pct ?? 5;
+  if (form.outflow_drop_pct) form.outflow_drop_pct.value = s.outflow_drop_pct ?? 2;
   if (form.outflow_usd) form.outflow_usd.value = s.outflow_usd ?? 500;
   if (form.nft_api_provider) form.nft_api_provider.value = s.nft_api_provider || "";
   if (form.nft_api_key) form.nft_api_key.value = "";
@@ -991,6 +1063,17 @@ async function boot() {
   document.addEventListener("click", (ev) => {
     const dismiss = ev.target.closest("#btn-dismiss-alert");
     if (dismiss) { ev.preventDefault(); dismissAlert(); }
+    const flowAnswer = ev.target.closest("[data-flow-answer]");
+    if (flowAnswer) {
+      ev.preventDefault();
+      api("/api/outflows/" + flowAnswer.dataset.flowAnswer, {
+        method: "POST",
+        body: JSON.stringify({ status: flowAnswer.dataset.flowStatus }),
+      }).then((result) => {
+        if (state.data) state.data.fund_flows = result.outflows || state.data.fund_flows;
+        render();
+      }).catch((err) => alert(err.message));
+    }
     const chartBtn = ev.target.closest("#chart-owner button");
     if (chartBtn) {
       state.chartOwner = chartBtn.dataset.value;
@@ -1019,7 +1102,7 @@ async function boot() {
     const f = formData(ev.target);
     const body = {
       eth_rpc_url: f.eth_rpc_url,
-      outflow_drop_pct: Number(f.outflow_drop_pct || 5),
+      outflow_drop_pct: Number(f.outflow_drop_pct || 2),
       outflow_usd: Number(f.outflow_usd || 0),
       gas_estimate_usd: f.gas_estimate_usd === "" ? 0 : Number(f.gas_estimate_usd),
       nft_api_provider: f.nft_api_provider || "",

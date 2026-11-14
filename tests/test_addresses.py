@@ -34,7 +34,7 @@ def test_index_and_static_are_not_cached(client):
     script = client.get("/static/app.js")
     assert script.status_code == 200
     assert script.headers["cache-control"] == "no-cache"
-    assert APP_VERSION == "0.5.7"
+    assert APP_VERSION == "0.5.8"
 
 
 def test_export_is_addresses_only(client):

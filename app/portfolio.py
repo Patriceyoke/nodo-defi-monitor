@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Any
 
-from . import db, ens, evm, markets, nft, switches
+from . import db, ens, evm, flows, markets, nft, switches
 from .security import annotate_light_alerts
 from .validation import normalize_owner
 
@@ -555,6 +555,12 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                 "I portafogli Ethereum sono salvati, ma questo ricalcolo non ha trovato posizioni. "
                 "Controlla /api/debug/refresh-status per la rete e l'errore di ogni indirizzo."
             )
+        elif positions:
+            try:
+                flows.observe_positions(positions)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Confronto quantità non salvato: %s", exc)
+                errors.append("Non sono riuscito a confrontare le quantità con l'aggiornamento precedente.")
 
         for owner in ("io", "moglie", "tutti"):
             db.save_history(owner, hist_payload(owner))
@@ -716,6 +722,7 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "ens_names": ens_names,
         "security_summary": summaries,
         "alert_dismissed": _dismissed_alerts(),
+        "fund_flows": flows.list_public_flows(owner),
         "saved": data.get("saved") is not False,
         "kept_previous": bool(data.get("kept_previous")),
         "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item)),
