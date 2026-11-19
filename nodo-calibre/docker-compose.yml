@@ -3,8 +3,10 @@ version: "3.7"
 services:
   app_proxy:
     environment:
-      # Umbrel login remains enabled (the default). Do not set PROXY_AUTH_ADD
-      # or CUSTOM_USER/PASSWORD: auth is handled by Umbrel's proxy.
+      # Official linuxserver Selkies pattern (see getumbrel/umbrel-apps/obsidian):
+      # proxy to the container HTTP port; the manifest sets requiresHttps: true
+      # so the Umbrel tile opens https://umbrel.local:8188. Umbrel terminates
+      # TLS. Keep Umbrel login (do not set PROXY_AUTH_ADD or CUSTOM_USER/PASSWORD).
       APP_HOST: nodo-calibre_server_1
       APP_PORT: 8080
 
