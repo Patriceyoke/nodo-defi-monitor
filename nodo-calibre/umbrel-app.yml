@@ -1,0 +1,47 @@
+manifestVersion: 1
+id: nodo-calibre
+category: files
+name: Calibre
+version: "9.18.0"
+tagline: "Il programma Calibre completo nel browser, per gestire la tua biblioteca"
+description: >-
+  Calibre è il gestore di e-book completo (non Calibre-Web): la stessa
+  applicazione desktop, aperta nel browser dal tuo Umbrel.
+
+
+  Al primo avvio scegli come percorso della biblioteca
+  /config/Calibre Library. Libreria, impostazioni e i plugin installati da
+  Preferenze > Plugin restano salvati nella cartella dati dell'app e
+  sopravvivono agli aggiornamenti.
+
+
+  L'interfaccia desktop è protetta dal login di Umbrel. Non esporre questa
+  app su Internet: la GUI include un terminale del contenitore.
+
+
+  Il Content Server opzionale di Calibre si abilita da Preferenze >
+  Condivisione in rete (lascia la porta 8081 e attiva l'avvio automatico).
+  È pubblicato sulla porta 8088 dell'Umbrel, fuori dal login Umbrel:
+  imposta una password del Content Server prima di usarlo in rete.
+releaseNotes: >-
+  Prima versione nel Community App Store Nodo: Calibre 9.18.0 con
+  interfaccia desktop nel browser (immagine linuxserver/calibre:9.18.0).
+developer: Kovid Goyal
+website: https://calibre-ebook.com
+dependencies: []
+repo: https://github.com/linuxserver/docker-calibre
+support: https://github.com/linuxserver/docker-calibre/issues
+port: 8188
+icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-calibre/icon.png
+gallery:
+  - 1.png
+  - 2.png
+  - 3.png
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+torOnly: false
+submitter: Nodo
+submission: https://github.com/Patriceyoke/nodo-defi-monitor
+storage:
+  dataRoot: data
