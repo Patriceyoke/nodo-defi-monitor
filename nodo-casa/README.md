@@ -27,4 +27,4 @@ Immagine `nodo-casa:1.0.0`, volume `/data` vuoto, 21 novembre 2026.
 5. Con il Bearer si crea una voce di prova. La home la mostra (`1 dic`, `tra 10 giorni`). `POST /api/items/{id}/done`, e anche il bottone Conferma, la segnano fatta.
 6. La voce di prova è stata tolta dal database locale prima del commit. La home torna a «Ancora vuoto.».
 7. Riavvio del container: restano 0 voci. Il database e il token sono solo nel volume locale. `git status` non li elenca.
-8. In `nodo-casa` non ci sono email, numeri di documento, targhe o seed. L'unica riga che contiene la parola password è il campo vuoto richiesto da Umbrel, `defaultPassword: ""`.
+8. In `nodo-casa` non ci sono email. L'unico campo vuoto del manifesto Umbrel è `defaultPassword`.
