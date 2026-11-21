@@ -10,7 +10,7 @@ Altrimenti, sull'Umbrel: **App Store → tre puntini → Community App Stores** 
 
 Poi installa **Casa Viale** (id `nodo-casa`, porta 8795).
 
-L'immagine nel compose è `nodo-casa:1.0.0` e il Dockerfile è in questa cartella. Umbrel, prima di avviare, prova a scaricare quel nome: se non è in un registro, l'installazione si ferma al download.
+Umbrel scarica `ghcr.io/patriceyoke/nodo-casa:1.0.0`. Il proxy punta al contenitore `nodo-casa_web_1`.
 
 ## Dati
 
