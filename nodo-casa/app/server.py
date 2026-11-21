@@ -8,7 +8,7 @@ import os
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import logic
 
@@ -518,6 +518,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._read_body()
         self._json(404, {"error": "non trovato"})
+
+    def do_DELETE(self) -> None:
+        try:
+            path = urlparse(self.path).path.rstrip("/")
+            prefix = "/api/items/"
+            if not path.startswith(prefix):
+                self._json(404, {"error": "non trovato"})
+                return
+            external_id = unquote(path.removeprefix(prefix))
+            if not external_id or "/" in external_id:
+                self._json(404, {"error": "non trovato"})
+                return
+            if not self._write_allowed():
+                self._json(401, {"error": "unauthorized"})
+                return
+            if not logic.delete_by_external_id(external_id):
+                self._json(404, {"error": "non trovato"})
+                return
+            self._json(200, {"ok": True})
+        except Exception:
+            print("errore interno", flush=True)
+            self._json(500, {"error": "errore interno"})
 
     def do_PATCH(self) -> None:
         try:

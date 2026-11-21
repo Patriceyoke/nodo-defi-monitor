@@ -141,6 +141,52 @@ def ensure_storage() -> None:
             );
             """
         )
+        _drop_probe_schema(conn)
+
+
+def _due_text(payload: dict) -> str:
+    for key in ("due_date", "scadenza", "data", "prossima"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _drop_probe_schema(conn: sqlite3.Connection) -> None:
+    """Remove one known probe row. Any mismatch leaves the row untouched."""
+    import json
+
+    row = conn.execute(
+        "SELECT id, payload FROM items WHERE external_id = ?",
+        ("probe-schema",),
+    ).fetchone()
+    if row is None:
+        return
+    try:
+        payload = json.loads(row["payload"])
+    except (TypeError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    title = payload.get("title")
+    if not isinstance(title, str):
+        title = payload.get("titolo")
+    if not isinstance(title, str) or title.strip() != "\u2014":
+        return
+    if _due_text(payload) != "2099-01-01":
+        return
+    conn.execute("DELETE FROM history WHERE item_id = ?", (row["id"],))
+    conn.execute("DELETE FROM items WHERE id = ?", (row["id"],))
+
+
+def delete_by_external_id(external_id: str) -> bool:
+    with _db_lock() as conn:
+        row = conn.execute("SELECT id FROM items WHERE external_id = ?", (external_id,)).fetchone()
+        if row is None:
+            return False
+        conn.execute("DELETE FROM history WHERE item_id = ?", (row["id"],))
+        conn.execute("DELETE FROM items WHERE id = ?", (row["id"],))
+    return True
 
 
 def _ensure_token() -> None:
