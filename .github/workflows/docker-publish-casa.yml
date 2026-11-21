@@ -54,17 +54,25 @@ jobs:
         run: |
           set -u
           sleep 8
-          try_patch() {
-            gh api --method PATCH \
-              -H "Accept: application/vnd.github+json" \
-              "$1" \
-              -f visibility=public
-          }
-          if try_patch "/users/${OWNER}/packages/container/nodo-casa"; then
-            exit 0
-          fi
-          if try_patch "/user/packages/container/nodo-casa"; then
-            exit 0
-          fi
-          echo "Package visibility was not changed by this token." >&2
-          exit 1
+          # The Actions token can push the image but often cannot call the
+          # user packages API (404). A public repo package linked by the OCI
+          # source label is already public; confirm with an anonymous pull token.
+          gh api --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            "/users/${OWNER}/packages/container/nodo-casa" \
+            -f visibility=public || true
+          python3 - << 'PY'
+          import json, os, urllib.request, urllib.error
+          owner = os.environ["OWNER"]
+          url = f"https://ghcr.io/token?service=ghcr.io&scope=repository:{owner}/nodo-casa:pull"
+          try:
+              with urllib.request.urlopen(url) as response:
+                  token = json.load(response).get("token") or ""
+          except urllib.error.HTTPError as exc:
+              print(exc.read().decode()[:500])
+              raise SystemExit(1)
+          if not token:
+              print("Anonymous pull token was empty")
+              raise SystemExit(1)
+          print("Anonymous pull token issued")
+          PY
