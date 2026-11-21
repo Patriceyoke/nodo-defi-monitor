@@ -1,0 +1,7 @@
+data/*
+!data/.gitkeep
+*.db
+*.db-*
+agent.token
+__pycache__/
+*.pyc

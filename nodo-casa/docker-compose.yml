@@ -1,0 +1,21 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: nodo-casa-web
+      APP_PORT: "8795"
+
+  web:
+    build: .
+    image: nodo-casa:1.0.0
+    # Nome esplicito: se manca, Umbrel inietta nodo-casa_web_1 e APP_HOST non coincide.
+    container_name: nodo-casa-web
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    stop_grace_period: 1m
+    volumes:
+      # data/.gitkeep fa parte del pacchetto. Umbrel lo copia in APP_DATA_DIR
+      # come utente 1000 e poi lo toglie, così Docker non crea /data come root.
+      - ${APP_DATA_DIR}/data:/data

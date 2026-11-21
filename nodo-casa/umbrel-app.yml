@@ -1,0 +1,32 @@
+manifestVersion: 1.1
+id: nodo-casa
+category: files
+name: Casa Viale
+version: "1.0.0"
+tagline: Scadenze di casa, garage, documenti e visto
+description: >-
+  Casa Viale elenca le scadenze di casa, del garage, dei documenti e del visto.
+  Si apre una voce e si segna pagato o fatto. Non comanda la casa, il cancello,
+  la stampante, la rete o la crypto.
+
+
+  Il database nasce vuoto. I dati restano solo nella cartella dell'app su
+  questo Umbrel. Non sono nel repository.
+releaseNotes: >-
+  Prima versione.
+developer: Nodo
+website: https://github.com/Patriceyoke/nodo-defi-monitor
+dependencies: []
+repo: https://github.com/Patriceyoke/nodo-defi-monitor
+support: https://github.com/Patriceyoke/nodo-defi-monitor
+port: 8795
+icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-casa/icon.png
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+torOnly: false
+submitter: Nodo
+submission: https://github.com/Patriceyoke/nodo-defi-monitor
+storage:
+  dataRoot: data
