@@ -151,7 +151,10 @@ def page_home() -> str:
         if not data["upcoming"]:
             parts.append('<p class="quiet">Ancora vuoto.</p>')
         for row in data["upcoming"]:
-            when = " · ".join(bit for bit in (row["due_label"], row["distance"]) if bit)
+            date_bit = row["due_label"]
+            if row.get("amount_label"):
+                date_bit = f"{date_bit} · {row['amount_label']}"
+            when = " · ".join(bit for bit in (date_bit, row["distance"]) if bit)
             parts.append(
                 f'<a class="row" href="/voce/{esc(row["id"])}">'
                 f'<span class="mark">{ICONS[row["section"]]}</span>'
@@ -211,21 +214,36 @@ def page_section(section: str) -> str:
             "</div>"
         )
         return layout(name, body, section)
-    rows = [f"<h1>{esc(name)}</h1>"]
-    for view in items:
+    def row_html(view: dict, force_green: bool = False) -> str:
         extra = ""
         if section == "documenti" and view["payload"].get("numero"):
             extra = f'<span class="sub">Numero {esc(view["payload"]["numero"])}</span>'
         secondary = _secondary(view)
+        date_bit = view["due_label"]
+        if view.get("amount_label"):
+            date_bit = f"{date_bit} · {view['amount_label']}"
+        bits = [bit for bit in (date_bit, secondary) if bit]
         status = view["distance"] or view["stato_label"]
-        bits = [bit for bit in (view["due_label"], secondary) if bit]
-        rows.append(
-            f'<a class="row" href="/voce/{esc(view["id"])}">'
+        color = "green" if force_green else (view["color"] or "")
+        return (
+            f'<a class="row {esc(color)}" href="/voce/{esc(view["id"])}">'
             f'<span class="mark">{ICONS[section]}</span>'
             f'<span class="row-copy"><strong>{esc(view["label"])}</strong>'
             f'{("<span class=\"sub\">" + esc(" · ".join(bits)) + "</span>") if bits else ""}'
             f"{extra}"
-            f'{pill(status, view["color"] or "")}</span></a>'
+            f'{pill(status, color)}</span></a>'
+        )
+
+    rows = [f"<h1>{esc(name)}</h1>"]
+    open_items = [view for view in items if not view.get("paid_this_month")]
+    paid_items = [view for view in items if view.get("paid_this_month")]
+    rows.extend(row_html(view) for view in open_items)
+    if paid_items:
+        inner = "".join(row_html(view, force_green=True) for view in paid_items)
+        rows.append(
+            '<details class="paid-block">'
+            f"<summary>Pagati questo mese <span class=\"count\">{len(paid_items)}</span></summary>"
+            f'<div class="paid-rows">{inner}</div></details>'
         )
     return layout(name, "\n".join(rows), section)
 

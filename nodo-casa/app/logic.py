@@ -105,6 +105,58 @@ def color_for(delta: int | None, done: bool) -> str | None:
     return "red"
 
 
+def format_baht(value) -> str:
+    if value is None or value == "" or isinstance(value, bool):
+        return ""
+    try:
+        dec = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return ""
+    if not dec.is_finite():
+        return ""
+    sign = "-" if dec < 0 else ""
+    text = format(abs(dec), "f")
+    whole, _, frac = text.partition(".")
+    frac = frac.rstrip("0")
+    groups = []
+    while whole:
+        groups.append(whole[-3:])
+        whole = whole[:-3]
+    grouped = ".".join(reversed(groups)) or "0"
+    if frac:
+        return f"{sign}฿{grouped},{frac}"
+    return f"{sign}฿{grouped}"
+
+
+def amount_label(payload: dict) -> str:
+    if not isinstance(payload, dict) or payload.get("amount_thb") is None:
+        return ""
+    return format_baht(payload.get("amount_thb"))
+
+
+def _hist(entry, key: str):
+    if isinstance(entry, dict):
+        return entry.get(key)
+    try:
+        return entry[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def paid_this_month(history: list, today: date) -> bool:
+    prefix = f"{today.year:04d}-{today.month:02d}"
+    for entry in history:
+        if _hist(entry, "kind") not in ("pagato", "fatto"):
+            continue
+        for key in ("paid_at", "created_at"):
+            stamp = _hist(entry, key) or ""
+            if isinstance(stamp, str) and stamp.startswith(prefix):
+                return True
+        if _hist(entry, "period") == prefix:
+            return True
+    return False
+
+
 def month_due(year: int, month: int, giorno: int) -> date:
     last = calendar.monthrange(year, month)[1]
     return date(year, month, min(giorno, last))
@@ -524,6 +576,8 @@ def _present(item: dict, today: date) -> dict:
         "delta": delta,
         "distance": distance_words(delta) if delta is not None and not done else "",
         "color": color,
+        "amount_label": amount_label(payload),
+        "paid_this_month": paid_this_month(item["history"], today),
         "history": history,
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -587,6 +641,7 @@ def home() -> dict:
                 "label": view["label"],
                 "due_label": view["due_label"],
                 "distance": view["distance"],
+                "amount_label": view["amount_label"],
                 "color": view["color"],
             }
             for view in upcoming[:5]

@@ -6,7 +6,7 @@ on:
       tag:
         description: "Image tag"
         required: false
-        default: "1.0.4"
+        default: "1.0.5"
   push:
     branches:
       - main

@@ -186,6 +186,37 @@ a.button.secondary {
   border: 1px solid rgba(28, 25, 21, 0.18);
 }
 
+.paid-block {
+  margin: 1.2rem 0 0.4rem;
+  background: #fffdf9;
+  border: 1px solid rgba(28, 25, 21, 0.12);
+  border-radius: 18px;
+  box-shadow: 0 1px 2px rgba(28, 25, 21, 0.04), 0 10px 28px rgba(28, 25, 21, 0.06);
+}
+
+.paid-block summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 3.5rem;
+  padding: 0.9rem 1.05rem;
+  font-size: 1.15rem;
+  font-weight: 750;
+  cursor: pointer;
+  list-style: none;
+}
+
+.paid-block summary::-webkit-details-marker { display: none; }
+
+.paid-block summary .count {
+  color: #1e6b45;
+}
+
+.paid-block .paid-rows { padding: 0 0.75rem 0.85rem; }
+
+a.row.green { border-left: 8px solid #1e6b45; }
+
 a.settings {
   display: flex;
   align-items: center;
