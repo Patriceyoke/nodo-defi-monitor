@@ -6,7 +6,7 @@ on:
       tag:
         description: "Image tag"
         required: false
-        default: "1.0.0"
+        default: "1.0.1"
   push:
     branches:
       - main
@@ -33,8 +33,14 @@ jobs:
         id: meta
         run: |
           OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          TAG="${{ github.event.inputs.tag }}"
-          if [ -z "$TAG" ]; then TAG="1.0.0"; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=""
+          fi
+          if [ -z "$TAG" ]; then
+            TAG=$(awk -F'"' '/^version:/ {print $2; exit}' nodo-casa/umbrel-app.yml)
+          fi
           echo "image=ghcr.io/${OWNER}/nodo-casa:${TAG}" >> "$GITHUB_OUTPUT"
           echo "owner=${OWNER}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6

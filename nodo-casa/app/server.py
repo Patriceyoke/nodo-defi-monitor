@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from datetime import date, timedelta
@@ -13,6 +14,24 @@ import logic
 
 PORT = 8795
 STATIC = Path(__file__).resolve().parent / "static"
+_UMBREL_DOCKER = (
+    ipaddress.ip_network("10.21.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+)
+
+
+def peer_on_umbrel_docker(ip: str) -> bool:
+    """True only for the socket peer, never for a forwarded header."""
+    if not ip:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip.split("%", 1)[0].strip("[]"))
+    except ValueError:
+        return False
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
+    return any(addr in net for net in _UMBREL_DOCKER)
 
 _STROKE = 'fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"'
 ICONS = {
@@ -301,12 +320,31 @@ class Handler(BaseHTTPRequestHandler):
             return b""
         return self.rfile.read(size)
 
-    def _authorized(self) -> bool:
+    def _bearer_state(self) -> str:
+        """ok, bad, or absent. The header value is not logged."""
         header = self.headers.get("Authorization", "")
+        if not header:
+            return "absent"
         scheme, _, rest = header.partition(" ")
-        if scheme.lower() != "bearer" or not rest.strip():
+        token = rest.strip()
+        if scheme.lower() != "bearer" or not token:
+            return "absent"
+        if logic.token_matches(token):
+            return "ok"
+        return "bad"
+
+    def _peer_ip(self) -> str:
+        if not self.client_address:
+            return ""
+        return str(self.client_address[0])
+
+    def _write_allowed(self) -> bool:
+        state = self._bearer_state()
+        if state == "bad":
             return False
-        return logic.token_matches(rest.strip())
+        if state == "ok":
+            return True
+        return peer_on_umbrel_docker(self._peer_ip())
 
     def _json(self, code: int, payload: dict) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -429,7 +467,7 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
         if path == "/api/import":
-            if not self._authorized():
+            if not self._write_allowed():
                 self._read_body()
                 self._json(401, {"error": "unauthorized"})
                 return
@@ -467,7 +505,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._read_body()
                 self._json(404, {"error": "non trovato"})
                 return
-            if not self._authorized():
+            if not self._write_allowed():
                 self._read_body()
                 self._json(401, {"error": "unauthorized"})
                 return
