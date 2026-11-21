@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -162,6 +163,29 @@ def page_home() -> str:
     return layout("Casa Viale", "\n".join(parts), "")
 
 
+_HTTPS = re.compile(r"https://[^\s<>\"']+")
+
+
+def first_https(text: str) -> str:
+    if not text:
+        return ""
+    match = _HTTPS.search(text)
+    if not match:
+        return ""
+    return match.group(0).rstrip(".,;:!?)]}")
+
+
+def note_remainder(text: str) -> str:
+    url = first_https(text)
+    if not url:
+        return text.strip()
+    return " ".join(text.replace(url, " ", 1).split())
+
+
+def _note_raw(payload: dict) -> str:
+    return payload.get("note") or payload.get("notes") or ""
+
+
 def _secondary(view: dict) -> str:
     payload = view["payload"]
     section = view["section"]
@@ -217,16 +241,18 @@ def _field_rows(view: dict) -> list[tuple[str, str]]:
             rows.append(("Giorno del mese", str(day)))
         if payload.get("importo_thb"):
             rows.append(("Importo", f"{payload['importo_thb']} baht"))
-        if payload.get("note") or payload.get("notes"):
-            rows.append(("Note", payload.get("note") or payload.get("notes")))
+        shown = note_remainder(_note_raw(payload))
+        if shown:
+            rows.append(("Note", shown))
     elif section == "garage":
         rows.append(("Veicolo", payload.get("veicolo") or payload.get("title") or ""))
         if payload.get("tipo") in logic.GARAGE_TIPI:
             rows.append(("Tipo", logic.GARAGE_TIPI[payload["tipo"]]))
         if payload.get("km") is not None:
             rows.append(("Chilometri", str(payload["km"])))
-        if payload.get("note") or payload.get("notes"):
-            rows.append(("Note", payload.get("note") or payload.get("notes")))
+        shown = note_remainder(_note_raw(payload))
+        if shown:
+            rows.append(("Note", shown))
     elif section == "documenti":
         person = payload.get("persona") or payload.get("person") or ""
         if person:
@@ -234,6 +260,9 @@ def _field_rows(view: dict) -> list[tuple[str, str]]:
         rows.append(("Tipo di documento", payload.get("tipo") or payload.get("title") or ""))
         if payload.get("numero"):
             rows.append(("Numero", payload["numero"]))
+        shown = note_remainder(_note_raw(payload))
+        if shown:
+            rows.append(("Note", shown))
     else:
         kind = payload.get("tipo")
         rows.append(("Tipo", logic.VISTO_TIPI.get(kind, payload.get("title") or "")))
@@ -246,8 +275,9 @@ def _field_rows(view: dict) -> list[tuple[str, str]]:
             rows.append(("Prossimo rapporto", logic.short_date(computed.isoformat())))
         if payload.get("scadenza_visto"):
             rows.append(("Scadenza visto", logic.short_date(payload["scadenza_visto"])))
-        if payload.get("note"):
-            rows.append(("Note", payload["note"]))
+        shown = note_remainder(_note_raw(payload))
+        if shown:
+            rows.append(("Note", shown))
     if view["due_label"] and section != "immigrazione":
         rows.append(("Scadenza", view["due_label"]))
     return rows
@@ -269,9 +299,14 @@ def page_item(view: dict) -> str:
             lines.append(f"<li>{esc(bit)}</li>")
         history = '<h2>Storico</h2><ul class="history">' + "".join(lines) + "</ul>"
     action = ""
+    pay = first_https(_note_raw(view["payload"]))
+    if pay:
+        action += (
+            f'<a class="button" href="{esc(pay)}" target="_blank" rel="noopener noreferrer">Paga</a>'
+        )
     if not view["done"]:
         word = "Segna pagato" if view["section"] == "casa" else "Segna fatto"
-        action = f'<a class="button" href="/voce/{esc(view["id"])}/conferma">{word}</a>'
+        action += f'<a class="button" href="/voce/{esc(view["id"])}/conferma">{word}</a>'
     body = (
         '<article class="card">'
         f'<span class="tile-top"><span class="mark">{ICONS[view["section"]]}</span>'
