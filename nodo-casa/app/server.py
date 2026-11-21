@@ -166,11 +166,12 @@ def _secondary(view: dict) -> str:
     payload = view["payload"]
     section = view["section"]
     if section == "garage":
-        return logic.GARAGE_TIPI.get(payload["tipo"], payload["tipo"])
+        tipo = payload.get("tipo")
+        if not tipo:
+            return ""
+        return logic.GARAGE_TIPI.get(tipo, tipo)
     if section == "documenti":
-        return payload["persona"]
-    if section == "immigrazione" and payload.get("note"):
-        return ""
+        return payload.get("persona") or payload.get("person") or ""
     return ""
 
 
@@ -210,31 +211,37 @@ def _field_rows(view: dict) -> list[tuple[str, str]]:
     section = view["section"]
     rows: list[tuple[str, str]] = []
     if section == "casa":
-        rows.append(("Titolo", payload["titolo"]))
-        rows.append(("Giorno del mese", str(payload["giorno"])))
+        rows.append(("Titolo", payload.get("titolo") or payload.get("title") or ""))
+        day = payload.get("giorno", payload.get("due_day"))
+        if day:
+            rows.append(("Giorno del mese", str(day)))
         if payload.get("importo_thb"):
             rows.append(("Importo", f"{payload['importo_thb']} baht"))
-        if payload.get("note"):
-            rows.append(("Note", payload["note"]))
+        if payload.get("note") or payload.get("notes"):
+            rows.append(("Note", payload.get("note") or payload.get("notes")))
     elif section == "garage":
-        rows.append(("Veicolo", payload["veicolo"]))
-        rows.append(("Tipo", logic.GARAGE_TIPI[payload["tipo"]]))
+        rows.append(("Veicolo", payload.get("veicolo") or payload.get("title") or ""))
+        if payload.get("tipo") in logic.GARAGE_TIPI:
+            rows.append(("Tipo", logic.GARAGE_TIPI[payload["tipo"]]))
         if payload.get("km") is not None:
             rows.append(("Chilometri", str(payload["km"])))
-        if payload.get("note"):
-            rows.append(("Note", payload["note"]))
+        if payload.get("note") or payload.get("notes"):
+            rows.append(("Note", payload.get("note") or payload.get("notes")))
     elif section == "documenti":
-        rows.append(("Persona", payload["persona"]))
-        rows.append(("Tipo di documento", payload["tipo"]))
+        person = payload.get("persona") or payload.get("person") or ""
+        if person:
+            rows.append(("Persona", person))
+        rows.append(("Tipo di documento", payload.get("tipo") or payload.get("title") or ""))
         if payload.get("numero"):
             rows.append(("Numero", payload["numero"]))
     else:
-        rows.append(("Tipo", logic.VISTO_TIPI[payload["tipo"]]))
+        kind = payload.get("tipo")
+        rows.append(("Tipo", logic.VISTO_TIPI.get(kind, payload.get("title") or "")))
         if payload.get("ultimo_rapporto"):
             rows.append(("Ultimo rapporto", logic.short_date(payload["ultimo_rapporto"])))
         if payload.get("prossima"):
             rows.append(("Prossima data", logic.short_date(payload["prossima"])))
-        elif payload["tipo"] == "rapporto_90" and payload.get("ultimo_rapporto"):
+        elif payload.get("tipo") == "rapporto_90" and payload.get("ultimo_rapporto"):
             computed = date.fromisoformat(payload["ultimo_rapporto"]) + timedelta(days=90)
             rows.append(("Prossimo rapporto", logic.short_date(computed.isoformat())))
         if payload.get("scadenza_visto"):
@@ -387,6 +394,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json(200, {"ok": True})
             return
+        if path == "/api/schema":
+            self._json(200, logic.IMPORT_EXAMPLE)
+            return
         if path == "/api/home":
             self._json(200, logic.home())
             return
@@ -443,11 +453,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
         self._html(404, layout("Non trovato", "<p>Non trovato.</p>", ""))
 
+    def _invalid(self, exc: logic.Invalid) -> None:
+        body = {"error": getattr(exc, "field", None) or "body"}
+        external_id = getattr(exc, "external_id", None)
+        if external_id:
+            body["external_id"] = external_id
+        self._json(400, body)
+
     def do_POST(self) -> None:
         try:
             self._post()
-        except logic.Invalid:
-            self._json(400, {"error": "dati non validi"})
+        except logic.Invalid as exc:
+            self._invalid(exc)
         except Exception:
             print("errore interno", flush=True)
             self._json(500, {"error": "errore interno"})
@@ -479,6 +496,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(201, logic.public_item(item))
             return
         if path.startswith("/api/items/") and path.endswith("/done"):
+            if not self._write_allowed():
+                self._read_body()
+                self._json(401, {"error": "unauthorized"})
+                return
             item_id = path.removeprefix("/api/items/").removesuffix("/done").strip("/")
             item = logic.mark_done(item_id, self._json_body())
             if item is None:
@@ -519,8 +540,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(404, {"error": "non trovato"})
                 return
             self._json(200, logic.public_item(item))
-        except logic.Invalid:
-            self._json(400, {"error": "dati non validi"})
+        except logic.Invalid as exc:
+            self._invalid(exc)
         except Exception:
             print("errore interno", flush=True)
             self._json(500, {"error": "errore interno"})

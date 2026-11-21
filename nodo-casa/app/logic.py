@@ -43,7 +43,30 @@ _LOCK = threading.Lock()
 
 
 class Invalid(Exception):
-    pass
+    def __init__(self, field: str = "body", external_id: str | None = None):
+        super().__init__(field)
+        self.field = field
+        self.external_id = external_id
+
+
+IMPORT_EXAMPLE = {
+    "items": [
+        {
+            "external_id": "pwa-acqua",
+            "section": "casa",
+            "title": "Acqua PWA",
+            "person": "",
+            "due_day": 10,
+            "due_date": "",
+            "interval": "monthly",
+            "amount_thb": None,
+            "notes": "",
+            "status": "pending",
+        }
+    ]
+}
+INTERVALS = ("monthly", "yearly", "once", "days_90")
+STATUSES = ("pending", "paid", "done")
 
 
 def today_bkk() -> date:
@@ -336,7 +359,12 @@ def _external_id(data: dict, *, required: bool) -> str | None:
 
 
 def compute_due(section: str, payload: dict, today: date) -> date | None:
-    if section == "casa":
+    interval = payload.get("interval")
+    if interval == "monthly" and payload.get("due_day"):
+        return month_due(today.year, today.month, int(payload["due_day"]))
+    if interval in {"yearly", "once", "days_90"} and payload.get("due_date"):
+        return date.fromisoformat(payload["due_date"])
+    if section == "casa" and payload.get("giorno"):
         return month_due(today.year, today.month, int(payload["giorno"]))
     if section == "garage":
         if payload.get("data"):
@@ -354,7 +382,9 @@ def compute_due(section: str, payload: dict, today: date) -> date | None:
 
 
 def period_for(section: str, payload: dict, today: date) -> str:
-    if section == "casa":
+    if payload.get("interval") == "monthly" or (
+        section == "casa" and payload.get("giorno") and not payload.get("interval")
+    ):
         return f"{today.year:04d}-{today.month:02d}"
     due = compute_due(section, payload, today)
     if due is not None:
@@ -365,6 +395,8 @@ def period_for(section: str, payload: dict, today: date) -> str:
 
 
 def _label(section: str, payload: dict) -> str:
+    if payload.get("title"):
+        return payload["title"]
     if section == "casa":
         return payload["titolo"]
     if section == "garage":
@@ -557,6 +589,158 @@ def create_item(data: dict) -> dict:
     return item
 
 
+def _attach_external_id(raw: dict, exc: Invalid) -> None:
+    if exc.external_id or exc.field == "external_id":
+        return
+    value = raw.get("external_id")
+    if isinstance(value, str) and value.strip():
+        exc.external_id = value.strip()
+
+
+def _import_amount(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise Invalid("amount_thb")
+    try:
+        dec = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise Invalid("amount_thb") from exc
+    if not dec.is_finite() or dec < 0:
+        raise Invalid("amount_thb")
+    text = format(dec, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def normalize_import_item(raw: dict) -> tuple[str, str, dict, str]:
+    if not isinstance(raw, dict):
+        raise Invalid("items")
+    for key in (
+        "external_id",
+        "section",
+        "title",
+        "person",
+        "due_day",
+        "due_date",
+        "interval",
+        "amount_thb",
+        "notes",
+        "status",
+    ):
+        if key not in raw:
+            raise Invalid(key)
+    external_id = raw["external_id"]
+    if not isinstance(external_id, str) or not external_id.strip() or len(external_id.strip()) > 200:
+        raise Invalid("external_id")
+    external_id = external_id.strip()
+    section = raw["section"]
+    if section not in SECTIONS:
+        raise Invalid("section")
+    title = raw["title"]
+    if not isinstance(title, str) or not title.strip() or len(title.strip()) > 200:
+        raise Invalid("title")
+    title = title.strip()
+    person = raw["person"]
+    if not isinstance(person, str) or len(person.strip()) > 200:
+        raise Invalid("person")
+    person = person.strip()
+    due_day = raw["due_day"]
+    if due_day is not None and (
+        isinstance(due_day, bool) or not isinstance(due_day, int) or due_day < 1 or due_day > 31
+    ):
+        raise Invalid("due_day")
+    due_date = raw["due_date"]
+    if not isinstance(due_date, str):
+        raise Invalid("due_date")
+    if due_date:
+        try:
+            due_date = date.fromisoformat(due_date).isoformat()
+        except ValueError as exc:
+            raise Invalid("due_date") from exc
+    interval = raw["interval"]
+    if interval not in INTERVALS:
+        raise Invalid("interval")
+    amount = _import_amount(raw["amount_thb"])
+    amount_number = None if amount is None else (int(amount) if "." not in amount else float(amount))
+    notes = raw["notes"]
+    if not isinstance(notes, str) or len(notes) > 2000:
+        raise Invalid("notes")
+    status = raw["status"]
+    if status not in STATUSES:
+        raise Invalid("status")
+    if interval == "monthly":
+        if due_day is None:
+            raise Invalid("due_day")
+        if due_date:
+            raise Invalid("due_date")
+    else:
+        if not due_date:
+            raise Invalid("due_date")
+        if due_day is not None:
+            raise Invalid("due_day")
+    payload: dict = {
+        "title": title,
+        "person": person,
+        "due_day": due_day,
+        "due_date": due_date,
+        "interval": interval,
+        "amount_thb": amount_number,
+        "notes": notes,
+        "status": status,
+        "note": notes,
+    }
+    if section == "casa":
+        payload["titolo"] = title
+        if due_day is not None:
+            payload["giorno"] = due_day
+        payload["importo_thb"] = amount
+    elif section == "garage":
+        payload["veicolo"] = title
+        if due_date:
+            payload["data"] = due_date
+    elif section == "documenti":
+        payload["persona"] = person
+        payload["tipo"] = title
+        payload["scadenza"] = due_date
+        payload["numero"] = ""
+    else:
+        payload["tipo"] = "rapporto_90" if interval == "days_90" else "visto"
+        payload["note"] = notes
+        if interval == "days_90":
+            payload["prossima"] = due_date
+            payload["ultimo_rapporto"] = None
+            payload["scadenza_visto"] = None
+        else:
+            payload["scadenza_visto"] = due_date
+            payload["prossima"] = None
+            payload["ultimo_rapporto"] = None
+    return section, external_id, payload, status
+
+
+def _apply_import_status(conn: sqlite3.Connection, item_id: str, section: str, payload: dict, status: str) -> None:
+    today = today_bkk()
+    period = period_for(section, payload, today)
+    if status == "pending":
+        conn.execute("DELETE FROM history WHERE item_id = ? AND period = ?", (item_id, period))
+        return
+    kind = "pagato" if status == "paid" else "fatto"
+    found = conn.execute(
+        "SELECT 1 FROM history WHERE item_id = ? AND period = ? AND kind IN ('pagato', 'fatto')",
+        (item_id, period),
+    ).fetchone()
+    if found:
+        return
+    conn.execute(
+        """
+        INSERT INTO history (item_id, kind, period, paid_at, note, amount_thb, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, kind, period, today.isoformat(), "", payload.get("importo_thb"), now_iso()),
+    )
+
+
 def import_items(body: dict) -> dict:
     import json
 
@@ -567,21 +751,25 @@ def import_items(body: dict) -> dict:
     for raw in raw_items:
         if not isinstance(raw, dict):
             raise Invalid("items")
-        section = _section_of(raw)
-        prepared.append((section, _external_id(raw, required=True), payload_from(section, raw)))
+        try:
+            prepared.append(normalize_import_item(raw))
+        except Invalid as exc:
+            _attach_external_id(raw, exc)
+            raise
     created = []
     updated = []
     stamp = now_iso()
     with _db_lock() as conn:
-        for section, external_id, payload in prepared:
+        for section, external_id, payload, status in prepared:
             encoded = json.dumps(payload, ensure_ascii=False)
             row = conn.execute("SELECT id FROM items WHERE external_id = ?", (external_id,)).fetchone()
             if row:
+                item_id = row["id"]
                 conn.execute(
                     "UPDATE items SET section = ?, payload = ?, updated_at = ? WHERE id = ?",
-                    (section, encoded, stamp, row["id"]),
+                    (section, encoded, stamp, item_id),
                 )
-                updated.append(row["id"])
+                updated.append(item_id)
             else:
                 item_id = str(uuid4())
                 conn.execute(
@@ -589,6 +777,7 @@ def import_items(body: dict) -> dict:
                     (item_id, external_id, section, encoded, stamp, stamp),
                 )
                 created.append(item_id)
+            _apply_import_status(conn, item_id, section, payload, status)
     return {"created": created, "updated": updated}
 
 
@@ -605,12 +794,25 @@ def patch_item(item_id: str, data: dict) -> dict | None:
         section = data.get("section", row["section"])
         if section not in SECTIONS:
             raise Invalid("section")
-        merged = dict(current)
-        for key, value in data.items():
-            if key in ("id", "section", "external_id"):
-                continue
-            merged[key] = value
-        payload = payload_from(section, merged)
+        if current.get("interval"):
+            payload = dict(current)
+            if "note" in data or "notes" in data:
+                note = data["notes"] if "notes" in data else data["note"]
+                if not isinstance(note, str):
+                    raise Invalid("notes")
+                payload["notes"] = note
+                payload["note"] = note
+            if "status" in data:
+                if data["status"] not in STATUSES:
+                    raise Invalid("status")
+                payload["status"] = data["status"]
+        else:
+            merged = dict(current)
+            for key, value in data.items():
+                if key in ("id", "section", "external_id"):
+                    continue
+                merged[key] = value
+            payload = payload_from(section, merged)
         external_id = row["external_id"]
         if "external_id" in data:
             external_id = _external_id(data, required=False)

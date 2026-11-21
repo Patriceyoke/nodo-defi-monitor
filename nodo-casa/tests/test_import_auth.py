@@ -49,8 +49,10 @@ def call(method: str, path: str, ip: str, body: dict | None, bearer: str | None,
     handler.close_connection = True
     if method == "POST":
         handler.do_POST()
-    else:
+    elif method == "PATCH":
         handler.do_PATCH()
+    else:
+        handler.do_GET()
     text = handler.wfile.getvalue().decode()
     status = int(text.split(" ", 2)[1])
     payload = {}
@@ -88,9 +90,28 @@ def test_network_bounds():
     assert not server.peer_on_umbrel_docker("")
 
 
+def _bill(external_id: str, title: str, due_day: int) -> dict:
+    return {
+        "items": [
+            {
+                "external_id": external_id,
+                "section": "casa",
+                "title": title,
+                "person": "",
+                "due_day": due_day,
+                "due_date": "",
+                "interval": "monthly",
+                "amount_thb": None,
+                "notes": "",
+                "status": "pending",
+            }
+        ]
+    }
+
+
 def test_import_and_patch_follow_the_socket_peer():
     token = logic.TOKEN_PATH.read_text(encoding="ascii").strip()
-    body = {"items": [{"external_id": "ext-a", "section": "casa", "titolo": "Voce", "giorno": 3}]}
+    body = _bill("ext-a", "Voce", 3)
     before = item_count()
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -122,9 +143,14 @@ def test_import_and_patch_follow_the_socket_peer():
                 {
                     "external_id": "ext-b",
                     "section": "garage",
-                    "veicolo": "Voce",
-                    "tipo": "tagliando",
-                    "data": "2026-12-01",
+                    "title": "Voce",
+                    "person": "",
+                    "due_day": None,
+                    "due_date": "2026-12-01",
+                    "interval": "once",
+                    "amount_thb": None,
+                    "notes": "",
+                    "status": "pending",
                 }
             ]
         }
@@ -138,14 +164,14 @@ def test_import_and_patch_follow_the_socket_peer():
         assert status == 401
         assert item_count() == before + 2
 
-        bad = {"items": [{"external_id": "ext-c", "section": "casa", "titolo": "Altra", "giorno": 4}]}
+        bad = _bill("ext-c", "Altra", 4)
         status, _ = call("POST", "/api/import", "10.21.0.15", bad, "Bearer sbagliato")
         assert status == 401
         status, _ = call("POST", "/api/import", "8.8.8.8", bad, "Bearer sbagliato")
         assert status == 401
         assert item_count() == before + 2
 
-        update = {"items": [{"external_id": "ext-a", "section": "casa", "titolo": "Voce aggiornata", "giorno": 9}]}
+        update = _bill("ext-a", "Voce aggiornata", 9)
         status, payload = call("POST", "/api/import", "198.51.100.4", update, f"Bearer {token}")
         assert status == 200
         assert payload["updated"]
@@ -156,7 +182,7 @@ def test_import_and_patch_follow_the_socket_peer():
     assert token not in out
     assert "Altra" not in out
     exported = logic.export_all()["items"]
-    titles = [item["fields"]["titolo"] for item in exported if item["external_id"] == "ext-a"]
+    titles = [item["fields"]["title"] for item in exported if item["external_id"] == "ext-a"]
     assert titles == ["Voce aggiornata"]
     assert any(item["external_id"] == "ext-b" for item in exported)
 
@@ -169,3 +195,135 @@ def test_import_and_patch_follow_the_socket_peer():
     status, _ = call("PATCH", f"/api/items/{item_id}", "10.21.9.9", {"note": "no"}, "Bearer no")
     assert status == 401
     assert logic.get_item(item_id)["payload"]["note"] == "si"
+
+
+def test_exact_import_schema_colors_and_cleanup():
+    example = {
+        "items": [
+            {
+                "external_id": "pwa-acqua",
+                "section": "casa",
+                "title": "Acqua PWA",
+                "person": "",
+                "due_day": 10,
+                "due_date": "",
+                "interval": "monthly",
+                "amount_thb": None,
+                "notes": "",
+                "status": "pending",
+            }
+        ]
+    }
+    status, schema = call("GET", "/api/schema", "10.21.0.15", None, None)
+    assert status == 200
+    assert schema == logic.IMPORT_EXAMPLE
+
+    before = {item["external_id"] for item in logic.export_all()["items"]}
+    status, payload = call("POST", "/api/import", "10.21.0.15", example, None)
+    assert status == 200
+    assert payload["created"] and payload["updated"] == []
+    status, again = call("POST", "/api/import", "10.21.0.15", example, None)
+    assert status == 200
+    assert again["created"] == [] and again["updated"]
+    ids = {item["external_id"] for item in logic.export_all()["items"]}
+    assert "pwa-acqua" in ids
+    assert before <= ids
+
+    today = logic.today_bkk()
+    due = logic.month_due(today.year, today.month, 10)
+    acqua = next(item for item in logic.section_items("casa") if item["label"] == "Acqua PWA")
+    assert acqua["color"] == logic.color_for((due - today).days, False)
+    assert acqua["stato"] == "da_pagare"
+    home_html = server.page_home()
+    assert "Acqua PWA" in home_html
+    assert "pwa-acqua" not in home_html
+    assert "Acqua PWA" in server.page_section("casa")
+
+    doc = {
+        "items": [
+            {
+                "external_id": "doc-1",
+                "section": "documenti",
+                "title": "Tessera",
+                "person": "",
+                "due_day": None,
+                "due_date": "2027-06-01",
+                "interval": "yearly",
+                "amount_thb": None,
+                "notes": "",
+                "status": "pending",
+            }
+        ]
+    }
+    status, _ = call("POST", "/api/import", "172.16.0.8", doc, None)
+    assert status == 200
+    docs = logic.section_items("documenti")
+    assert docs[0]["label"] == "Tessera"
+    assert docs[0]["color"] == "green"
+    stay = call("POST", "/api/import", "10.21.0.15", example, None)
+    assert any(item["external_id"] == "doc-1" for item in logic.export_all()["items"])
+    assert stay[0] == 200
+
+    report = {
+        "items": [
+            {
+                "external_id": "rep-90",
+                "section": "immigrazione",
+                "title": "Rapporto",
+                "person": "",
+                "due_day": None,
+                "due_date": "2026-11-25",
+                "interval": "days_90",
+                "amount_thb": None,
+                "notes": "",
+                "status": "pending",
+            }
+        ]
+    }
+    status, _ = call("POST", "/api/import", "10.21.0.15", report, None)
+    assert status == 200
+    seen = logic.section_items("immigrazione")
+    assert seen[0]["label"] == "Rapporto"
+    assert seen[0]["due"] == "2026-11-25"
+
+    kept = item_count()
+    base = dict(example["items"][0])
+    checks = {
+        "section": "altro",
+        "title": "",
+        "person": None,
+        "due_day": 0,
+        "due_date": "2026-13-01",
+        "interval": "weekly",
+        "amount_thb": "no",
+        "notes": None,
+        "status": "open",
+        "external_id": "",
+    }
+    for field, bad in checks.items():
+        item = dict(base)
+        item[field] = bad
+        status, err = call("POST", "/api/import", "10.21.0.15", {"items": [item]}, None)
+        assert status == 400, field
+        assert err["error"] == field
+        if field != "external_id":
+            assert err["external_id"] == "pwa-acqua"
+        assert item_count() == kept
+
+    item_id = next(item["id"] for item in logic.export_all()["items"] if item["external_id"] == "pwa-acqua")
+    status, _ = call("POST", f"/api/items/{item_id}/done", "8.8.8.8", {}, None)
+    assert status == 401
+    status, done = call("POST", f"/api/items/{item_id}/done", "10.21.0.15", {}, None)
+    assert status == 200
+    assert done["done"] is True
+    status, _ = call("POST", f"/voce/{item_id}/fatto", "203.0.113.9", {}, None)
+    assert status in (200, 303)
+
+    import sqlite3
+
+    conn = sqlite3.connect(logic.DB_PATH)
+    conn.execute("DELETE FROM history")
+    conn.execute("DELETE FROM items")
+    conn.commit()
+    conn.close()
+    assert logic.export_all()["items"] == []

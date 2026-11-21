@@ -10,7 +10,7 @@ Altrimenti, sull'Umbrel: **App Store → tre puntini → Community App Stores** 
 
 Poi installa **Casa Viale** (id `nodo-casa`, porta 8795).
 
-Umbrel scarica `ghcr.io/patriceyoke/nodo-casa:1.0.1`. Il proxy punta al contenitore `nodo-casa_web_1`.
+Umbrel scarica `ghcr.io/patriceyoke/nodo-casa:1.0.2`. Il proxy punta al contenitore `nodo-casa_web_1`.
 
 ## Dati
 
