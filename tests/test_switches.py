@@ -83,6 +83,32 @@ def test_high_utilization_market_is_excluded():
     assert suggest_switches([src], gas_usd=1) == []
 
 
+def test_card_renders_each_saved_wallet_label():
+    first = _pos("io", "Aave", "USDC", 20_000, 3.6, apy30=3.5)
+    first["label"] = "Esempio"
+    first["address"] = "0x" + "11" * 20
+    second = _pos("io", "Aave", "USDC", 8_000, 3.6, apy30=3.5)
+    second["label"] = "Altro"
+    second["address"] = "0x" + "22" * 20
+    dest = _pos("io", "Compound", "USDC", 1_000, 5.2, apy30=5.0)
+    dest["label"] = "Destinazione"
+    ideas = suggest_switches([first, second, dest], gas_usd=10)
+    by_label = {idea["wallet_label"]: idea for idea in ideas if idea["from"] == "Aave USDC"}
+    assert set(by_label) == {"Esempio", "Altro"}
+    assert by_label["Esempio"]["usd"] == 20_000
+    assert by_label["Altro"]["usd"] == 8_000
+    assert "Wallet: Esempio" in by_label["Esempio"]["lead"]
+    assert "0x" not in by_label["Esempio"]["lead"]
+    card = (
+        "<p>Wallet: " + by_label["Esempio"]["wallet_label"] + "</p>"
+        + by_label["Esempio"]["lead"]
+    )
+    assert "Wallet: Esempio" in card
+    source = open("web/app.js", encoding="utf-8").read()
+    assert "Wallet: ${escapeHtml(s.wallet_label" in source
+    assert "Wallet: ${escapeHtml(row.wallet_label" in source
+
+
 def test_equal_risk_switch_with_positive_net_gain_is_suggested():
     rows = [
         _pos("io", "Aave", "USDC", 20_000, 3.6, apy30=3.5),

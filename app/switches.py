@@ -368,13 +368,16 @@ def classify_switches(positions: list[dict[str, Any]], gas_usd: float) -> tuple[
                 dest_live = float(dest["apy"])
                 if dest_live <= src_live:
                     continue
+                wallet_label = _wallet_label(src)
                 reason = _anomaly_reason(dest, dest_live, dest.get("apy30"))
                 if reason:
-                    marker = (owner, str(dest.get("protocol")), str(dest.get("asset")))
+                    marker = (owner, _wallet_identity(src), str(dest.get("protocol")), str(dest.get("asset")))
                     if marker not in seen_anomaly:
                         seen_anomaly.add(marker)
                         anomalies.append({
                             "owner": owner,
+                            "wallet_label": wallet_label,
+                            "usd": usd,
                             "protocol": dest.get("protocol"),
                             "asset": dest.get("asset"),
                             "apy": dest_live,
@@ -394,6 +397,8 @@ def classify_switches(positions: list[dict[str, Any]], gas_usd: float) -> tuple[
                 ideas.append(
                     {
                         "owner": owner,
+                        "wallet_label": wallet_label,
+                        "wallet_key": _wallet_identity(src),
                         "from": f"{src['protocol']} {src['asset']}",
                         "to": f"{dest['protocol']} {dest['asset']}",
                         "usd": usd,
@@ -416,17 +421,19 @@ def classify_switches(positions: list[dict[str, Any]], gas_usd: float) -> tuple[
                         "net_year_usd": round(net, 2),
                         "to_protocol": dest["protocol"],
                         "to_asset": dest["asset"],
-                        "lead": f"{_owner_label(owner)}: {src['protocol']} {src['asset']} verso {dest['protocol']} {dest['asset']}",
+                        "lead": f"{_owner_label(owner)} · Wallet: {wallet_label}: {src['protocol']} {src['asset']} verso {dest['protocol']} {dest['asset']}",
                         "url": official_yield_url(dest["protocol"], dest["asset"]),
                     }
                 )
     best: dict[str, dict[str, Any]] = {}
     for idea in ideas:
-        key = idea["owner"] + "|" + idea["from"]
+        key = idea["owner"] + "|" + str(idea.get("wallet_key") or idea.get("wallet_label") or "") + "|" + idea["from"]
         prev = best.get(key)
         if not prev or idea["net_year_usd"] > prev["net_year_usd"]:
             best[key] = idea
     out = sorted(best.values(), key=lambda i: i["net_year_usd"], reverse=True)
+    for idea in out:
+        idea.pop("wallet_key", None)
     return out, anomalies
 
 
@@ -434,6 +441,14 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
     """Only an allowlisted destination of equal or lower tier, with a gain after gas."""
     ideas, _anomalies = classify_switches(positions, gas_usd)
     return ideas
+
+
+def _wallet_label(src: dict[str, Any]) -> str:
+    return str(src.get("label") or "").strip() or "Portafoglio"
+
+
+def _wallet_identity(src: dict[str, Any]) -> str:
+    return str(src.get("address") or src.get("label") or "").strip().lower()
 
 
 def _owner_label(owner: str) -> str:

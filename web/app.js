@@ -658,6 +658,7 @@ function renderSwitches(data) {
     return `
     <div class="callout warn">
       <strong>${escapeHtml(s.lead)}</strong>
+      <p>Wallet: ${escapeHtml(s.wallet_label || "Portafoglio")}</p>
       <div class="metrics compact">
         ${metric("APY", pct(s.from_apy) + " → " + pct(s.to_apy))}
         ${metric("Rischio", escapeHtml(risk))}
@@ -673,7 +674,7 @@ function renderSwitches(data) {
 function anomalyNote(data) {
   const rows = (data.switch_anomalies || []).filter((row) => state.owner === "tutti" || row.owner === state.owner);
   if (!rows.length) return "";
-  const lines = rows.map((row) => `<li>${escapeHtml(row.protocol || "")} ${escapeHtml(row.asset || "")} · ${pct(row.apy)}. ${escapeHtml(row.reason || "")}</li>`).join("");
+  const lines = rows.map((row) => `<li>Wallet: ${escapeHtml(row.wallet_label || "Portafoglio")} · ${money(row.usd)} · ${escapeHtml(row.protocol || "")} ${escapeHtml(row.asset || "")} · ${pct(row.apy)}. ${escapeHtml(row.reason || "")}</li>`).join("");
   return `<details class="lp-fold"><summary>Rendimenti anomali (non consigliati)</summary>
     <p class="mini">Non sono un suggerimento. Il tasso è molto sopra la media a 30 giorni, sopra il 15% su una stablecoin, oppure il mercato aggiunge rischio.</p>
     <ul>${lines}</ul></details>`;
