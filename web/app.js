@@ -645,32 +645,38 @@ function renderSwitches(data) {
   const items = state.showHiddenSwitches ? all : all.filter((item) => !item.hidden);
   const toggle = $("#btn-switch-hidden");
   if (toggle) toggle.textContent = state.showHiddenSwitches ? "Nascondi i nascosti" : `Mostra nascosti (${hidden.length})`;
+  const anomaly = anomalyNote(data);
   if (!items.length) {
     const note = hidden.length && !state.showHiddenSwitches ? " Quelli nascosti tornano se il vantaggio cresce di almeno un punto, se cambia la destinazione, o dopo 7 giorni." : "";
     box.innerHTML = `<p class="mini">Nessuno switch conviene in questa vista, a rischio uguale o inferiore e dopo il gas di circa ${money(data.gas_usd || 0)}.${note}</p>
-      <p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
+      <p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>${anomaly}`;
     return;
   }
   box.innerHTML = items.map((s) => {
-    const unstable = s.unstable
-      ? `<p class="mini warn-text">APY instabile: il guadagno usa la media a 30 giorni (${pct(s.from_rate)} → ${pct(s.to_rate)}), non il picco.</p>`
-      : "";
     const source = `<p class="mini">Fonte APY: ${escapeHtml(s.apy_source || "DefiLlama")}${s.apy_at ? " · " + updatedClock(s.apy_at) : ""}</p>`;
+    const risk = s.risk_label || "Rischio: uguale";
     return `
     <div class="callout warn">
       <strong>${escapeHtml(s.lead)}</strong>
       <div class="metrics compact">
         ${metric("APY", pct(s.from_apy) + " → " + pct(s.to_apy))}
-        ${metric("Rischio", escapeHtml(s.from_risk) + " → " + escapeHtml(s.to_risk))}
+        ${metric("Rischio", escapeHtml(risk))}
         ${metric("Guadagno dopo il gas", "+" + money(s.net_year_usd), "stima annua · " + OWNER_LABEL[s.owner])}
       </div>
-      <p>Spostare ${money(s.usd)} da ${escapeHtml(s.from)} (${pct(s.from_apy)}, rischio ${escapeHtml(s.from_risk)}) a ${escapeHtml(s.to)} (${pct(s.to_apy)}, rischio ${escapeHtml(s.to_risk)}).
-      Stesso rischio o inferiore, rendimento più alto anche dopo il gas (${money(s.gas_usd)}): circa ${money(s.net_year_usd)} in più all'anno. È solo una proposta.</p>
-      ${unstable}
+      <p>Spostare ${money(s.usd)} da ${escapeHtml(s.from)} (${pct(s.from_apy)}) a ${escapeHtml(s.to)} (${pct(s.to_apy)}). ${escapeHtml(risk)}.
+      Il guadagno resta positivo dopo il gas (${money(s.gas_usd)}): circa ${money(s.net_year_usd)} in più all'anno. È solo una proposta.</p>
       ${source}
       <p>${yieldLink(s.url)} <button class="btn" type="button" data-switch-${s.hidden ? "unhide" : "hide"} data-owner="${escapeHtml(s.owner || "")}" data-from="${escapeHtml(s.from || "")}" data-to="${escapeHtml(s.to || "")}" data-spread="${escapeHtml(s.spread)}">${s.hidden ? "Ripristina" : "Nascondi"}</button></p>
     </div>`;
-  }).join("") + `<p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>`;
+  }).join("") + `<p class="mini">Nessuna transazione parte da qui. Se un giorno vorrai farlo, firmi tu sul tuo portafoglio hardware.</p>` + anomalyNote(data);
+}
+function anomalyNote(data) {
+  const rows = (data.switch_anomalies || []).filter((row) => state.owner === "tutti" || row.owner === state.owner);
+  if (!rows.length) return "";
+  const lines = rows.map((row) => `<li>${escapeHtml(row.protocol || "")} ${escapeHtml(row.asset || "")} · ${pct(row.apy)}. ${escapeHtml(row.reason || "")}</li>`).join("");
+  return `<details class="lp-fold"><summary>Rendimenti anomali (non consigliati)</summary>
+    <p class="mini">Non sono un suggerimento. Il tasso è molto sopra la media a 30 giorni, sopra il 15% su una stablecoin, oppure il mercato aggiunge rischio.</p>
+    <ul>${lines}</ul></details>`;
 }
 
 function renderRows(el, rows) {

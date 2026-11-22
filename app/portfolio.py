@@ -523,7 +523,7 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
             p = dict(p)
             p["alternatives"] = alts
             pos_with_alts.append(p)
-        ideas = switches.suggest_switches(pos_with_alts, gas_usd)
+        ideas, anomalies = switches.classify_switches(pos_with_alts, gas_usd)
 
         try:
             health = await markets.protocol_health()
@@ -571,6 +571,7 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
             "errors": errors,
             "positions": positions,
             "switches": ideas,
+            "switch_anomalies": anomalies,
             "security": health,
             "fx_thb": fx,
             "gas_usd": gas_usd,
@@ -716,6 +717,7 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "sources": data.get("sources") or {},
         "positions": positions,
         "switches": ideas,
+        "switch_anomalies": [row for row in (data.get("switch_anomalies") or []) if filter_owner(owner, row.get("owner"))],
         "security": security,
         "history": history,
         "ens_alerts": ens_alerts,

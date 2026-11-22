@@ -210,11 +210,122 @@ def mark_switch_hides(
     return marked, release
 
 
-def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[dict[str, Any]]:
-    """Only same-owner, same-asset-bucket, dest risk <= source, net yearly gain > 0 after gas."""
+# Destination tier 1 is the safest core. Tier 2 is allowed only when the
+# position being left is already tier 2 or riskier. Anything else is never a destination.
+_TIER_1 = {
+    ("AAVE", "USDC"), ("AAVE", "USDT"), ("AAVE", "WETH"), ("AAVE", "ETH"),
+    ("COMPOUND", "USDC"), ("COMPOUND", "USDT"), ("COMPOUND", "WETH"), ("COMPOUND", "ETH"),
+    ("SPARK", "USDC"), ("SPARK", "USDT"), ("SPARK", "SUSDS"),
+    ("SKY", "SUSDS"),
+    ("LIDO", "STETH"), ("LIDO", "WSTETH"),
+}
+_TIER_2 = {
+    ("SPARKLEND", "USDC"), ("SPARKLEND", "USDT"), ("SPARKLEND", "WETH"), ("SPARKLEND", "ETH"),
+    ("ROCKET POOL", "RETH"),
+}
+_EXCLUDED_WORDS = ("risk capital", "risk-capital", "junior", "tranche", "leverag", "loop", "points", "farm")
+_MIN_TVL_USD = 50_000_000
+_MAX_UTILIZATION = 95.0
+_MIN_AGE_DAYS = 183
+_STABLE_APY_CAP = 15.0
+
+
+def _symbol(asset: str | None) -> str:
+    return (asset or "").upper().replace(" ", "")
+
+
+def _product_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "")
+        for key in ("protocol", "asset", "pool_meta", "name")
+    ).lower()
+
+
+def hard_excluded(row: dict[str, Any]) -> bool:
+    """Products that add risk and are never a destination."""
+    if "STUSDS" in _symbol(row.get("asset")):
+        return True
+    text = _product_text(row)
+    return any(word in text for word in _EXCLUDED_WORDS)
+
+
+def destination_tier(protocol: str, asset: str | None) -> int | None:
+    if hard_excluded({"protocol": protocol, "asset": asset}):
+        return None
+    key = ((protocol or "").upper(), _symbol(asset))
+    if key in _TIER_1:
+        return 1
+    if key in _TIER_2:
+        return 2
+    return None
+
+
+def source_tier(protocol: str, asset: str | None) -> int:
+    """A position we do not list is riskier than tier 2, so it may move down."""
+    tier = destination_tier(protocol, asset)
+    return tier if tier is not None else 3
+
+
+def utilization_percent(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        util = float(value)
+    except (TypeError, ValueError):
+        return None
+    if util <= 1:
+        util *= 100
+    return util
+
+
+def _block_reason(dest: dict[str, Any], position_usd: float) -> str | None:
+    if hard_excluded(dest) or destination_tier(dest.get("protocol"), dest.get("asset")) is None:
+        return "non consentito"
+    tvl = dest.get("tvl_usd")
+    if tvl is not None and float(tvl) < _MIN_TVL_USD:
+        return "tvl"
+    util = utilization_percent(dest.get("utilization"))
+    if util is not None and util > _MAX_UTILIZATION:
+        return "utilizzo"
+    available = dest.get("available_usd")
+    if available is None and tvl is not None and util is not None:
+        available = float(tvl) * (1 - util / 100)
+    if available is not None and float(available) < float(position_usd):
+        return "liquidità"
+    age = dest.get("age_days")
+    if age is not None and float(age) < _MIN_AGE_DAYS:
+        return "nuovo"
+    return None
+
+
+def _anomaly_reason(dest: dict[str, Any], live: float, apy30: Any) -> str | None:
+    """A tempting rate that must not be offered as a switch."""
+    try:
+        base = float(apy30) if apy30 is not None else 0.0
+    except (TypeError, ValueError):
+        base = 0.0
+    spiked = base > 0 and live > 2 * base
+    rich_stable = bucket(str(dest.get("asset") or "")) == BUCKET_STABLE and live > _STABLE_APY_CAP
+    if not spiked and not rich_stable:
+        return None
+    if hard_excluded(dest):
+        return "Questo mercato aggiunge rischio e il tasso è fuori scala. Non è un consiglio."
+    if spiked:
+        return "Il tasso è più del doppio della sua media a 30 giorni."
+    return "Il tasso di una stablecoin è sopra il 15%."
+
+
+def _risk_label(src_tier: int, dest_tier: int) -> str:
+    if dest_tier < src_tier:
+        return "Rischio: più basso"
+    return "Rischio: uguale"
+
+
+def classify_switches(positions: list[dict[str, Any]], gas_usd: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Safe switches, plus anomalous rates that must stay out of the suggestion cards."""
     ideas: list[dict[str, Any]] = []
-    # Candidate destinations already held, plus other open rates on held buckets
-    # We only compare among current positions and optional "open" yield quotes attached as market_options.
+    anomalies: list[dict[str, Any]] = []
+    seen_anomaly: set[tuple[str, str, str]] = set()
     by_owner: dict[str, list[dict[str, Any]]] = {}
     for pos in positions:
         if pos.get("protocol") == "Wallet":
@@ -237,32 +348,46 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
         destinations = list(rows) + extras
         for src in rows:
             src_bucket = bucket(src["asset"])
-            src_risk = risk_of(src["protocol"], src.get("asset"))
+            src_tier = source_tier(src["protocol"], src.get("asset"))
             src_live = float(src["apy"])
-            src_apy, src_spike = decision_apy(src_live, src.get("apy30"))
+            src_apy, _src_spike = decision_apy(src_live, src.get("apy30"))
             for dest in destinations:
                 if dest is src:
                     continue
                 if dest.get("owner") not in {None, owner}:
                     continue
-                if bucket(dest["asset"]) != src_bucket:
+                if bucket(dest.get("asset") or "") != src_bucket:
                     continue
                 if dest.get("apy") is None:
                     continue
-                dest_risk = risk_of(dest["protocol"], dest.get("asset"))
-                if RISK_RANK[dest_risk] > RISK_RANK[src_risk]:
-                    continue
-                dest_live = float(dest["apy"])
-                dest_apy, dest_spike = decision_apy(dest_live, dest.get("apy30"))
-                if dest_apy <= src_apy:
-                    continue
-                # Same protocol+asset is not a switch
                 if dest.get("protocol") == src["protocol"] and dest.get("asset") == src["asset"]:
                     continue
                 usd = float(src.get("usd") or 0)
                 if usd < 50:
                     continue
-                gross = usd * (dest_apy - src_apy) / 100.0
+                dest_live = float(dest["apy"])
+                if dest_live <= src_live:
+                    continue
+                reason = _anomaly_reason(dest, dest_live, dest.get("apy30"))
+                if reason:
+                    marker = (owner, str(dest.get("protocol")), str(dest.get("asset")))
+                    if marker not in seen_anomaly:
+                        seen_anomaly.add(marker)
+                        anomalies.append({
+                            "owner": owner,
+                            "protocol": dest.get("protocol"),
+                            "asset": dest.get("asset"),
+                            "apy": dest_live,
+                            "apy30": dest.get("apy30"),
+                            "reason": reason,
+                        })
+                    continue
+                if _block_reason(dest, usd):
+                    continue
+                dest_tier = destination_tier(dest.get("protocol"), dest.get("asset"))
+                if dest_tier is None or dest_tier > src_tier:
+                    continue
+                gross = usd * (dest_live - src_apy) / 100.0
                 net = gross - gas_usd
                 if net <= 0:
                     continue
@@ -277,12 +402,15 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
                         "from_apy30": src.get("apy30"),
                         "to_apy30": dest.get("apy30"),
                         "from_rate": src_apy,
-                        "to_rate": dest_apy,
-                        "unstable": bool(src_spike or dest_spike),
+                        "to_rate": dest_live,
+                        "unstable": False,
                         "apy_source": "DefiLlama",
                         "apy_at": int(time.time()),
-                        "from_risk": src_risk,
-                        "to_risk": dest_risk,
+                        "from_tier": src_tier,
+                        "to_tier": dest_tier,
+                        "risk_label": _risk_label(src_tier, dest_tier),
+                        "from_risk": _risk_label(src_tier, dest_tier),
+                        "to_risk": _risk_label(src_tier, dest_tier),
                         "gas_usd": gas_usd,
                         "gross_year_usd": round(gross, 2),
                         "net_year_usd": round(net, 2),
@@ -292,7 +420,6 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
                         "url": official_yield_url(dest["protocol"], dest["asset"]),
                     }
                 )
-    # Keep the best idea per source position
     best: dict[str, dict[str, Any]] = {}
     for idea in ideas:
         key = idea["owner"] + "|" + idea["from"]
@@ -300,7 +427,13 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
         if not prev or idea["net_year_usd"] > prev["net_year_usd"]:
             best[key] = idea
     out = sorted(best.values(), key=lambda i: i["net_year_usd"], reverse=True)
-    return out
+    return out, anomalies
+
+
+def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[dict[str, Any]]:
+    """Only an allowlisted destination of equal or lower tier, with a gain after gas."""
+    ideas, _anomalies = classify_switches(positions, gas_usd)
+    return ideas
 
 
 def _owner_label(owner: str) -> str:
@@ -322,7 +455,6 @@ _SWITCH_MARKETS = (
     ("sparklend", "SparkLend", "USDC", "USDC"),
     ("sparklend", "SparkLend", "USDT", "USDT"),
     ("sky-lending", "Sky", "sUSDS", "SUSDS"),
-    ("sky-lending", "Sky", "stUSDS", "STUSDS"),
     ("lido", "Lido", "stETH", "STETH"),
     ("rocket-pool", "Rocket Pool", "rETH", "RETH"),
     ("fluid-lending", "Fluid", "USDC", "USDC"),
@@ -351,6 +483,12 @@ async def market_alternatives(positions: list[dict[str, Any]]) -> list[dict[str,
         if apy is None:
             continue
         seen.add(key)
+        pool = pool or {}
+        tvl = pool.get("tvlUsd")
+        util = utilization_percent(pool.get("utilization"))
+        available = None
+        if tvl is not None and util is not None:
+            available = float(tvl) * (1 - util / 100)
         alts.append(
             {
                 "protocol": protocol,
@@ -360,11 +498,31 @@ async def market_alternatives(positions: list[dict[str, Any]]) -> list[dict[str,
                 "usd": 0,
                 "owner": None,
                 "market_only": True,
-                "pool_id": (pool or {}).get("pool"),
+                "pool_id": pool.get("pool"),
+                "pool_meta": pool.get("poolMeta") or "",
+                "tvl_usd": None if tvl is None else float(tvl),
+                "utilization": util,
+                "available_usd": available,
+                "age_days": _pool_age_days(pool),
                 "apy_source": "DefiLlama",
             }
         )
     return alts
+
+
+def _pool_age_days(pool: dict[str, Any]) -> float | None:
+    raw = pool.get("createdAt") or pool.get("listedAt") or pool.get("inception")
+    if raw in (None, ""):
+        return None
+    try:
+        stamp = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if stamp > 10_000_000_000:
+        stamp /= 1000
+    if stamp <= 0:
+        return None
+    return (time.time() - stamp) / 86400
 
 
 async def gas_usd_now(override: float | None, eth_price: float) -> float:

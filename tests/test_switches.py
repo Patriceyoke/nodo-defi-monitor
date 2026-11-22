@@ -51,18 +51,49 @@ def test_stusds_is_medium_risk_and_not_a_switch_from_aave():
     assert suggest_switches([src], gas_usd=1) == []
 
 
-def test_susds_stays_available_and_a_spike_uses_the_thirty_day_rate():
+def test_susds_stays_available_when_the_rate_is_not_anomalous():
     src = _pos("io", "Aave", "USDC", 20_000, 4.0, apy30=4.0)
-    src["alternatives"] = [{"protocol": "Sky", "asset": "sUSDS", "apy": 12.0, "apy30": 5.0, "owner": None}]
+    src["alternatives"] = [{"protocol": "Sky", "asset": "sUSDS", "apy": 6.0, "apy30": 5.5, "owner": None, "tvl_usd": 200_000_000}]
     idea = suggest_switches([src], gas_usd=1)[0]
     assert idea["to"] == "Sky sUSDS"
-    assert idea["to_risk"] == "basso"
+    assert idea["risk_label"] == "Rischio: uguale"
     assert idea["from_apy"] == 4.0
-    assert idea["to_apy"] == 12.0
-    assert idea["unstable"] is True
-    assert idea["to_rate"] == 5.0
-    assert idea["net_year_usd"] == round(20_000 * (5.0 - 4.0) / 100 - 1, 2)
+    assert idea["to_apy"] == 6.0
     assert idea["url"] == "https://app.sky.money/?widget=savings"
+
+
+def test_stusds_at_44_percent_is_never_suggested():
+    from app.switches import classify_switches
+
+    src = _pos("io", "Fluid", "USDC", 20_000, 4.0, apy30=4.0)
+    src["alternatives"] = [{"protocol": "Sky", "asset": "stUSDS", "apy": 44.0, "apy30": 40.0, "owner": None, "tvl_usd": 80_000_000, "utilization": 99.98}]
+    ideas, anomalies = classify_switches([src], gas_usd=1)
+    assert ideas == []
+    assert anomalies
+    assert anomalies[0]["asset"] == "stUSDS"
+    assert "rischio" in anomalies[0]["reason"].lower()
+
+
+def test_high_utilization_market_is_excluded():
+    src = _pos("io", "Aave", "USDC", 20_000, 3.0, apy30=3.0)
+    src["alternatives"] = [{
+        "protocol": "Compound", "asset": "USDC", "apy": 6.0, "apy30": 5.8, "owner": None,
+        "tvl_usd": 200_000_000, "utilization": 99.0,
+    }]
+    assert suggest_switches([src], gas_usd=1) == []
+
+
+def test_equal_risk_switch_with_positive_net_gain_is_suggested():
+    rows = [
+        _pos("io", "Aave", "USDC", 20_000, 3.6, apy30=3.5),
+        _pos("io", "Compound", "USDC", 1_000, 5.2, apy30=5.0),
+    ]
+    idea = suggest_switches(rows, gas_usd=10)[0]
+    assert idea["from"] == "Aave USDC"
+    assert idea["to"] == "Compound USDC"
+    assert idea["risk_label"] == "Rischio: uguale"
+    assert idea["to_tier"] == idea["from_tier"] == 1
+    assert idea["net_year_usd"] > 0
 
 
 def test_duplicate_market_quotes_stay_one_suggestion():
@@ -98,6 +129,7 @@ def test_suggests_higher_yield_same_risk_after_gas():
     assert idea["to"] == "Compound USDT"
     assert idea["net_year_usd"] == round(15000 * (5.2 - 3.6) / 100 - 10, 2)
     assert idea["owner"] == "io"
+    assert idea["risk_label"] == "Rischio: uguale"
 
 
 def test_rejects_higher_risk():
