@@ -1,6 +1,6 @@
 # Monitor DeFi
 
-Read-only dashboard for Ethereum DeFi positions (Lido, Aave v3, Compound, Fluid, Spark/Sky). Every address has an owner tag (`io` or `moglie`). A read-only MCP server lets an agent such as Hermes query the portfolio. The app never accepts seed phrases or private keys. It never signs or sends transactions. Bitcoin accounts are not part of this app.
+Read-only dashboard for Ethereum DeFi positions (Lido, Aave v3, Aave v4, Compound, Fluid, Spark/Sky). Every address has an owner tag (`io` or `moglie`). A read-only MCP server lets an agent such as Hermes query the portfolio. The app never accepts seed phrases or private keys. It never signs or sends transactions. Bitcoin accounts are not part of this app.
 
 This repository contains **no personal data, no wallet addresses, and no extended keys**. You add those locally in the Settings UI.
 

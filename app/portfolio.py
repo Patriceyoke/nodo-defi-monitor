@@ -330,6 +330,7 @@ async def _enrich(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], lis
                     row.get("llama_project"),
                     row.get("llama_symbol") or row.get("asset"),
                     row.get("chain") or "ethereum",
+                    row.get("llama_meta"),
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("APY lookup failed for %s: %s", name, exc)

@@ -51,15 +51,14 @@ def test_stusds_is_medium_risk_and_not_a_switch_from_aave():
     assert suggest_switches([src], gas_usd=1) == []
 
 
-def test_susds_stays_available_when_the_rate_is_not_anomalous():
+def test_sky_and_spark_are_not_switch_destinations():
     src = _pos("io", "Aave", "USDC", 20_000, 4.0, apy30=4.0)
-    src["alternatives"] = [{"protocol": "Sky", "asset": "sUSDS", "apy": 6.0, "apy30": 5.5, "owner": None, "tvl_usd": 200_000_000}]
-    idea = suggest_switches([src], gas_usd=1)[0]
-    assert idea["to"] == "Sky sUSDS"
-    assert idea["risk_label"] == "Rischio: uguale"
-    assert idea["from_apy"] == 4.0
-    assert idea["to_apy"] == 6.0
-    assert idea["url"] == "https://app.sky.money/?widget=savings"
+    src["alternatives"] = [
+        {"protocol": "Sky", "asset": "sUSDS", "apy": 6.0, "apy30": 5.5, "owner": None, "tvl_usd": 200_000_000},
+        {"protocol": "Spark", "asset": "USDC", "apy": 6.2, "apy30": 6.0, "owner": None, "tvl_usd": 200_000_000},
+        {"protocol": "SparkLend", "asset": "USDC", "apy": 6.4, "apy30": 6.1, "owner": None, "tvl_usd": 200_000_000},
+    ]
+    assert suggest_switches([src], gas_usd=1) == []
 
 
 def test_stusds_at_44_percent_is_never_suggested():
@@ -109,6 +108,23 @@ def test_card_renders_each_saved_wallet_label():
     assert "Wallet: ${escapeHtml(row.wallet_label" in source
 
 
+def test_aave_v4_usdc_is_a_tier_one_destination():
+    from app.switches import destination_tier, official_yield_url
+
+    assert destination_tier("Aave V4", "USDC") == 1
+    assert official_yield_url("Aave V4", "USDC") == "https://aave.com/pro"
+    src = _pos("io", "Aave", "USDC", 20_000, 3.0, apy30=3.0)
+    src["alternatives"] = [{
+        "protocol": "Aave V4", "asset": "USDC", "apy": 5.19, "apy30": 5.1,
+        "owner": None, "tvl_usd": 200_000_000, "utilization": 40,
+    }]
+    idea = suggest_switches([src], gas_usd=1)[0]
+    assert idea["to"] == "Aave V4 USDC"
+    assert idea["to_tier"] == 1
+    assert idea["risk_label"] == "Rischio: uguale"
+    assert idea["url"] == "https://aave.com/pro"
+
+
 def test_equal_risk_switch_with_positive_net_gain_is_suggested():
     rows = [
         _pos("io", "Aave", "USDC", 20_000, 3.6, apy30=3.5),
@@ -135,10 +151,11 @@ def test_duplicate_market_quotes_stay_one_suggestion():
 def test_held_row_apy_wins_over_a_different_market_quote():
     rows = [
         _pos("io", "Aave", "USDC", 20_000, 4.5),
-        _pos("io", "Sky", "sUSDS", 1_000, 5.0),
+        _pos("io", "Compound", "USDC", 1_000, 5.0),
     ]
-    rows[0]["alternatives"] = [{"protocol": "Sky", "asset": "sUSDS", "apy": 11.6, "apy30": 11.0, "owner": None}]
+    rows[0]["alternatives"] = [{"protocol": "Compound", "asset": "USDC", "apy": 11.6, "apy30": 11.0, "owner": None}]
     idea = suggest_switches(rows, gas_usd=1)[0]
+    assert idea["to"] == "Compound USDC"
     assert idea["to_apy"] == 5.0
     assert idea["from_apy"] == 4.5
 

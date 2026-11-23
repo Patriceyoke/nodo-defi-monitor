@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 APP_NAME = "Monitor DeFi"
-APP_VERSION = "0.5.11"
+APP_VERSION = "0.5.12"
 DEFAULT_PORT = int(os.environ.get("PORT", "3847"))
 
 _DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data"
@@ -113,6 +113,7 @@ PROTOCOL_RISK = {
     "Lido": "basso",
     "Rocket Pool": "basso",
     "Aave": "basso",
+    "Aave V4": "basso",
     "Compound": "basso",
     "Spark": "basso",
     "SparkLend": "basso",
@@ -126,9 +127,10 @@ PROTOCOL_RISK = {
 
 STABLE_ASSETS = {
     "USDC", "USDT", "DAI", "USDS", "sUSDS", "stUSDS", "sDAI", "GHO",
+    "EURC", "RLUSD", "USDG", "frxUSD",
     "spUSDC", "spUSDT", "syrupUSDC", "syrupUSDT", "fUSDC", "fUSDT",
 }
-ETH_ASSETS = {"ETH", "WETH", "stETH", "wstETH", "rETH", "aEthWETH", "aEthwstETH"}
+ETH_ASSETS = {"ETH", "WETH", "stETH", "wstETH", "weETH", "rETH", "aEthWETH", "aEthwstETH"}
 
 # Typical gas units for a withdraw+deposit style move (estimate only).
 SWITCH_GAS_UNITS = 220_000

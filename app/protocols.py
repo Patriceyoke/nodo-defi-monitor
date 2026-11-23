@@ -258,3 +258,55 @@ TOKENS: list[dict] = [
         llama_project=None, llama_symbol=None,
     ),
 ]
+
+# Official Aave V4 Ethereum user spokes. Treasury is omitted.
+# Checked against aave-dao/aave-address-book AaveV4EthereumSpokes.
+AAVE_V4_SPOKES = [
+    {"name": "Main", "address": "0x94e7A5dCbE816e498b89aB752661904E2F56c485"},
+    {"name": "Bluechip", "address": "0x973a023A77420ba610f06b3858aD991Df6d85A08"},
+    {"name": "Ethena Correlated", "address": "0x58131E79531caB1d52301228d1f7b842F26B9649"},
+    {"name": "Ethena Ecosystem", "address": "0xba1B3D55D249692b669A164024A838309B7508AF"},
+    {"name": "EtherFi", "address": "0xbF10BDfE177dE0336aFD7fcCF80A904E15386219"},
+    {"name": "Forex", "address": "0xD8B93635b8C6d0fF98CbE90b5988E3F2d1Cd9da1"},
+    {"name": "Gold", "address": "0x65407b940966954b23dfA3caA5C0702bB42984DC"},
+    {"name": "Kelp", "address": "0x3131FE68C4722e726fe6B2819ED68e514395B9a4"},
+    {"name": "Lido", "address": "0xe1900480ac69f0B296841Cd01cC37546d92F35Cd"},
+    {"name": "Lombard BTC", "address": "0x7EC68b5695e803e98a21a9A05d744F28b0a7753D"},
+]
+
+# Hub address -> DefiLlama poolMeta. Checked against AaveV4EthereumHubs.
+AAVE_V4_HUBS = {
+    "0xcca852bc40e560adc3b1cc58ca5b55638ce826c9": "Core",
+    "0x06002e9c4412cb7814a791ea3666d905871e536a": "Plus",
+    "0x943827dca022d0f354a8a8c332da1e5eb9f9f931": "Prime",
+    "0x62d63197660c080236193ca60b70e49a08e90368": "Global Dollar",
+}
+
+AAVE_V4_UNDERLYINGS = {
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "WETH",
+    "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0": "wstETH",
+    "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee": "weETH",
+    "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": "WBTC",
+    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": "cbBTC",
+    "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9": "AAVE",
+    "0x514910771af9ca656af840dff83e8264ecf986ca": "LINK",
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "USDC",
+    "0xdac17f958d2ee523a2206206994597c13d831ec7": "USDT",
+    "0x1abaea1f7c830bd89acc67ec4af516284b1bc33c": "EURC",
+    "0x8292bb45bf1ee4d140127049757c2e0ff06317ed": "RLUSD",
+    "0xe343167631d89b6ffc58b88d6b7fb0228795491d": "USDG",
+    "0xcacd6fd266af91b8aed52accc382b4e165586e29": "frxUSD",
+    "0x40d16fc0246ad3160ccc09b8d0d3a2cd28ae6c2f": "GHO",
+    "0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e": "cirBTC",
+    "0xae7ab96520de3a18e5e111b5eaab095312d7fe84": "stETH",
+    "0x6b175474e89094c44da98b954eedeac495271d0f": "DAI",
+    "0xdc035d45d973e3ec169d2276ddab16f1e407384f": "USDS",
+}
+
+
+def aave_v4_hub_name(hub: str) -> str:
+    return AAVE_V4_HUBS.get((hub or "").lower(), "")
+
+
+def aave_v4_asset_symbol(underlying: str) -> str | None:
+    return AAVE_V4_UNDERLYINGS.get((underlying or "").lower())

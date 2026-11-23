@@ -105,10 +105,14 @@ def test_erc4626_valuation_uses_convert_to_assets(monkeypatch):
         assert chain == "ethereum"
         return 2_400_000  # 2.4 USDC, not 2.0
 
+    async def no_v4(*args, **kwargs):
+        return [], [], []
+
     monkeypatch.setattr(evm, "eth_get_balance", fake_eth_balance)
     monkeypatch.setattr(evm, "USE_MULTICALL", False)
     monkeypatch.setattr(evm, "token_balance", fake_token_balance)
     monkeypatch.setattr(evm, "convert_to_assets", fake_convert)
+    monkeypatch.setattr(evm, "scan_aave_v4", no_v4)
 
     rows, notes, _reports = asyncio.run(evm.scan_wallet("0x" + "11" * 20, "io", "test"))
     hit = [row for row in rows if row["token"] == syrup]
@@ -131,10 +135,14 @@ def test_failed_conversion_keeps_the_position(monkeypatch):
     async def fake_convert(token, shares, chain="ethereum"):
         raise RuntimeError("rpc down")
 
+    async def no_v4(*args, **kwargs):
+        return [], [], []
+
     monkeypatch.setattr(evm, "eth_get_balance", fake_eth_balance)
     monkeypatch.setattr(evm, "USE_MULTICALL", False)
     monkeypatch.setattr(evm, "token_balance", fake_token_balance)
     monkeypatch.setattr(evm, "convert_to_assets", fake_convert)
+    monkeypatch.setattr(evm, "scan_aave_v4", no_v4)
     rows, notes, _reports = asyncio.run(evm.scan_wallet("0x" + "22" * 20, "io", "test"))
     hit = [row for row in rows if row["token"] == fluid]
     assert len(hit) == 1
@@ -147,7 +155,7 @@ def test_missing_price_and_apy_do_not_hide_the_position(monkeypatch):
     async def no_prices(tokens):
         return {}
 
-    async def no_apy(project, symbol, chain="ethereum"):
+    async def no_apy(*args, **kwargs):
         return None, None, None
 
     monkeypatch.setattr(portfolio.markets, "prices_usd", no_prices)

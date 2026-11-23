@@ -67,27 +67,39 @@ async def llama_pools() -> list[dict[str, Any]]:
     return list(data.get("data") or [])
 
 
-async def match_pool(project: str | None, symbol: str | None, chain: str = "ethereum") -> dict[str, Any] | None:
+async def match_pool(
+    project: str | None,
+    symbol: str | None,
+    chain: str = "ethereum",
+    pool_meta: str | None = None,
+) -> dict[str, Any] | None:
     """Exact project + symbol on the requested chain.
 
     When several pools share that symbol, prefer the one without poolMeta
     (the main market, not Umbrella or a collateral row) and then the largest TVL.
-    A substring match is intentionally not used: "ETH" must not select "WETH".
+    If pool_meta is set, only pools whose poolMeta matches it are eligible, and
+    the largest TVL wins. A substring match is intentionally not used.
     """
     if not project or not symbol:
         return None
     pools = await llama_pools()
     want = _norm_symbol(symbol)
+    meta = (pool_meta or "").strip().lower()
     candidates = [
         p for p in pools
         if _chain_ok(p.get("chain") or "", chain)
         and (p.get("project") or "").lower() == project.lower()
         and _norm_symbol(p.get("symbol") or "") == want
     ]
+    if meta:
+        candidates = [p for p in candidates if (p.get("poolMeta") or "").strip().lower() == meta]
     if not candidates:
         return None
-    main = [p for p in candidates if not (p.get("poolMeta") or "")]
-    group = main or candidates
+    if meta:
+        group = candidates
+    else:
+        main = [p for p in candidates if not (p.get("poolMeta") or "")]
+        group = main or candidates
     group.sort(key=lambda p: float(p.get("tvlUsd") or 0), reverse=True)
     return group[0]
 
@@ -96,8 +108,9 @@ async def apy_for(
     project: str | None,
     symbol: str | None,
     chain: str = "ethereum",
+    pool_meta: str | None = None,
 ) -> tuple[float | None, float | None, dict[str, Any] | None]:
-    pool = await match_pool(project, symbol, chain)
+    pool = await match_pool(project, symbol, chain, pool_meta)
     if not pool:
         return None, None, None
     apy = pool.get("apy")
@@ -226,6 +239,7 @@ async def protocol_health() -> list[dict[str, Any]]:
     # Utilization / TVL signal from the largest Ethereum pool of each project.
     wanted = {
         "Aave": ["aave-v3"],
+        "Aave V4": ["aave-v4"],
         "Compound": ["compound-v3"],
         "Fluid": ["fluid-lending"],
         "Spark": ["spark-savings"],

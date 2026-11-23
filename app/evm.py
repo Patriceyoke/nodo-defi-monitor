@@ -9,11 +9,24 @@ from typing import Any
 import httpx
 
 from . import db
-from .protocols import CHAINS, TOKENS, WETH
+from .protocols import (
+    AAVE_V4_SPOKES,
+    CHAINS,
+    TOKENS,
+    WETH,
+    aave_v4_asset_symbol,
+    aave_v4_hub_name,
+)
 
 log = logging.getLogger("monitor.evm")
 SELECTOR_BALANCE_OF = "70a08231"
 SELECTOR_CONVERT_TO_ASSETS = "07a2d13a"
+SELECTOR_AAVE_V4_RESERVE_COUNT = "99806546"
+SELECTOR_AAVE_V4_GET_RESERVE = "77778db3"
+SELECTOR_AAVE_V4_USER_SUPPLIED = "f1568a89"
+SELECTOR_SYMBOL = "95d89b41"
+_V4_CATALOG: dict[str, Any] = {"at": 0.0, "rows": None}
+_V4_SYMBOLS: dict[str, str] = {}
 SELECTOR_AGGREGATE3 = "82ad56cb"
 SELECTOR_TOKEN_OF_OWNER = "2f745c59"
 MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11"
@@ -341,4 +354,194 @@ async def scan_wallet(
 
     found = await asyncio.gather(*[_one(spec) for spec in TOKENS])
     rows.extend([row for row in found if row])
+    if ethereum_ok:
+        try:
+            v4_rows, v4_notes, v4_reports = await scan_aave_v4(address, owner, label)
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Lettura Aave V4 fallita: {exc}"
+            log.warning(msg)
+            notes.append(msg)
+            reports.append({"chain": "ethereum", "asset": "Aave V4", "error": str(exc)})
+        else:
+            rows.extend(v4_rows)
+            notes.extend(v4_notes)
+            reports.extend(v4_reports)
+    return rows, notes, reports
+
+
+def decode_aave_v4_reserve(data: bytes | str) -> tuple[str, str, int]:
+    """getReserve words: [0] underlying, [1] hub, [3] decimals."""
+    if isinstance(data, str):
+        text = data[2:] if data.startswith("0x") else data
+        raw = bytes.fromhex(text) if text else b""
+    else:
+        raw = data
+    words = [raw[i:i + 32] for i in range(0, len(raw) - 31, 32)]
+    if not words:
+        raise ValueError("riserva Aave V4 vuota")
+    if int.from_bytes(words[0], "big") == 32 and len(words) >= 5:
+        words = words[1:]
+    if len(words) < 4:
+        raise ValueError("riserva Aave V4 incompleta")
+    underlying = "0x" + words[0][-20:].hex()
+    hub = "0x" + words[1][-20:].hex()
+    decimals = int.from_bytes(words[3], "big")
+    return underlying, hub, decimals
+
+
+def _encode_word(value: int) -> str:
+    return value.to_bytes(32, "big").hex()
+
+
+async def _each_call(calls: list[tuple[str, str]]) -> list[tuple[bool, bytes]]:
+    out: list[tuple[bool, bytes]] = []
+    for target, data in calls:
+        try:
+            raw = await eth_call_raw(target, data, "ethereum")
+            text = raw[2:] if raw.startswith("0x") else raw
+            out.append((True, bytes.fromhex(text) if text else b""))
+        except Exception:  # noqa: BLE001
+            out.append((False, b""))
+    return out
+
+
+async def _multicall_or_each(calls: list[tuple[str, str]]) -> list[tuple[bool, bytes]]:
+    if not calls:
+        return []
+    try:
+        if not USE_MULTICALL:
+            raise RuntimeError("multicall disattivato")
+        return await multicall("ethereum", calls)
+    except Exception as exc:  # noqa: BLE001
+        log.info("Multicall Aave V4 non usato (%s), lettura singola.", exc)
+        return await _each_call(calls)
+
+
+def _decode_symbol(data: str) -> str:
+    text = data[2:] if data.startswith("0x") else data
+    raw = bytes.fromhex(text) if text else b""
+    if len(raw) >= 64:
+        offset = int.from_bytes(raw[0:32], "big")
+        if offset + 32 <= len(raw):
+            size = int.from_bytes(raw[offset:offset + 32], "big")
+            chunk = raw[offset + 32:offset + 32 + size]
+            decoded = chunk.decode("utf-8", "ignore").strip("\x00 ").strip()
+            if decoded:
+                return decoded
+    return raw.rstrip(b"\x00").decode("utf-8", "ignore").strip()
+
+
+async def _underlying_symbol(underlying: str) -> str:
+    known = aave_v4_asset_symbol(underlying)
+    if known:
+        return known
+    cached = _V4_SYMBOLS.get(underlying.lower())
+    if cached:
+        return cached
+    try:
+        raw = await eth_call_raw(underlying, "0x" + SELECTOR_SYMBOL, "ethereum")
+        symbol = _decode_symbol(raw) or "TOKEN"
+    except Exception:  # noqa: BLE001
+        symbol = "TOKEN"
+    _V4_SYMBOLS[underlying.lower()] = symbol
+    return symbol
+
+
+async def aave_v4_catalog() -> list[dict[str, Any]]:
+    """Spoke reserves, cached for one hour. Treasury is not included."""
+    now = time.time()
+    cached = _V4_CATALOG.get("rows")
+    if cached is not None and now - float(_V4_CATALOG.get("at") or 0) < 3600:
+        return list(cached)
+    found: list[dict[str, Any]] = []
+    for spoke in AAVE_V4_SPOKES:
+        try:
+            count = await eth_call(spoke["address"], "0x" + SELECTOR_AAVE_V4_RESERVE_COUNT, "ethereum")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Aave V4 %s non letto: %s", spoke["name"], exc)
+            continue
+        if count <= 0:
+            continue
+        calls = [
+            (spoke["address"], "0x" + SELECTOR_AAVE_V4_GET_RESERVE + _encode_word(reserve_id))
+            for reserve_id in range(count)
+        ]
+        decoded = await _multicall_or_each(calls)
+        for reserve_id, (ok, chunk) in zip(range(count), decoded):
+            if not ok or not chunk:
+                continue
+            try:
+                underlying, hub, decimals = decode_aave_v4_reserve(chunk)
+            except Exception as exc:  # noqa: BLE001
+                log.info("Riserva Aave V4 %s #%s scartata: %s", spoke["name"], reserve_id, exc)
+                continue
+            found.append({
+                "spoke": spoke["address"],
+                "spoke_name": spoke["name"],
+                "reserve_id": reserve_id,
+                "underlying": underlying,
+                "hub": hub,
+                "decimals": decimals,
+            })
+    if found:
+        _V4_CATALOG["at"] = now
+        _V4_CATALOG["rows"] = found
+    return found
+
+
+async def scan_aave_v4(
+    address: str,
+    owner: str,
+    label: str,
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, str]]]:
+    """Supplied underlying on Aave V4 spokes. These balances are not ERC-20."""
+    notes: list[str] = []
+    reports: list[dict[str, str]] = []
+    try:
+        catalog = await aave_v4_catalog()
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Lettura catalogo Aave V4 fallita: {exc}"
+        return [], [msg], [{"chain": "ethereum", "asset": "Aave V4", "error": str(exc)}]
+    calls = [
+        (
+            item["spoke"],
+            "0x" + SELECTOR_AAVE_V4_USER_SUPPLIED + _encode_word(int(item["reserve_id"])) + _pad(address),
+        )
+        for item in catalog
+    ]
+    decoded = await _multicall_or_each(calls)
+    rows: list[dict[str, Any]] = []
+    for item, (ok, chunk) in zip(catalog, decoded):
+        if not ok or len(chunk) < 32:
+            continue
+        raw_amount = int.from_bytes(chunk[:32], "big")
+        if raw_amount <= 0:
+            continue
+        try:
+            symbol = await _underlying_symbol(item["underlying"])
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"Simbolo Aave V4 non letto: {exc}")
+            reports.append({"chain": "ethereum", "asset": "Aave V4", "error": str(exc)})
+            symbol = "TOKEN"
+        hub_name = aave_v4_hub_name(item["hub"]) or item["spoke_name"]
+        amount = human(raw_amount, int(item["decimals"]))
+        if amount <= 0:
+            continue
+        rows.append({
+            "owner": owner,
+            "label": label,
+            "address": address,
+            "chain": "ethereum",
+            "protocol": "Aave V4",
+            "asset": symbol,
+            "amount": amount,
+            "token": item["underlying"],
+            "price_token": price_key("ethereum", item["underlying"]),
+            "decimals": int(item["decimals"]),
+            "llama_project": "aave-v4",
+            "llama_symbol": symbol,
+            "llama_meta": hub_name,
+            "market": hub_name,
+            "valuation_ok": True,
+        })
     return rows, notes, reports

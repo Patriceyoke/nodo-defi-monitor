@@ -13,6 +13,8 @@ from .protocols import DAI, USDC, USDT, USDS, WETH
 # Only these hosts may appear on a suggestion. No aggregators and no pasted URLs.
 OFFICIAL_HOSTS = frozenset({
     "app.aave.com",
+    "aave.com",
+    "pro.aave.com",
     "app.compound.xyz",
     "app.spark.finance",
     "fluid.io",
@@ -26,7 +28,7 @@ _AAVE_UNDERLYING = {"USDC": USDC, "USDT": USDT, "DAI": DAI, "WETH": WETH, "ETH":
 _COMPOUND_MARKET = {"USDC": "usdc-mainnet", "USDT": "usdt-mainnet", "WETH": "weth-mainnet", "ETH": "weth-mainnet"}
 _SPARK_SAVINGS = {"USDC": "spusdc", "USDT": "spusdt"}
 _KNOWN_PROTOCOLS = (
-    "Rocket Pool", "SparkLend", "Fluid BNB", "Compound", "Aave", "Spark", "Fluid", "Lido", "Sky", "Maple",
+    "Rocket Pool", "SparkLend", "Fluid BNB", "Compound", "Aave V4", "Aave", "Spark", "Fluid", "Lido", "Sky", "Maple",
 )
 
 BUCKET_STABLE = "stable"
@@ -54,6 +56,8 @@ def official_yield_url(protocol: str, asset: str) -> str:
     """Deep link to the official app for this market, or that app's homepage."""
     name = (protocol or "").strip()
     symbol = (asset or "").strip().upper()
+    if name == "Aave V4":
+        return _official("https://aave.com/pro")
     if name == "Aave":
         underlying = _AAVE_UNDERLYING.get(symbol)
         if underlying:
@@ -214,13 +218,11 @@ def mark_switch_hides(
 # position being left is already tier 2 or riskier. Anything else is never a destination.
 _TIER_1 = {
     ("AAVE", "USDC"), ("AAVE", "USDT"), ("AAVE", "WETH"), ("AAVE", "ETH"),
+    ("AAVE V4", "USDC"), ("AAVE V4", "USDT"), ("AAVE V4", "WETH"), ("AAVE V4", "ETH"),
     ("COMPOUND", "USDC"), ("COMPOUND", "USDT"), ("COMPOUND", "WETH"), ("COMPOUND", "ETH"),
-    ("SPARK", "USDC"), ("SPARK", "USDT"), ("SPARK", "SUSDS"),
-    ("SKY", "SUSDS"),
     ("LIDO", "STETH"), ("LIDO", "WSTETH"),
 }
 _TIER_2 = {
-    ("SPARKLEND", "USDC"), ("SPARKLEND", "USDT"), ("SPARKLEND", "WETH"), ("SPARKLEND", "ETH"),
     ("ROCKET POOL", "RETH"),
 }
 _EXCLUDED_WORDS = ("risk capital", "risk-capital", "junior", "tranche", "leverag", "loop", "points", "farm")
@@ -458,24 +460,22 @@ def _owner_label(owner: str) -> str:
 # Same project and symbol the positions table uses, so a suggestion cannot
 # quote a different DefiLlama pool than the row it came from.
 _SWITCH_MARKETS = (
-    ("aave-v3", "Aave", "USDC", "USDC"),
-    ("aave-v3", "Aave", "USDT", "USDT"),
-    ("aave-v3", "Aave", "DAI", "DAI"),
-    ("aave-v3", "Aave", "WETH", "WETH"),
-    ("compound-v3", "Compound", "USDC", "USDC"),
-    ("compound-v3", "Compound", "USDT", "USDT"),
-    ("compound-v3", "Compound", "WETH", "ETH"),
-    ("spark-savings", "Spark", "USDC", "USDC"),
-    ("spark-savings", "Spark", "USDT", "USDT"),
-    ("sparklend", "SparkLend", "USDC", "USDC"),
-    ("sparklend", "SparkLend", "USDT", "USDT"),
-    ("sky-lending", "Sky", "sUSDS", "SUSDS"),
-    ("lido", "Lido", "stETH", "STETH"),
-    ("rocket-pool", "Rocket Pool", "rETH", "RETH"),
-    ("fluid-lending", "Fluid", "USDC", "USDC"),
-    ("fluid-lending", "Fluid", "USDT", "USDT"),
-    ("maple", "Maple", "USDC", "USDC"),
-    ("maple", "Maple", "USDT", "USDT"),
+    ("aave-v3", "Aave", "USDC", "USDC", ""),
+    ("aave-v3", "Aave", "USDT", "USDT", ""),
+    ("aave-v3", "Aave", "DAI", "DAI", ""),
+    ("aave-v3", "Aave", "WETH", "WETH", ""),
+    ("aave-v4", "Aave V4", "USDC", "USDC", "Core"),
+    ("aave-v4", "Aave V4", "USDT", "USDT", "Core"),
+    ("aave-v4", "Aave V4", "WETH", "WETH", "Core"),
+    ("compound-v3", "Compound", "USDC", "USDC", ""),
+    ("compound-v3", "Compound", "USDT", "USDT", ""),
+    ("compound-v3", "Compound", "WETH", "ETH", ""),
+    ("lido", "Lido", "stETH", "STETH", ""),
+    ("rocket-pool", "Rocket Pool", "rETH", "RETH", ""),
+    ("fluid-lending", "Fluid", "USDC", "USDC", ""),
+    ("fluid-lending", "Fluid", "USDT", "USDT", ""),
+    ("maple", "Maple", "USDC", "USDC", ""),
+    ("maple", "Maple", "USDT", "USDT", ""),
 )
 
 
@@ -487,14 +487,14 @@ async def market_alternatives(positions: list[dict[str, Any]]) -> list[dict[str,
     if not held_buckets:
         return []
     alts: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for project, protocol, asset, symbol in _SWITCH_MARKETS:
+    seen: set[tuple[str, str, str]] = set()
+    for project, protocol, asset, symbol, pool_meta in _SWITCH_MARKETS:
         if bucket(asset) not in held_buckets:
             continue
-        key = (protocol, asset)
+        key = (protocol, asset, pool_meta)
         if key in seen:
             continue
-        apy, apy30, pool = await apy_for(project, symbol, "ethereum")
+        apy, apy30, pool = await apy_for(project, symbol, "ethereum", pool_meta or None)
         if apy is None:
             continue
         seen.add(key)
