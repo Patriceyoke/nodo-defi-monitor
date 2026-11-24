@@ -44,6 +44,11 @@ def prepare_runtime() -> None:
 @app.on_event("startup")
 async def _startup() -> None:
     prepare_runtime()
+    security.reset_scan_state()
+    try:
+        security.migrate_security_cache()
+    except Exception:
+        _log.exception("Security cache was left unchanged")
     asyncio.create_task(security.daily_loop())
 
 
@@ -475,7 +480,7 @@ async def get_history(owner: str = Query("tutti"), days: int = Query(90, ge=1, l
 async def get_security(owner: str = Query("tutti"), refresh: bool = Query(False)) -> dict[str, Any]:
     """Cached checks. refresh runs them now; the dashboard does not call this on startup."""
     if refresh:
-        return await security.refresh_and_report(owner)
+        return security.begin_refresh(owner)
     return security.public_report(owner)
 
 

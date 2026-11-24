@@ -249,6 +249,7 @@ def test_refresh_finishes_before_it_is_called_fresh(tmp_path, monkeypatch):
         db.cache_set("security", {
             "scanned_at": 50,
             "cached_at": 50,
+            "from_cache": False,
             "partial": False,
             "note": security._scan_note(False, []),
             "approvals": [],
@@ -259,13 +260,22 @@ def test_refresh_finishes_before_it_is_called_fresh(tmp_path, monkeypatch):
         })
         return {}
 
+    async def run():
+        report = await security.refresh_and_report("tutti")
+        assert report["running"] is True
+        assert report["from_cache"] is True
+        assert report["scanned_at"] == 1
+        await security._SCAN
+        done = security.public_report("tutti")
+        assert done["from_cache"] is False
+        assert done["running"] is False
+        assert done["scanned_at"] == 50
+        assert done["partial"] is False
+        assert done["note"].startswith("Nessuna revoca")
+        return done
+
     monkeypatch.setattr(security, "scan_and_store", fake_scan)
-    report = asyncio.run(security.refresh_and_report("tutti"))
-    assert report["from_cache"] is False
-    assert report["running"] is False
-    assert report["scanned_at"] == 50
-    assert report["partial"] is False
-    assert report["note"].startswith("Nessuna revoca")
+    asyncio.run(run())
     skipped = security._scan_note(True, ["Approvazioni su ethereum non lette."])
     assert skipped.startswith("Approvazioni su ethereum non lette.")
     assert "partial" not in skipped or True

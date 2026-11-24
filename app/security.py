@@ -58,6 +58,9 @@ PROTOCOL_NAMES = {
 }
 
 _SCAN: asyncio.Task | None = None
+_SCAN_STARTED = 0.0
+SCAN_TIMEOUT = 75
+CHAIN_TIMEOUT = 20
 _GOPLUS_BAD = ("phishing_activities", "stealing_attack", "honeypot_related_address", "cybercrime", "financial_crime", "gas_abuse")
 
 # Spenders the app treats as current protocol contracts. Addresses are public
@@ -436,6 +439,8 @@ def match_hacks(held: set[str], hacks: list[dict[str, Any]], now: int) -> list[d
         name = str(hack.get("name") or "")
         blob = name.lower()
         for protocol in held:
+            if "fluidkey" in blob and protocol == "Fluid":
+                continue
             if not _protocol_mentioned(protocol, blob):
                 continue
             age = now - stamp
@@ -595,8 +600,8 @@ def protocol_is_urgent(item: dict[str, Any]) -> bool:
 
 
 def incident_is_urgent(item: dict[str, Any]) -> bool:
-    """Recent exploit or an on-chain pause. Older warnings stay in the list only."""
-    return item.get("severity") == "danger"
+    """Recent exploit or an on-chain pause. Announcements and Fluidkey are not urgent."""
+    return item.get("severity") == "danger" and _keep_cached_incident(item)
 
 
 def ens_is_urgent(item: dict[str, Any]) -> bool:
@@ -723,7 +728,7 @@ def security_summary(owner: str = "tutti") -> dict[str, Any]:
         annotate_hidden(dedupe_approvals(filter_owner_rows(list(report.get("approvals") or []), owner))),
         _portfolio_positions(),
     )
-    incidents = list(report.get("incidents") or [])
+    incidents = [row for row in list(report.get("incidents") or []) if _keep_cached_incident(row)]
     outflows = filter_owner_rows(list(report.get("outflows") or []), owner)
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
@@ -760,11 +765,88 @@ def _thresholds() -> tuple[float, float]:
     return max(0.1, min(drop, 100.0)), max(0.0, usd)
 
 
+def _incident_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "")
+        for key in ("name", "technique", "classification", "detail", "title", "text")
+    ).lower()
+
+
+def _on_chain_pause(row: dict[str, Any]) -> bool:
+    source = str(row.get("source") or "")
+    detail = str(row.get("detail") or "").lower()
+    return source in {"Aave Pool", "Compound Comet", "Fluid"} or "pausa" in detail or "congelat" in detail
+
+
+def _keep_cached_incident(row: dict[str, Any]) -> bool:
+    """Drop announcements and Fluidkey rows that an older scan stored as Fluid."""
+    if _is_announcement(row) or "comunicazione ufficiale" in _incident_text(row):
+        return False
+    if "fluidkey" in _incident_text(row):
+        return False
+    if _real_incident_text(row) or _on_chain_pause(row):
+        return True
+    return False
+
+
+def _keep_cached_alert(row: dict[str, Any]) -> bool:
+    if row.get("kind") != "incident":
+        return True
+    text = _incident_text(row)
+    if "comunicazione ufficiale" in text or "fluidkey" in text:
+        return False
+    if str(row.get("title") or "") == "Protocollo Fluid" and "fluidkey" in text:
+        return False
+    return True
+
+
+def reclassify_cached_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite a security blob saved before these rules, without touching wallets."""
+    incidents = [row for row in list(report.get("incidents") or []) if _keep_cached_incident(row)]
+    alerts = [row for row in list(report.get("alerts") or []) if _keep_cached_alert(row)]
+    alerts = [row for row in alerts if row.get("kind") != "incident"]
+    for incident in incidents:
+        for owner in incident.get("owners") or []:
+            alerts.append(_alert_from_incident(incident, str(owner)))
+    errors = [str(item) for item in (report.get("errors") or []) if str(item).strip()]
+    skipped = [item for item in errors if _is_skip_error(item)]
+    partial = bool(report.get("partial")) and bool(skipped)
+    cleaned = dict(report)
+    cleaned["incidents"] = incidents
+    cleaned["alerts"] = alerts
+    cleaned["partial"] = partial
+    cleaned["errors"] = errors
+    cleaned["note"] = _scan_note(partial, skipped)
+    return cleaned
+
+
+def _is_skip_error(message: str) -> bool:
+    text = message.lower()
+    return text.startswith("approvazioni su") or "tempo scaduto" in text or "saltat" in text
+
+
+def _cache_signature(report: dict[str, Any]) -> str:
+    incidents = [
+        (row.get("protocol"), row.get("name"), row.get("detail"), row.get("severity"))
+        for row in report.get("incidents") or []
+    ]
+    alerts = [(row.get("kind"), row.get("title"), row.get("text"), row.get("level")) for row in report.get("alerts") or []]
+    return repr((incidents, alerts, bool(report.get("partial")), report.get("note")))
+
+
 def cached_report() -> dict[str, Any] | None:
     stored = db.cache_get("security")
     if not isinstance(stored, dict):
         return None
-    return stored
+    cleaned = reclassify_cached_report(stored)
+    if _cache_signature(cleaned) != _cache_signature(stored):
+        db.cache_set("security", cleaned)
+    return cleaned
+
+
+def migrate_security_cache() -> None:
+    """Apply the current incident rules to the blob already stored on disk."""
+    cached_report()
 
 
 def cached_alerts(owner: str = "tutti") -> list[dict[str, Any]]:
@@ -1072,7 +1154,14 @@ async def scan_and_store() -> dict[str, Any]:
         address = wallet["address"]
         for chain in WATCH_CHAINS:
             try:
-                logs, chunk_partial = await _approval_logs(chain, address)
+                logs, chunk_partial = await asyncio.wait_for(
+                    _approval_logs(chain, address),
+                    timeout=CHAIN_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                errors.append(f"Approvazioni su {chain} non lette: tempo scaduto.")
+                partial = True
+                continue
             except Exception as exc:  # noqa: BLE001
                 log.info("Approvazioni %s non lette (%s).", chain, type(exc).__name__)
                 errors.append(f"Approvazioni su {chain} non lette.")
@@ -1170,6 +1259,7 @@ async def scan_and_store() -> dict[str, Any]:
     report = {
         "scanned_at": now,
         "cached_at": now,
+        "from_cache": False,
         "partial": partial,
         "readonly": True,
         "note": _scan_note(partial, errors),
@@ -1208,6 +1298,7 @@ def _scan_note(partial: bool, errors: list[str]) -> str:
 
 def public_report(owner: str = "tutti", *, from_cache: bool | None = None) -> dict[str, Any]:
     owner = normalize_owner(owner, allow_all=True)
+    _expire_stuck_scan()
     report = cached_report()
     if not report:
         return {
@@ -1229,9 +1320,15 @@ def public_report(owner: str = "tutti", *, from_cache: bool | None = None) -> di
         _portfolio_positions(),
     )
     outflows = filter_owner_rows(list(report.get("outflows") or []), owner)
-    alerts = [row for row in filter_owner_rows(list(report.get("alerts") or []), owner) if row.get("kind") != "approval"]
+    alerts = [
+        row for row in filter_owner_rows(list(report.get("alerts") or []), owner)
+        if row.get("kind") != "approval" and _keep_cached_alert(row)
+    ]
     alerts.extend(item for item in (_alert_from_approval(row) for row in approvals if not row.get("hidden")) if item)
-    incidents = [row for row in list(report.get("incidents") or []) if _show_incident(row)]
+    incidents = [
+        row for row in list(report.get("incidents") or [])
+        if _keep_cached_incident(row) and _show_incident(row)
+    ]
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
     visible_approvals = _risky_visible(approvals)
@@ -1250,7 +1347,7 @@ def public_report(owner: str = "tutti", *, from_cache: bool | None = None) -> di
         "owner": owner,
         "ready": True,
         "running": scan_running(),
-        "from_cache": True if from_cache is None else from_cache,
+        "from_cache": _served_from_cache(report, from_cache),
         "scanned_at": report.get("scanned_at"),
         "cached_at": report.get("cached_at"),
         "partial": report.get("partial"),
@@ -1272,31 +1369,72 @@ def public_report(owner: str = "tutti", *, from_cache: bool | None = None) -> di
     }
 
 
+def _served_from_cache(report: dict[str, Any], override: bool | None) -> bool:
+    """A running scan is still the previous blob. from_cache is false only after a scan writes."""
+    if scan_running():
+        return True
+    if override is not None:
+        return override
+    return report.get("from_cache") is not False
+
+
+def _expire_stuck_scan() -> None:
+    """A scan that outlives the request must not keep running=true on the old cache."""
+    global _SCAN, _SCAN_STARTED
+    if _SCAN is None or _SCAN.done():
+        return
+    if time.time() - _SCAN_STARTED <= SCAN_TIMEOUT:
+        return
+    _SCAN.cancel()
+    _SCAN = None
+    _SCAN_STARTED = 0.0
+    stored = db.cache_get("security")
+    report = dict(stored) if isinstance(stored, dict) else {}
+    errors = [str(item) for item in (report.get("errors") or []) if str(item).strip()]
+    message = "Controllo interrotto: tempo scaduto."
+    if message not in errors:
+        errors.append(message)
+    report["errors"] = errors
+    report["partial"] = True
+    report["note"] = _scan_note(True, errors)
+    report["from_cache"] = True
+    if report.get("scanned_at"):
+        db.cache_set("security", reclassify_cached_report(report))
+
+
+def reset_scan_state() -> None:
+    """Startup must not inherit a scan that died with the previous process."""
+    global _SCAN, _SCAN_STARTED
+    if _SCAN is not None and not _SCAN.done():
+        _SCAN.cancel()
+    _SCAN = None
+    _SCAN_STARTED = 0.0
+
+
 def scan_running() -> bool:
+    _expire_stuck_scan()
     return _SCAN is not None and not _SCAN.done()
 
 
-async def refresh_and_report(owner: str = "tutti") -> dict[str, Any]:
-    """Run a scan and return it. from_cache is false only after that scan finishes."""
-    task = start_scan()
-    finished = False
-    try:
-        await task
-        finished = True
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Controllo sicurezza non completato (%s).", type(exc).__name__)
-    running = scan_running()
-    report = public_report(owner, from_cache=not (finished and not running))
-    report["running"] = running
-    if finished and not running:
-        report["from_cache"] = False
+def begin_refresh(owner: str = "tutti") -> dict[str, Any]:
+    """Start a scan and answer at once. The request must not wait for every chain."""
+    start_scan()
+    report = public_report(owner)
+    report["running"] = True
+    report["from_cache"] = True
     return report
 
 
+async def refresh_and_report(owner: str = "tutti") -> dict[str, Any]:
+    """Backward-compatible name: refresh is scheduled, not awaited."""
+    return begin_refresh(owner)
+
+
 def start_scan() -> asyncio.Task:
-    global _SCAN
+    global _SCAN, _SCAN_STARTED
     if scan_running() and _SCAN is not None:
         return _SCAN
+    _SCAN_STARTED = time.time()
     _SCAN = asyncio.create_task(scan_and_store())
 
     def _finished(task: asyncio.Task) -> None:

@@ -1001,13 +1001,14 @@ function renderSecurity() {
     <p class="mini">${escapeHtml(row.symbol || "")} · ${OWNER_LABEL[row.owner] || ""} · da ${escapeHtml(row.previous)} a ${escapeHtml(row.amount)}
       ${row.tx_url ? `<a href="${escapeHtml(row.tx_url)}" target="_blank" rel="noopener">transazione</a>` : ""}</p>
   `).join("") : `<p class="mini">Nessuna uscita sopra la soglia dall'ultimo controllo.</p>`;
-  const windowNote = data.partial ? `<p class="mini">La finestra dei log è limitata: un'approvazione molto vecchia può non comparire.</p>` : "";
+  const windowNote = data.partial && /interrotta|finestra/i.test(data.note || "")
+    ? `<p class="mini">La finestra dei log è limitata: un'approvazione molto vecchia può non comparire.</p>` : "";
   box.innerHTML = `<h3>Approvazioni</h3>${approvalHtml}<h3>Protocolli</h3>${incidentHtml}<h3>Uscite</h3>${outflowHtml}${windowNote}<p class="mini">${escapeHtml(data.note || "")}</p>`;
 }
 async function loadSecurity(force) {
   const box = $("#sec-list");
   const status = $("#sec-status");
-  if (state.security && !force) {
+  if (state.security && !force && !state.security.running) {
     renderSecurity();
     return;
   }
