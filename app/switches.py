@@ -690,6 +690,12 @@ def best_advice(
             full = _position_usd(src)
             if full < 50 or src.get("apy") is None:
                 continue
+            if "amount" in src and src.get("amount") is not None:
+                try:
+                    if float(src.get("amount") or 0) <= 0:
+                        continue
+                except (TypeError, ValueError):
+                    continue
             src_live = float(src["apy"])
             src_rate, _spike = decision_apy(src_live, src.get("apy30"))
             src_tier = source_tier(src.get("protocol"), src.get("asset"))

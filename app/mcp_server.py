@@ -180,7 +180,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
         })
     if name == "get_security":
         if bool(args.get("refresh")):
-            await security_checks.start_scan()
+            return _text(await security_checks.refresh_and_report(owner))
         return _text(security_checks.public_report(owner))
     if name == "get_history":
         days = int(args.get("days") or 90)

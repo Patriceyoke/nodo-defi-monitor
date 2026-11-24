@@ -475,7 +475,7 @@ async def get_history(owner: str = Query("tutti"), days: int = Query(90, ge=1, l
 async def get_security(owner: str = Query("tutti"), refresh: bool = Query(False)) -> dict[str, Any]:
     """Cached checks. refresh runs them now; the dashboard does not call this on startup."""
     if refresh:
-        await security.start_scan()
+        return await security.refresh_and_report(owner)
     return security.public_report(owner)
 
 

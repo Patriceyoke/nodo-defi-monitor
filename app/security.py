@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
@@ -49,6 +50,7 @@ PROTOCOL_NAMES = {
     "Aave": ("aave",),
     "Compound": ("compound",),
     "Fluid": ("fluid",),
+    "Aave V4": ("aave v4", "aavev4"),
     "Spark": ("spark savings", "spark"),
     "SparkLend": ("sparklend", "spark lend"),
     "Sky": ("sky", "maker"),
@@ -62,6 +64,17 @@ _GOPLUS_BAD = ("phishing_activities", "stealing_attack", "honeypot_related_addre
 # deployments, compared in lowercase. A deprecated router stays in the list so
 # an unlimited approval to it is called out instead of treated as normal.
 PERMIT2 = "0x000000000022d473030f116ddee9f6b43ac78ba3"
+ONEINCH_PREFIX = "0x111111125421ca6d"
+_POSITION_TOKEN_PROTOCOLS = {
+    "aethusdc": "Aave",
+    "aethusdt": "Aave",
+    "aethweth": "Aave",
+    "cusdcv3": "Compound",
+    "cusdtv3": "Compound",
+    "cwethv3": "Compound",
+}
+_REAL_INCIDENT = ("exploit", "drain", "insolvency", "insolvent", "withdrawals blocked", "withdrawal blocked")
+_EXITED_PROTOCOLS = {"Sky", "Spark", "SparkLend"}
 _SPENDER_BOOK: dict[str, dict[str, Any]] = {
     # Aave v3 Pool (Ethereum).
     "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": {"protocol": "Aave", "active": True},
@@ -138,7 +151,27 @@ def approval_severity(flags: list[str]) -> str:
 
 
 def known_spender(address: str) -> dict[str, Any] | None:
-    return _SPENDER_BOOK.get((address or "").lower())
+    key = (address or "").lower()
+    found = _SPENDER_BOOK.get(key)
+    if found:
+        return found
+    if key.startswith(ONEINCH_PREFIX):
+        return {"protocol": "1inch", "active": True, "router": True}
+    return None
+
+
+def position_token_protocol(symbol: str | None, token: str | None = None) -> str | None:
+    """Aave aTokens and Compound v3 cTokens are the position itself, not an unknown spender."""
+    if _POSITION_TOKEN_PROTOCOLS.get(str(symbol or "").lower().replace(" ", "")):
+        return _POSITION_TOKEN_PROTOCOLS[str(symbol or "").lower().replace(" ", "")]
+    wanted = (token or "").lower()
+    if not wanted:
+        return None
+    for spec in TOKENS:
+        if str(spec.get("token") or "").lower() != wanted:
+            continue
+        return _POSITION_TOKEN_PROTOCOLS.get(str(spec.get("symbol") or "").lower())
+    return None
 
 
 def _uses_protocol(positions: list[dict[str, Any]] | None, owner: str | None, protocol: str) -> bool:
@@ -206,6 +239,11 @@ def classify_approval(row: dict[str, Any], positions: list[dict[str, Any]] | Non
         return "rischiosa", "Lo spender non è un contratto verificato."
     if book and book.get("deprecated"):
         return "rischiosa", "È un router vecchio, non quello che i protocolli usano ora."
+    if book and book.get("router"):
+        return "normale", "Router noto di 1inch."
+    token_protocol = position_token_protocol(str(row.get("symbol") or ""), str(row.get("token") or ""))
+    if token_protocol and _uses_protocol(positions, owner, token_protocol):
+        return "normale", f"Token della posizione {token_protocol}."
     in_use = bool(book and book.get("active") and _uses_protocol(positions, owner, str(book.get("protocol") or "")))
     permit2_in_use = bool(book and book.get("permit2") and (holds or in_use or broad))
     if book and book.get("active") and (in_use or permit2_in_use):
@@ -332,22 +370,73 @@ def aave_frozen_paused(configuration: int) -> tuple[bool, bool]:
     return bool((value >> 57) & 1), bool((value >> 60) & 1)
 
 
+def _open_quantity(row: dict[str, Any]) -> bool:
+    if "amount" in row and row.get("amount") is not None:
+        try:
+            return float(row.get("amount") or 0) > 0
+        except (TypeError, ValueError):
+            return False
+    try:
+        return float(row.get("usd") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def held_protocols(positions: list[dict[str, Any]]) -> set[str]:
-    return {str(row.get("protocol") or "") for row in positions if row.get("protocol") and row.get("protocol") != "Wallet"}
+    found: set[str] = set()
+    for row in positions:
+        protocol = str(row.get("protocol") or "")
+        if not protocol or protocol == "Wallet" or not _open_quantity(row):
+            continue
+        found.add(protocol)
+    return found
+
+
+def _protocol_mentioned(protocol: str, blob: str) -> bool:
+    words = PROTOCOL_NAMES.get(protocol, (protocol.lower(),))
+    for word in words:
+        if not word:
+            continue
+        if not re.search(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", blob):
+            continue
+        return True
+    return False
+
+
+def _is_announcement(hack: dict[str, Any]) -> bool:
+    technique = str(hack.get("technique") or hack.get("classification") or hack.get("detail") or "").strip().lower()
+    source = str(hack.get("source") or "").strip().lower()
+    if technique == "comunicazione ufficiale" or "announcement" in source or source == "annuncio":
+        return True
+    return False
+
+
+def _real_incident_text(hack: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(hack.get(key) or "")
+        for key in ("name", "technique", "classification", "detail")
+    ).lower()
+    return any(word in blob for word in _REAL_INCIDENT)
 
 
 def match_hacks(held: set[str], hacks: list[dict[str, Any]], now: int) -> list[dict[str, Any]]:
-    """Incidents only for protocols the wallets actually hold, and only if recent."""
+    """Incidents only for protocols the wallets actually hold, and only if recent.
+
+    An official announcement is not an incident. A name must match the protocol
+    on a word boundary, so Fluidkey is not Fluid. A real incident names an
+    exploit, a drain, insolvency, or blocked withdrawals.
+    """
     found: list[dict[str, Any]] = []
     for hack in hacks:
         stamp = int(hack.get("date") or 0)
         if not stamp or now - stamp > STALE_SECONDS:
             continue
+        if _is_announcement(hack) or not _real_incident_text(hack):
+            continue
         name = str(hack.get("name") or "")
         blob = name.lower()
         for protocol in held:
-            words = PROTOCOL_NAMES.get(protocol, (protocol.lower(),))
-            if not any(word and word in blob for word in words):
+            if not _protocol_mentioned(protocol, blob):
                 continue
             age = now - stamp
             found.append({
@@ -357,7 +446,7 @@ def match_hacks(held: set[str], hacks: list[dict[str, Any]], now: int) -> list[d
                 "date": stamp,
                 "detail": str(hack.get("technique") or hack.get("classification") or "incidente segnalato"),
                 "amount_usd": hack.get("amount"),
-                "source": "DefiLlama",
+                "source": str(hack.get("source") or "DefiLlama"),
             })
             break
     return found
@@ -419,6 +508,8 @@ def outflow_rows(
         amount = float(row.get("amount") or 0)
         usd = float(row.get("usd") or 0)
         reason = compare_balance(known.get(key), amount, usd, drop_pct, usd_min)
+        if amount <= 0 and str(row.get("protocol") or "") in _EXITED_PROTOCOLS:
+            reason = None
         if reason:
             alerts.append({
                 "owner": row.get("owner"),
@@ -441,6 +532,13 @@ def outflow_rows(
         if key in seen or mark["wallet"].lower() not in wallets:
             continue
         if float(mark.get("amount") or 0) <= 0:
+            continue
+        if str(mark.get("symbol") or "") in {"sUSDS", "stUSDS", "spUSDC", "spUSDT", "SKY"}:
+            updates.append({
+                "wallet": mark["wallet"], "chain": mark["chain"], "token": mark["token"],
+                "owner": mark.get("owner") or "", "symbol": mark.get("symbol") or "",
+                "amount": 0.0, "usd": 0.0,
+            })
             continue
         reason = compare_balance(mark, 0.0, 0.0, drop_pct, usd_min)
         if reason:
@@ -770,7 +868,7 @@ async def _approval_logs(chain: str, wallet: str) -> tuple[list[dict[str, Any]],
                 reached_start = True
                 break
             cursor = start - 1
-        partial = partial or not reached_start
+        del reached_start
     return found, partial
 
 
@@ -978,8 +1076,11 @@ async def scan_and_store() -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 log.info("Approvazioni %s non lette (%s).", chain, type(exc).__name__)
                 errors.append(f"Approvazioni su {chain} non lette.")
+                partial = True
                 continue
-            partial = partial or chunk_partial
+            if chunk_partial:
+                partial = True
+                errors.append(f"Approvazioni su {chain} non lette: la lettura dei log si è interrotta.")
             for item in latest_approvals(logs):
                 current = await _allowance(chain, item["token"], address, item["spender"], item["kind"])
                 if current == 0:
@@ -1056,17 +1157,22 @@ async def scan_and_store() -> dict[str, Any]:
     approvals = annotate_risk(dedupe_approvals(approvals), positions)
     alerts.extend(item for item in (_alert_from_approval(row) for row in approvals) if item)
     for incident in incidents:
-        owners = sorted({pos.get("owner") for pos in positions if pos.get("protocol") == incident.get("protocol")})
+        owners = sorted({
+            pos.get("owner")
+            for pos in positions
+            if pos.get("protocol") == incident.get("protocol") and _open_quantity(pos)
+        })
         incident["owners"] = owners
         for owner in owners:
             alerts.append(_alert_from_incident(incident, str(owner)))
+    incidents = [row for row in incidents if row.get("owners")]
     alerts.extend(_alert_from_outflow(row) for row in outflows)
     report = {
         "scanned_at": now,
         "cached_at": now,
         "partial": partial,
         "readonly": True,
-        "note": "Nessuna revoca parte da qui. Il link apre revoke.cash e la firma resta tua, per esempio su OneKey.",
+        "note": _scan_note(partial, errors),
         "approvals": approvals,
         "incidents": incidents,
         "outflows": outflows,
@@ -1080,7 +1186,27 @@ async def scan_and_store() -> dict[str, Any]:
     return report
 
 
-def public_report(owner: str = "tutti") -> dict[str, Any]:
+def _show_incident(row: dict[str, Any]) -> bool:
+    detail = str(row.get("detail") or "").strip().lower()
+    name = str(row.get("name") or "").lower()
+    if detail == "comunicazione ufficiale" or "announcement" in str(row.get("source") or "").lower():
+        return False
+    if row.get("protocol") == "Fluid" and re.search(r"(?<![a-z0-9])fluidkey(?![a-z0-9])", name):
+        return False
+    if not row.get("owners"):
+        return False
+    return True
+
+
+def _scan_note(partial: bool, errors: list[str]) -> str:
+    base = "Nessuna revoca parte da qui. Il link apre revoke.cash e la firma resta tua, per esempio su OneKey."
+    if not partial:
+        return base
+    reason = " ".join(errors) or "Una rete è stata saltata."
+    return f"{reason} {base}"
+
+
+def public_report(owner: str = "tutti", *, from_cache: bool | None = None) -> dict[str, Any]:
     owner = normalize_owner(owner, allow_all=True)
     report = cached_report()
     if not report:
@@ -1105,7 +1231,7 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
     outflows = filter_owner_rows(list(report.get("outflows") or []), owner)
     alerts = [row for row in filter_owner_rows(list(report.get("alerts") or []), owner) if row.get("kind") != "approval"]
     alerts.extend(item for item in (_alert_from_approval(row) for row in approvals if not row.get("hidden")) if item)
-    incidents = list(report.get("incidents") or [])
+    incidents = [row for row in list(report.get("incidents") or []) if _show_incident(row)]
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
     visible_approvals = _risky_visible(approvals)
@@ -1124,7 +1250,7 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
         "owner": owner,
         "ready": True,
         "running": scan_running(),
-        "from_cache": True,
+        "from_cache": True if from_cache is None else from_cache,
         "scanned_at": report.get("scanned_at"),
         "cached_at": report.get("cached_at"),
         "partial": report.get("partial"),
@@ -1148,6 +1274,23 @@ def public_report(owner: str = "tutti") -> dict[str, Any]:
 
 def scan_running() -> bool:
     return _SCAN is not None and not _SCAN.done()
+
+
+async def refresh_and_report(owner: str = "tutti") -> dict[str, Any]:
+    """Run a scan and return it. from_cache is false only after that scan finishes."""
+    task = start_scan()
+    finished = False
+    try:
+        await task
+        finished = True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Controllo sicurezza non completato (%s).", type(exc).__name__)
+    running = scan_running()
+    report = public_report(owner, from_cache=not (finished and not running))
+    report["running"] = running
+    if finished and not running:
+        report["from_cache"] = False
+    return report
 
 
 def start_scan() -> asyncio.Task:

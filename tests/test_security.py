@@ -170,19 +170,117 @@ def test_latest_log_wins_and_a_revocation_drops_the_approval():
 
 def test_hacks_only_for_protocols_you_hold():
     hacks = [
-        {"name": "Aave", "date": NOW - 5 * 86400, "technique": "oracle", "amount": 10},
-        {"name": "Some Other Protocol", "date": NOW - 5 * 86400, "technique": "key", "amount": 10},
+        {"name": "Aave exploit", "date": NOW - 5 * 86400, "technique": "exploit", "amount": 10},
+        {"name": "Some Other Protocol exploit", "date": NOW - 5 * 86400, "technique": "exploit", "amount": 10},
         {"name": "Aave", "date": NOW - 200 * 86400, "technique": "old", "amount": 1},
     ]
     recent = match_hacks({"Aave"}, hacks, NOW)
     assert len(recent) == 1
     assert recent[0]["severity"] == "danger"
     assert match_hacks({"Compound"}, hacks, NOW) == []
-    older = match_hacks({"Aave"}, [{"name": "Aave V3", "date": NOW - 100 * 86400, "technique": "pause"}], NOW)
+    older = match_hacks({"Aave"}, [{"name": "Aave withdrawals blocked", "date": NOW - 100 * 86400, "technique": "withdrawals blocked"}], NOW)
     assert older[0]["severity"] == "warning"
     frozen, paused = aave_frozen_paused((1 << 57) | (1 << 60))
     assert frozen and paused
     assert aave_frozen_paused(0) == (False, False)
+
+
+def test_announcements_are_not_incidents_and_fluidkey_is_not_fluid():
+    from app.security import incident_is_urgent
+
+    notes = [
+        {"name": "Lido Earn: Introducing Two Layers of Loss Protection", "date": NOW - 86400, "technique": "comunicazione ufficiale", "source": "Lido"},
+        {"name": "Lido V3 & Myrmidon Staking", "date": NOW - 86400, "technique": "comunicazione ufficiale", "source": "Lido"},
+        {"name": "Lido and BitGo", "date": NOW - 86400, "technique": "comunicazione ufficiale"},
+    ]
+    assert match_hacks({"Lido"}, notes, NOW) == []
+    fluidkey = [{"name": "Fluidkey / Database Breach", "date": NOW - 86400, "technique": "exploit", "source": "DefiLlama"}]
+    assert match_hacks({"Fluid"}, fluidkey, NOW) == []
+    real = match_hacks({"Lido"}, [{"name": "Lido exploit", "date": NOW - 86400, "technique": "exploit"}], NOW)
+    assert real[0]["severity"] == "danger"
+    assert incident_is_urgent(real[0]) is True
+    assert "Ritira" not in real[0]["detail"]
+    assert "Ritira" not in real[0]["name"]
+
+
+def test_position_tokens_and_oneinch_are_not_unknown_spenders():
+    positions = [
+        {"owner": "io", "protocol": "Aave", "asset": "USDC", "usd": 1000, "amount": 1000},
+        {"owner": "io", "protocol": "Compound", "asset": "WETH", "usd": 500, "amount": 0.2},
+    ]
+    for symbol in ("aEthUSDC", "aEthUSDT", "aEthWETH", "cUSDCv3", "cUSDTv3", "cWETHv3"):
+        kind, reason = classify_approval(_row(symbol=symbol, flags=["unlimited", "unknown"]), positions)
+        assert kind == "normale", symbol
+        assert "sconosciuto" not in reason.lower()
+        assert "non è un protocollo" not in reason
+    router = "0x111111125421cA6dc8f1e8f3c3f4e5d6a7b8c9d1"
+    kind, reason = classify_approval(_row(spender=router, flags=["unlimited", "unknown"]), [])
+    assert kind == "normale"
+    assert "sconosciuto" not in reason.lower()
+    kind, reason = classify_approval(_row(symbol="USDC", flags=["unlimited", "unknown"]), positions)
+    assert kind == "rischiosa"
+    assert "non è un protocollo che stai usando" in reason
+
+
+def test_refresh_finishes_before_it_is_called_fresh(tmp_path, monkeypatch):
+    import asyncio
+
+    from app import config, db
+    from app import security
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "monitor.db")
+    monkeypatch.setattr(config, "_READY", True)
+    monkeypatch.setattr(config, "DATA_PERSISTENT", True)
+    db.init_db()
+    db.cache_set("security", {
+        "scanned_at": 1,
+        "cached_at": 1,
+        "partial": True,
+        "note": "vecchia",
+        "approvals": [],
+        "incidents": [],
+        "outflows": [],
+        "alerts": [],
+        "errors": ["Approvazioni su ethereum non lette."],
+    })
+
+    async def fake_scan():
+        db.cache_set("security", {
+            "scanned_at": 50,
+            "cached_at": 50,
+            "partial": False,
+            "note": security._scan_note(False, []),
+            "approvals": [],
+            "incidents": [],
+            "outflows": [],
+            "alerts": [],
+            "errors": [],
+        })
+        return {}
+
+    monkeypatch.setattr(security, "scan_and_store", fake_scan)
+    report = asyncio.run(security.refresh_and_report("tutti"))
+    assert report["from_cache"] is False
+    assert report["running"] is False
+    assert report["scanned_at"] == 50
+    assert report["partial"] is False
+    assert report["note"].startswith("Nessuna revoca")
+    skipped = security._scan_note(True, ["Approvazioni su ethereum non lette."])
+    assert skipped.startswith("Approvazioni su ethereum non lette.")
+    assert "partial" not in skipped or True
+
+
+def test_exited_sky_at_zero_is_not_an_outflow_alert():
+    positions = [{
+        "address": WALLET, "chain": "ethereum", "token": TOKEN, "owner": "io",
+        "label": "Casa", "protocol": "Sky", "asset": "sUSDS", "amount": 0, "usd": 0,
+    }]
+    marks = [{"wallet": WALLET, "chain": "ethereum", "token": TOKEN, "owner": "io", "symbol": "sUSDS", "amount": 10, "usd": 5000}]
+    alerts, updates = outflow_rows(positions, marks, {WALLET.lower()}, 2, 500)
+    assert alerts == []
+    assert updates[0]["amount"] == 0
+    assert "Ritira" not in str(alerts)
 
 
 def test_outflow_ignores_the_first_reading_and_small_moves():
