@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, flows, nft, security
+from . import config, db, flows, nft, security, switches
 from .config import APP_NAME, APP_VERSION
 from .mcp_server import router as mcp_router
 from .portfolio import cached_snapshot, failed_view, invalidate, refresh_status, snapshot
@@ -64,6 +64,8 @@ class SettingsIn(BaseModel):
     outflow_usd: float | None = None
     positions_open: bool | None = None
     alert_dismissed: list[str] | None = None
+    protocol_cap_pct: float | None = None
+    issuer_cap_pct: float | None = None
     rotate_token: bool = False
 
 
@@ -116,6 +118,8 @@ async def get_settings() -> dict[str, Any]:
         "mcp_token_masked": masked,
         "has_token": bool(token),
         "positions_open": (raw.get("positions_open") or "1") != "0",
+        "protocol_cap_pct": switches.clamp_cap(raw.get("protocol_cap_pct") or 25, 25),
+        "issuer_cap_pct": switches.clamp_cap(raw.get("issuer_cap_pct") or 40, 40),
         "readonly": True,
     }
 
@@ -151,6 +155,10 @@ async def put_settings(body: SettingsIn) -> dict[str, Any]:
         db.set_setting("currency", cur)
     if body.fx_thb is not None and body.fx_thb > 0:
         db.set_setting("fx_thb", str(body.fx_thb))
+    if body.protocol_cap_pct is not None:
+        db.set_setting("protocol_cap_pct", str(switches.clamp_cap(body.protocol_cap_pct, 25)))
+    if body.issuer_cap_pct is not None:
+        db.set_setting("issuer_cap_pct", str(switches.clamp_cap(body.issuer_cap_pct, 40)))
     if body.gas_estimate_usd is not None:
         db.set_setting("gas_estimate_usd", "" if body.gas_estimate_usd <= 0 else str(body.gas_estimate_usd))
     if body.nft_api_provider is not None:
@@ -351,7 +359,8 @@ async def check_switch(owner: str = Query("tutti")) -> dict[str, Any]:
         "owner": owner,
         "gas_usd": data.get("gas_usd"),
         "switches": [item for item in data["switches"] if not item.get("hidden")],
-        "note": "Sono solo proposte. Nessuna transazione parte da qui.",
+        "advice": data.get("advice") or switches.empty_advice(),
+        "note": "Al massimo un consiglio per tutto il portafoglio. Nessuna transazione parte da qui.",
     }
 
 

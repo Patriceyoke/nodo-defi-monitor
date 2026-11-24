@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.6.0" />
-  <link rel="icon" href="/static/favicon.svg?v=0.6.0" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.6.1" />
+  <link rel="icon" href="/static/favicon.svg?v=0.6.1" type="image/svg+xml" />
   <script>
     (function () {
       var saved = "";
@@ -116,28 +116,14 @@
       </details>
     </section>
 
-    <section class="card" id="comparisons">
+    <section class="card" id="advice">
       <div class="card-head">
         <div>
-          <h2>Confronto tassi per rischio</h2>
-          <p class="caption">Per ogni posizione, solo alternative a rischio uguale o più basso, dopo il gas di un anno. Nessuna transazione parte da qui.</p>
+          <h2>Il consiglio migliore</h2>
+          <p class="caption">Al massimo un cambio per tutto il portafoglio, dopo il gas, il rischio, la liquidità e i tetti. Nessuna transazione parte da qui.</p>
         </div>
       </div>
-      <div id="comparison-list"></div>
-    </section>
-
-    <section class="card" id="switches-card">
-      <details id="switches-details">
-        <summary>
-          <h2>Suggerimenti di switch</h2>
-          <p class="caption" id="switch-summary">Nessun suggerimento.</p>
-        </summary>
-        <div class="card-head">
-          <p class="caption">Solo se il rendimento sale a rischio uguale o inferiore, dopo il gas. Nessuna transazione parte da qui.</p>
-          <button class="btn ghost" id="btn-switch-hidden" type="button">Mostra nascosti (0)</button>
-        </div>
-        <div id="switches"></div>
-      </details>
+      <div id="advice-body"></div>
     </section>
 
     <section class="card" id="wallet-security">
@@ -209,6 +195,17 @@
           <p class="mini">Conta la quantità di token, non il prezzo. Un calo di prezzo da solo non crea un avviso.</p>
         </div>
       </div>
+      <div class="row">
+        <div>
+          <label>Tetto per protocollo (%)</label>
+          <input name="protocol_cap_pct" type="number" min="5" max="100" step="1" value="25" />
+        </div>
+        <div>
+          <label>Tetto per emittente di stablecoin (%)</label>
+          <input name="issuer_cap_pct" type="number" min="5" max="100" step="1" value="40" />
+        </div>
+      </div>
+      <p class="mini">Il consiglio non concentra oltre questi tetti. Predefiniti: 25% per protocollo e 40% per emittente. Un valore fuori da 5–100 viene riportato dentro l'intervallo.</p>
       <label>Chiave API NFT (facoltativa, Alchemy oppure OpenSea)</label>
       <div class="row">
         <div>
@@ -264,7 +261,7 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js?v=0.6.0"></script>
-  <script src="/static/app.js?v=0.6.0"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.6.1"></script>
+  <script src="/static/app.js?v=0.6.1"></script>
 </body>
 </html>

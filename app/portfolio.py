@@ -118,6 +118,7 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
         "wallet_series": yield_history.empty_wallet_series(),
         "realized_yield": yield_history.empty_realized_yield(),
         "comparisons": [],
+        "advice": switches.empty_advice(),
         "ens_alerts": [],
         "ens_names": [],
         "security_summary": {
@@ -742,6 +743,20 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
     except Exception as exc:  # noqa: BLE001
         log.warning("Confronto tassi non calcolato: %s", exc)
         comparisons = []
+    try:
+        shared = list(data.get("alternatives") or [])
+        prepared = []
+        for raw in data.get("positions") or []:
+            row = dict(raw)
+            if shared and not row.get("alternatives"):
+                row["alternatives"] = shared
+            prepared.append(row)
+        protocol_cap = switches.clamp_cap(db.get_setting("protocol_cap_pct", "25"), 25)
+        issuer_cap = switches.clamp_cap(db.get_setting("issuer_cap_pct", "40"), 40)
+        advice = switches.best_advice(prepared, float(data.get("gas_usd") or 0), protocol_cap, issuer_cap)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Consiglio non calcolato: %s", exc)
+        advice = switches.empty_advice()
 
     built_totals = {
         "io": totals("io"),
@@ -774,6 +789,7 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "wallet_series": history_view["wallet_series"],
         "realized_yield": history_view["realized_yield"],
         "comparisons": comparisons,
+        "advice": advice,
         "ens_alerts": ens_alerts,
         "ens_names": ens_names,
         "security_summary": summaries,

@@ -753,6 +753,35 @@ function yieldLink(url) {
   if (parsed.protocol !== "https:" || !YIELD_HOSTS.has(parsed.hostname)) return "";
   return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Vai alla yield</a>`;
 }
+function renderAdvice(data) {
+  const host = $("#advice-body");
+  if (!host) return;
+  const pack = data.advice || {};
+  const row = pack.advice;
+  if (!row) {
+    host.innerHTML = `<p><strong>${escapeHtml(pack.message || "Nessun cambio consigliato: il portafoglio è già equilibrato")}</strong></p>
+      <p>${escapeHtml(pack.reason || "")}</p>
+      <p class="mini">Nessuna transazione parte da qui. Non si firma nulla in questa app.</p>`;
+    return;
+  }
+  const part = row.amount_limited
+    ? `<p>Si sposta solo una parte: ${money(row.usd)} su una posizione di ${money(row.full_position_usd)}.</p>`
+    : `<p>Importo: ${money(row.usd)}.</p>`;
+  const rejected = (pack.rejected || []).slice(0, 3);
+  const whyNot = rejected.length
+    ? `<details><summary>Perché non altri</summary><ul>${rejected.map((item) => `<li><strong>${escapeHtml(item.title || "")}</strong> ${escapeHtml(item.reason || "")}</li>`).join("")}</ul></details>`
+    : "";
+  host.innerHTML = `
+    <p>Dal portafoglio ${escapeHtml(row.wallet_label || "Portafoglio")} · ${escapeHtml(OWNER_LABEL[row.owner] || row.owner || "")}</p>
+    <p><strong>${escapeHtml(row.from || "")} → ${escapeHtml(row.to || "")}</strong></p>
+    ${part}
+    <p>Guadagno netto annuo dopo il gas: +${money(row.net_year_usd)} (gas circa ${money(row.gas_usd)}).</p>
+    <p>APY ${pct(row.from_apy)} → ${pct(row.to_apy)}. ${escapeHtml(row.risk_label || "Rischio: uguale")}</p>
+    <p>${escapeHtml(row.why || "")}</p>
+    <p>${yieldLink(row.url)}</p>
+    <p class="mini">Nessuna transazione parte da qui. Non si firma nulla in questa app.</p>
+    ${whyNot}`;
+}
 function renderComparisons(data) {
   const host = $("#comparison-list");
   if (!host) return;
@@ -1066,8 +1095,7 @@ function render() {
     renderPositions(data);
     renderHist(data);
     renderYield(data);
-    renderComparisons(data);
-    renderSwitches(data);
+    renderAdvice(data);
     renderSecurityNotes(data);
     renderSecuritySummary(data);
     paintFreshness(data);
@@ -1178,6 +1206,8 @@ async function loadSettings() {
       : "Chiave NFT: non impostata. Senza chiave la lista funziona lo stesso e il prezzo può restare non disponibile.";
   }
   form.gas_estimate_usd.value = s.gas_estimate_usd || "";
+  if (form.protocol_cap_pct) form.protocol_cap_pct.value = s.protocol_cap_pct ?? 25;
+  if (form.issuer_cap_pct) form.issuer_cap_pct.value = s.issuer_cap_pct ?? 40;
   $("#token-line").textContent = "Token MCP (mascherato): " + (s.mcp_token_masked || "—") + ". Lo vedi per intero solo quando lo generi di nuovo.";
   if (s.mcp_token) {
     $("#token-line").textContent = "Nuovo token MCP (copialo ora): " + s.mcp_token;
@@ -1282,6 +1312,8 @@ async function boot() {
       outflow_usd: Number(f.outflow_usd || 0),
       gas_estimate_usd: f.gas_estimate_usd === "" ? 0 : Number(f.gas_estimate_usd),
       nft_api_provider: f.nft_api_provider || "",
+      protocol_cap_pct: Number(f.protocol_cap_pct || 25),
+      issuer_cap_pct: Number(f.issuer_cap_pct || 40),
     };
     if (f.nft_api_key) body.nft_api_key = f.nft_api_key;
     try {

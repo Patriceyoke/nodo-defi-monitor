@@ -527,6 +527,324 @@ def compare_rates(positions: list[dict[str, Any]], gas_usd: float) -> list[dict[
     return cards
 
 
+ADVICE_MESSAGE = "Nessun cambio consigliato: il portafoglio è già equilibrato"
+ADVICE_REASON_CAPS = "Un rendimento più alto spingerebbe un protocollo o un emittente oltre il tetto."
+ADVICE_REASON_GAS = "Nessuno spostamento migliora il rendimento abbastanza, dopo il gas."
+ADVICE_REASON_ELSE = "Nessun mercato a rischio uguale o più basso migliora il portafoglio, dopo il gas e i tetti."
+
+_ISSUERS = {
+    "USDC": "Circle",
+    "USDT": "Tether",
+    "DAI": "Sky(DAI)",
+    "SDAI": "Sky(DAI)",
+    "USDS": "Sky(USDS)",
+    "SUSDS": "Sky(USDS)",
+    "STUSDS": "Sky(USDS)",
+    "GHO": "GHO",
+    "EURC": "EURC",
+    "RLUSD": "RLUSD",
+    "USDG": "USDG",
+    "FRXUSD": "frxUSD",
+    "PYUSD": "PYUSD",
+    "LUSD": "LUSD",
+    "CRVUSD": "crvUSD",
+}
+
+
+def clamp_cap(value: Any, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(default)
+    if number != number:
+        number = float(default)
+    return min(100.0, max(5.0, number))
+
+
+def protocol_family(protocol: str | None) -> str:
+    key = (protocol or "").strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+    if key in {"aave", "aavev4"}:
+        return "Aave"
+    if key in {"sky", "spark", "sparklend", "spark/sky", "sparksy"}:
+        return "Sky"
+    if key in {"fluid", "fluidbnb"}:
+        return "Fluid"
+    return (protocol or "").strip() or "Altro"
+
+
+def issuer_of(asset: str | None) -> str | None:
+    return _ISSUERS.get(_symbol(asset))
+
+
+def empty_advice() -> dict[str, Any]:
+    return {
+        "advice": None,
+        "message": ADVICE_MESSAGE,
+        "reason": ADVICE_REASON_ELSE,
+        "protocol_cap_pct": 25.0,
+        "issuer_cap_pct": 40.0,
+        "exposures": {"total_usd": 0.0, "protocols": [], "issuers": []},
+        "rejected": [],
+    }
+
+
+def _position_usd(row: dict[str, Any]) -> float:
+    try:
+        return float(row.get("usd") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _hhi(weights: dict[str, float], total: float) -> float:
+    if total <= 0:
+        return 0.0
+    return sum((value / total) ** 2 for value in weights.values() if value > 0)
+
+
+def _share_rows(weights: dict[str, float], total: float) -> list[dict[str, Any]]:
+    rows = []
+    for name, usd in weights.items():
+        if not name or usd <= 0:
+            continue
+        rows.append({
+            "name": name,
+            "usd": round(usd, 2),
+            "share_pct": round((usd / total) * 100.0, 2) if total else 0.0,
+        })
+    rows.sort(key=lambda item: item["usd"], reverse=True)
+    return rows
+
+
+def _liquidity_points(dest: dict[str, Any]) -> float:
+    util = utilization_percent(dest.get("utilization"))
+    if util is None:
+        return 0.5
+    return max(0.0, (_MAX_UTILIZATION - util) / _MAX_UTILIZATION)
+
+
+def best_advice(
+    positions: list[dict[str, Any]],
+    gas_usd: float,
+    protocol_cap_pct: float = 25,
+    issuer_cap_pct: float = 40,
+) -> dict[str, Any]:
+    """At most one move for the whole portfolio, after risk, gas and concentration caps."""
+    protocol_cap = clamp_cap(protocol_cap_pct, 25)
+    issuer_cap = clamp_cap(issuer_cap_pct, 40)
+    proto: dict[str, float] = {}
+    issuers: dict[str, float] = {}
+    total = 0.0
+    for row in positions:
+        usd = _position_usd(row)
+        if usd <= 0:
+            continue
+        total += usd
+        family = protocol_family(row.get("protocol"))
+        proto[family] = proto.get(family, 0.0) + usd
+        bucket_name = issuer_of(row.get("asset")) or ""
+        issuers[bucket_name] = issuers.get(bucket_name, 0.0) + usd
+    exposures = {
+        "total_usd": round(total, 2),
+        "protocols": _share_rows(proto, total),
+        "issuers": _share_rows(issuers, total),
+    }
+    base = {
+        "advice": None,
+        "message": ADVICE_MESSAGE,
+        "reason": ADVICE_REASON_ELSE,
+        "protocol_cap_pct": protocol_cap,
+        "issuer_cap_pct": issuer_cap,
+        "exposures": exposures,
+        "rejected": [],
+    }
+    if total <= 0:
+        return base
+
+    by_owner: dict[str, list[dict[str, Any]]] = {}
+    for pos in positions:
+        if pos.get("protocol") == "Wallet" or pos.get("apy") is None:
+            continue
+        by_owner.setdefault(str(pos.get("owner") or ""), []).append(pos)
+
+    scored: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    fail_kinds: set[str] = set()
+
+    def reject(title: str, reason: str, kind: str, rank: float) -> None:
+        fail_kinds.add(kind)
+        rejected.append({"title": title, "reason": reason, "rank": rank})
+
+    for owner, rows in by_owner.items():
+        held = {(row.get("protocol"), row.get("asset")) for row in rows}
+        extras: list[dict[str, Any]] = []
+        seen_extra: set[tuple[Any, Any]] = set()
+        for row in rows:
+            for alt in row.get("alternatives") or []:
+                key = (alt.get("protocol"), alt.get("asset"))
+                if key in held or key in seen_extra:
+                    continue
+                seen_extra.add(key)
+                extras.append(alt)
+        destinations = list(rows) + extras
+        for src in rows:
+            full = _position_usd(src)
+            if full < 50 or src.get("apy") is None:
+                continue
+            src_live = float(src["apy"])
+            src_rate, _spike = decision_apy(src_live, src.get("apy30"))
+            src_tier = source_tier(src.get("protocol"), src.get("asset"))
+            src_family = protocol_family(src.get("protocol"))
+            src_issuer = issuer_of(src.get("asset")) or ""
+            src_bucket = bucket(str(src.get("asset") or ""))
+            for dest in destinations:
+                if dest is src:
+                    continue
+                if dest.get("owner") not in {None, owner}:
+                    continue
+                if bucket(str(dest.get("asset") or "")) != src_bucket:
+                    continue
+                if dest.get("apy") is None:
+                    continue
+                if dest.get("protocol") == src.get("protocol") and dest.get("asset") == src.get("asset"):
+                    continue
+                dest_live = float(dest["apy"])
+                title = f"{_wallet_label(src)}: {src.get('protocol')} {src.get('asset')} verso {dest.get('protocol')} {dest.get('asset')}"
+                if dest_live <= src_live:
+                    continue
+                if _anomaly_reason(dest, dest_live, dest.get("apy30")):
+                    reject(title, "Il tasso è anomalo e non è un consiglio.", "other", dest_live)
+                    continue
+                if hard_excluded(dest) or destination_tier(dest.get("protocol"), dest.get("asset")) is None:
+                    continue
+                dest_tier = destination_tier(dest.get("protocol"), dest.get("asset"))
+                if dest_tier is None or dest_tier > src_tier:
+                    continue
+                dest_family = protocol_family(dest.get("protocol"))
+                dest_issuer = issuer_of(dest.get("asset")) or ""
+                same_family = dest_family == src_family
+                same_issuer = bool(dest_issuer) and dest_issuer == src_issuer
+                move = full
+                limited = False
+                if not same_family:
+                    room = total * protocol_cap / 100.0 - proto.get(dest_family, 0.0)
+                    if room < move:
+                        move = room
+                        limited = True
+                if dest_issuer and not same_issuer:
+                    room = total * issuer_cap / 100.0 - issuers.get(dest_issuer, 0.0)
+                    if room < move:
+                        move = room
+                        limited = True
+                if move < 50:
+                    reject(title, "Il tetto di protocollo o di emittente non lascia abbastanza spazio.", "cap", full * (dest_live - src_rate) / 100.0)
+                    continue
+                if _block_reason(dest, move):
+                    reject(title, "Liquidità, utilizzo o anzianità del mercato non bastano.", "other", move)
+                    continue
+                net = move * (dest_live - src_rate) / 100.0 - float(gas_usd or 0)
+                if net <= 0:
+                    reject(title, "Dopo il gas il guadagno non resta positivo.", "gas", net)
+                    continue
+                next_proto = dict(proto)
+                next_iss = dict(issuers)
+                if not same_family:
+                    next_proto[src_family] = next_proto.get(src_family, 0.0) - move
+                    next_proto[dest_family] = next_proto.get(dest_family, 0.0) + move
+                if src_issuer != dest_issuer:
+                    next_iss[src_issuer] = next_iss.get(src_issuer, 0.0) - move
+                    next_iss[dest_issuer] = next_iss.get(dest_issuer, 0.0) + move
+                div_delta = (_hhi(proto, total) - _hhi(next_proto, total)) + 0.5 * (_hhi(issuers, total) - _hhi(next_iss, total))
+                liq = _liquidity_points(dest)
+                score = net + (80.0 if dest_tier < src_tier else 0.0) + 20.0 * liq + 0.25 * div_delta * total
+                before_p = (proto.get(dest_family, 0.0) / total) * 100.0
+                after_p = before_p if same_family else ((proto.get(dest_family, 0.0) + move) / total) * 100.0
+                before_i = (issuers.get(dest_issuer, 0.0) / total) * 100.0 if dest_issuer else None
+                after_i = before_i
+                if dest_issuer and not same_issuer:
+                    after_i = ((issuers.get(dest_issuer, 0.0) + move) / total) * 100.0
+                util = utilization_percent(dest.get("utilization"))
+                why = (
+                    f"{_risk_label(src_tier, dest_tier)}. "
+                    f"{dest_family} passa dal {before_p:.0f}% al {after_p:.0f}% (tetto {protocol_cap:.0f}%)."
+                )
+                if util is not None:
+                    why += f" Utilizzo del mercato {util:.0f}%."
+                if dest_issuer and before_i is not None and after_i is not None:
+                    why += f" Emittente {dest_issuer} dal {before_i:.0f}% al {after_i:.0f}% (tetto {issuer_cap:.0f}%)."
+                if limited:
+                    why += " L'importo è solo una parte della posizione, per restare dentro il tetto."
+                card = {
+                    "wallet_label": _wallet_label(src),
+                    "owner": owner,
+                    "from": f"{src.get('protocol')} {src.get('asset')}",
+                    "to": f"{dest.get('protocol')} {dest.get('asset')}",
+                    "from_protocol": src.get("protocol"),
+                    "to_protocol": dest.get("protocol"),
+                    "from_asset": src.get("asset"),
+                    "to_asset": dest.get("asset"),
+                    "usd": round(move, 2),
+                    "full_position_usd": round(full, 2),
+                    "amount_limited": bool(limited),
+                    "from_apy": src_live,
+                    "to_apy": dest_live,
+                    "net_year_usd": round(net, 2),
+                    "gas_usd": float(gas_usd or 0),
+                    "risk_label": _risk_label(src_tier, dest_tier),
+                    "why": why,
+                    "lead": f"{_owner_label(owner)} · Dal portafoglio {_wallet_label(src)}: {src.get('protocol')} {src.get('asset')} verso {dest.get('protocol')} {dest.get('asset')}",
+                    "url": official_yield_url(str(dest.get("protocol") or ""), str(dest.get("asset") or "")),
+                    "concentration": {
+                        "protocol_family": dest_family,
+                        "protocol_before_pct": round(before_p, 2),
+                        "protocol_after_pct": round(after_p, 2),
+                        "protocol_cap_pct": protocol_cap,
+                        "issuer": dest_issuer or None,
+                        "issuer_before_pct": None if before_i is None else round(before_i, 2),
+                        "issuer_after_pct": None if after_i is None else round(after_i, 2),
+                        "issuer_cap_pct": issuer_cap,
+                    },
+                    "_score": score,
+                    "_div": div_delta,
+                }
+                scored.append(card)
+
+    rejected.sort(key=lambda item: item.get("rank") or 0, reverse=True)
+    public_rejected = [{"title": item["title"], "reason": item["reason"]} for item in rejected[:3]]
+    if not scored:
+        if fail_kinds == {"cap"}:
+            base["reason"] = ADVICE_REASON_CAPS
+        elif fail_kinds == {"gas"}:
+            base["reason"] = ADVICE_REASON_GAS
+        else:
+            base["reason"] = ADVICE_REASON_ELSE
+        base["rejected"] = public_rejected
+        return base
+    scored.sort(key=lambda item: (item["_score"], item["_div"], item["net_year_usd"]), reverse=True)
+    winner = dict(scored[0])
+    winner.pop("_score", None)
+    winner.pop("_div", None)
+    winner.pop("address", None)
+    winner.pop("wallet_key", None)
+    others = []
+    for item in scored[1:]:
+        others.append({
+            "title": f"{item['wallet_label']}: {item['from']} verso {item['to']}",
+            "reason": "Punteggio più basso, dopo diversificazione e guadagno netto.",
+            "rank": item["net_year_usd"],
+        })
+    others.extend(rejected)
+    others.sort(key=lambda item: item.get("rank") or 0, reverse=True)
+    return {
+        "advice": winner,
+        "message": "",
+        "reason": "",
+        "protocol_cap_pct": protocol_cap,
+        "issuer_cap_pct": issuer_cap,
+        "exposures": exposures,
+        "rejected": [{"title": item["title"], "reason": item["reason"]} for item in others[:3]],
+    }
+
+
 def _wallet_label(src: dict[str, Any]) -> str:
     return str(src.get("label") or "").strip() or "Portafoglio"
 

@@ -2,7 +2,7 @@ manifestVersion: 1
 id: nodo-defi-monitor
 category: finance
 name: Monitor DeFi
-version: "0.6.0"
+version: "0.6.1"
 tagline: "Tieni d'occhio la DeFi in sola lettura, divisa tra Io e Moglie"
 icon: https://raw.githubusercontent.com/Patriceyoke/nodo-defi-monitor/main/nodo-defi-monitor/icon.png
 description: >-
@@ -12,8 +12,8 @@ description: >-
   restano sul volume dati.
 
   Ogni indirizzo ha un titolare, Io o Moglie. Tutte le viste e i tool
-  MCP accettano il filtro io / moglie / tutti. L'app suggerisce uno switch
-  solo se il rendimento sale a rischio uguale o inferiore, dopo il gas.
+  MCP accettano il filtro io / moglie / tutti. L'app suggerisce al massimo
+  un cambio, dopo il gas, senza concentrare troppo un solo protocollo.
   Nessuna transazione parte da qui: la firma resta tua, sul tuo portafoglio
   hardware.
 
@@ -23,7 +23,7 @@ description: >-
   per un agente come Hermes, da collegare dalle Impostazioni di umbrelOS
   (AI agents / MCP) e/o dal config.yaml di Hermes.
 releaseNotes: >-
-  0.6.0: storico e rendimento reale stimato dagli snapshot orari, confronto dei tassi a pari rischio o inferiore, nuova grafica e tema chiaro/scuro. Aggiorna l'app, non disinstallarla.
+  0.6.1: un solo consiglio di switch per tutto il portafoglio, scelto in base a rendimento, rischio, liquidità e diversificazione, con un tetto per protocollo (predefinito 25%). Se nessun cambio migliora l'insieme, si legge «Nessun cambio consigliato: il portafoglio è già equilibrato». Aggiorna l'app, non disinstallarla.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

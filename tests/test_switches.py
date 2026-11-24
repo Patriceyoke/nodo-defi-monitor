@@ -104,8 +104,7 @@ def test_card_renders_each_saved_wallet_label():
     )
     assert "Wallet: Esempio" in card
     source = open("web/app.js", encoding="utf-8").read()
-    assert "Wallet: ${escapeHtml(s.wallet_label" in source
-    assert "Wallet: ${escapeHtml(row.wallet_label" in source
+    assert "Dal portafoglio ${escapeHtml(row.wallet_label" in source
 
 
 def test_aave_v4_usdc_is_a_tier_one_destination():

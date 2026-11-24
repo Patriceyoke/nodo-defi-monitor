@@ -47,7 +47,7 @@ TOOLS = [
     },
     {
         "name": "check_switch",
-        "description": "Suggerisce uno switch solo se il rendimento sale a rischio uguale o inferiore, dopo il gas. Mai una transazione.",
+        "description": "Al massimo un consiglio per tutto il portafoglio, dopo gas, rischio, liquidità e tetto di concentrazione. Mai una transazione.",
         "inputSchema": {
             "type": "object",
             "properties": {"owner": {"type": "string", "enum": ["io", "moglie", "tutti"], "default": "tutti"}},
@@ -137,7 +137,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
     owner = normalize_owner(str(args.get("owner") or "tutti"), allow_all=True)
     if name == "get_portfolio":
         data = await snapshot(owner, force=bool(args.get("refresh")))
-        payload = {k: data[k] for k in ("owner", "ts", "totals", "income", "positions", "errors") if k in data}
+        payload = {k: data[k] for k in ("owner", "ts", "totals", "income", "positions", "errors", "advice") if k in data}
         payload["switches"] = [item for item in data.get("switches") or [] if not item.get("hidden")]
         return _text(payload)
     if name == "get_balances":
@@ -165,7 +165,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
                 "owner": owner,
                 "gas_usd": data.get("gas_usd"),
                 "switches": [item for item in data["switches"] if not item.get("hidden")],
-                "note": "Sono solo proposte. Nessuna transazione parte da qui. La firma resta tua (es. OneKey).",
+                "advice": data.get("advice"),
+                "note": "Al massimo un consiglio per tutto il portafoglio. Nessuna transazione parte da qui. La firma resta tua (es. OneKey).",
             }
         )
     if name == "get_alerts":

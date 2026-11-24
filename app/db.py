@@ -192,6 +192,8 @@ def init_db() -> None:
             "nft_api_provider": "",
             "nft_api_key": "",
             "positions_open": "1",
+            "protocol_cap_pct": "25",
+            "issuer_cap_pct": "40",
         }
         for key, value in defaults.items():
             exists = conn.execute("SELECT 1 FROM settings WHERE key=?", (key,)).fetchone()
