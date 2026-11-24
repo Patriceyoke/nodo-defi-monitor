@@ -9,7 +9,7 @@ import re
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import logic
 
@@ -520,7 +520,7 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
         period_lines = _card_lines_html(spese.get("card_lines") or []) or _card_lines_html(header_lines)
         cards_block = (
             '<div class="spese-cards"><h2>Carte</h2>'
-            f'{period_lines}{figure}{"".join(rows)}'
+            f'{period_lines}{figure}{_out_charts_html(periodo)}{"".join(rows)}'
             '<h2>Registra il mese</h2>'
             '<form method="post" action="/carte/mese">'
             '<label>Mese<input name="month" placeholder="2026-11" required></label>'
@@ -546,6 +546,45 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
         "</article>"
     )
     return layout("Spese", body, "spese")
+
+
+def _out_charts_html(periodo: str) -> str:
+    blocks = []
+    for chart in logic.card_out_charts(periodo):
+        rows = []
+        for bar in chart["bars"]:
+            href = (
+                "/spese/uscite?periodo="
+                + quote(periodo)
+                + "&valuta="
+                + quote(chart["currency"])
+                + "&categoria="
+                + quote(bar["category"])
+            )
+            width = max(4, int(bar["percent"]))
+            rows.append(
+                f'<a class="bar-row" href="{esc(href)}"><span>{esc(bar["category"])}</span>'
+                f'<span class="bar"><span style="width:{width}%;background:#1e6b45"></span></span>'
+                f'<strong>{int(bar["percent"])}%</strong></a>'
+            )
+        if rows:
+            blocks.append(f'<h3>Uscite {esc(chart["currency"])}</h3>{"".join(rows)}')
+    return "".join(blocks)
+
+
+def page_card_merchants(periodo: str, currency: str, category: str) -> str:
+    rows = logic.card_out_merchants(periodo, currency, category)
+    if rows:
+        items = "".join(f'<li>{esc(row["name"])} · {int(row["count"])}</li>' for row in rows)
+        listing = f'<ul class="history">{items}</ul>'
+    else:
+        listing = "<p>Ancora vuoto.</p>"
+    body = (
+        f'<article class="card"><h1>{esc(category)}</h1>'
+        f'<p class="lead">{esc(currency)}</p>{listing}'
+        f'<p><a href="/spese?periodo={esc(periodo)}&amp;carte=1">Spese</a></p></article>'
+    )
+    return layout(category or "Uscite", body, "spese")
 
 
 def page_cards() -> str:
@@ -758,6 +797,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect(f"/spese?periodo={periodo}&carte={carte}")
                 return
             self._html(200, page_home())
+            return
+        if path == "/spese/uscite":
+            query = parse_qs(urlparse(self.path).query)
+            periodo = (query.get("periodo") or ["mese"])[0]
+            currency = (query.get("valuta") or [""])[0]
+            category = (query.get("categoria") or [""])[0]
+            self._html(200, page_card_merchants(periodo, currency, category))
             return
         if path == "/spese":
             query = parse_qs(urlparse(self.path).query)

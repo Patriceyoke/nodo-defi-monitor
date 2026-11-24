@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import calendar
 import os
+import re
 import secrets
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -496,6 +497,8 @@ def ensure_storage() -> None:
             """
         )
         _add_columns(conn, "card_months", ("opening", "money_in", "money_out", "closing"))
+        _add_columns(conn, "card_tx", ("category",))
+        _backfill_tx_categories(conn)
         _drop_probe_schema(conn)
         _ensure_canonical_cards(conn)
 
@@ -547,6 +550,63 @@ def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
         "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, value),
     )
+
+
+CARD_OUT_CATEGORIES = (
+    ("Trasporti", ("grab", "taxi", "bolt")),
+    ("Spesa", ("7-11", "7 eleven", "lotus", "makro", "gourmet", "big c", "foodland")),
+    ("Ristoranti", ("kfc", "cremerie", "restaurant", "cafe", "bar")),
+    ("Abbonamenti", ("netflix", "youtube", "apple", "spotify", "grok", "x corp", "elevenreader", "google")),
+    ("Casa", ("ais", "pea", "pwa", "true", "electricity", "megahome", "homepro", "mr.diy", "xiaomi home")),
+    ("Salute", ("pharmacy", "goodwill", "hospital", "clinic")),
+    ("Acquisti", ("lazada", "amazon", "amz_")),
+)
+CARD_OUT_LABELS = tuple(name for name, _keys in CARD_OUT_CATEGORIES) + ("Altro",)
+_CARD_OUT_CANONICAL = {name.lower(): name for name in CARD_OUT_LABELS}
+
+
+def merchant_category(merchant: str) -> str:
+    """First matching merchant rule. Short words do not match inside a longer word."""
+    text = str(merchant or "").lower()
+    for label, keys in CARD_OUT_CATEGORIES:
+        for key in keys:
+            if key.endswith("_"):
+                if key in text:
+                    return label
+                continue
+            if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", text):
+                return label
+    return "Altro"
+
+
+def _stored_category(value) -> str | None:
+    """A hand-set category stays. activity and a blank are not a category."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or text.lower() == "activity":
+        return None
+    return _CARD_OUT_CANONICAL.get(text.lower(), text)
+
+
+def _tx_category(item: dict, remembered: str | None = None) -> str:
+    kept = _stored_category(item.get("category"))
+    if kept:
+        return kept
+    if remembered:
+        return remembered
+    return merchant_category(str(item.get("merchant") or ""))
+
+
+def _backfill_tx_categories(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("SELECT id, merchant, category FROM card_tx").fetchall()
+    for row in rows:
+        if _stored_category(row["category"]):
+            continue
+        conn.execute(
+            "UPDATE card_tx SET category = ? WHERE id = ?",
+            (merchant_category(row["merchant"] or ""), row["id"]),
+        )
 
 
 def _add_columns(conn: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> None:
@@ -1505,7 +1565,7 @@ def _optional_money(data: dict, key: str) -> str | None:
 
 def _tx_key(row: dict) -> tuple:
     return (
-        str(row.get("date") or ""),
+        str(row.get("date") or row.get("tx_date") or ""),
         str(row.get("merchant") or "").strip().lower(),
         str(row.get("direction") or ""),
         str(row.get("statement_amount") or ""),
@@ -1741,12 +1801,20 @@ def _write_month(conn: sqlite3.Connection, card_id: str, raw: dict, stamp: str) 
     if "transactions" in raw:
         if not isinstance(raw.get("transactions"), list):
             raise Invalid("transactions")
+        remembered: dict[tuple, str] = {}
+        for row in conn.execute(
+            "SELECT tx_date, merchant, direction, statement_amount, last4, category FROM card_tx WHERE card_id = ? AND month = ?",
+            (card_id, month),
+        ):
+            kept = _stored_category(row["category"])
+            if kept:
+                remembered[_tx_key(dict(row))] = kept
         conn.execute("DELETE FROM card_tx WHERE card_id = ? AND month = ?", (card_id, month))
         for item in _dedupe_transactions(raw["transactions"]):
-            _insert_tx(conn, card_id, month, currency, item)
+            _insert_tx(conn, card_id, month, currency, item, remembered.get(_tx_key(item)))
 
 
-def _insert_tx(conn: sqlite3.Connection, card_id: str, month: str, currency: str, item: dict) -> None:
+def _insert_tx(conn: sqlite3.Connection, card_id: str, month: str, currency: str, item: dict, remembered: str | None = None) -> None:
     if not isinstance(item, dict):
         raise Invalid("transactions")
     _reject_card_secrets(item)
@@ -1776,17 +1844,18 @@ def _insert_tx(conn: sqlite3.Connection, card_id: str, month: str, currency: str
         except ValueError as exc:
             raise Invalid("date") from exc
     section = str(item.get("section") or "activity").strip().lower()
+    category = _tx_category(item, remembered)
     conn.execute(
         """
         INSERT INTO card_tx (
           id, card_id, month, tx_date, merchant, direction, original_amount, original_currency,
-          statement_amount, statement_currency, fx_rate, last4, section
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          statement_amount, statement_currency, fx_rate, last4, section, category
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(uuid4()), card_id, month, tx_date, merchant, direction,
             None if original is None else _amount_text(original), original_currency,
-            _amount_text(statement), currency, None if fx is None else _amount_text(fx), last4, section,
+            _amount_text(statement), currency, None if fx is None else _amount_text(fx), last4, section, category,
         ),
     )
 
@@ -1862,6 +1931,7 @@ def list_cards() -> list[dict]:
                 "fx_rate": row["fx_rate"],
                 "last4": row["last4"],
                 "section": row["section"],
+                "category": row["category"] or "",
             }
         )
     month_grouped: dict[str, list] = {}
@@ -2210,3 +2280,93 @@ def card_chart(periodo: str = "anno") -> list[dict]:
             ],
         })
     return out
+
+
+def _is_chart_out(row: dict) -> bool:
+    if not _is_spending_tx(row):
+        return False
+    merchant = str(row.get("merchant") or "").lower()
+    return "saldo precedente" not in merchant and "previous balance" not in merchant
+
+
+def _percent_bars(amounts: dict[str, Decimal]) -> list[dict]:
+    total = sum(amounts.values(), Decimal("0"))
+    if total <= 0:
+        return []
+    altro = Decimal("0")
+    sized: list[tuple[str, Decimal]] = []
+    for name, amount in amounts.items():
+        if name == "Altro" or amount / total * 100 < 3:
+            altro += amount
+        else:
+            sized.append((name, amount))
+    sized.sort(key=lambda item: (-item[1], item[0]))
+    if len(sized) > 7:
+        altro += sum(amount for _name, amount in sized[7:])
+        sized = sized[:7]
+    if altro > 0:
+        sized.append(("Altro", altro))
+    sized.sort(key=lambda item: (-item[1], item[0]))
+    bars = []
+    for name, amount in sized[:8]:
+        pct = int((amount / total * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        bars.append({"category": name, "percent": pct})
+    return bars
+
+
+def card_out_charts(periodo: str) -> list[dict]:
+    """Outflow share per currency. A foreign rate never merges two charts."""
+    if periodo not in ("mese", "anno"):
+        raise Invalid("periodo")
+    today = today_bkk()
+    with _db_lock() as conn:
+        rows = conn.execute("SELECT * FROM card_tx").fetchall()
+    buckets: dict[str, dict[str, Decimal]] = {}
+    for row in rows:
+        item = dict(row)
+        if not _is_chart_out(item):
+            continue
+        stamp = str(item.get("tx_date") or "") or str(item.get("month") or "")
+        if not _in_period(stamp, periodo, today):
+            continue
+        currency = str(item.get("statement_currency") or "THB").upper()
+        amount = _parse_amount(item.get("statement_amount")) or Decimal("0")
+        if amount <= 0:
+            continue
+        category = _stored_category(item.get("category")) or merchant_category(str(item.get("merchant") or ""))
+        slot = buckets.setdefault(currency, {})
+        slot[category] = slot.get(category, Decimal("0")) + amount
+    charts = []
+    for currency in ("THB", "USD", "EUR"):
+        bars = _percent_bars(buckets.get(currency) or {})
+        if bars:
+            charts.append({"currency": currency, "bars": bars})
+    return charts
+
+
+def card_out_merchants(periodo: str, currency: str, category: str) -> list[dict]:
+    """Merchants in one category, one currency, one period. Counts, not receipts."""
+    if periodo not in ("mese", "anno"):
+        raise Invalid("periodo")
+    currency = str(currency or "").upper()
+    wanted = _stored_category(category) or category
+    today = today_bkk()
+    with _db_lock() as conn:
+        rows = conn.execute("SELECT * FROM card_tx").fetchall()
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        item = dict(row)
+        if not _is_chart_out(item):
+            continue
+        stamp = str(item.get("tx_date") or "") or str(item.get("month") or "")
+        if not _in_period(stamp, periodo, today):
+            continue
+        if str(item.get("statement_currency") or "").upper() != currency:
+            continue
+        label = _stored_category(item.get("category")) or merchant_category(str(item.get("merchant") or ""))
+        if label != wanted:
+            continue
+        name = str(item.get("merchant") or "").strip() or "Altro"
+        slot = grouped.setdefault(name.lower(), {"name": name, "count": 0})
+        slot["count"] += 1
+    return sorted(grouped.values(), key=lambda item: (-item["count"], item["name"].lower()))
