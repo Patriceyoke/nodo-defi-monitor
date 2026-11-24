@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.6.4" />
-  <link rel="icon" href="/static/favicon.svg?v=0.6.4" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.6.5" />
+  <link rel="icon" href="/static/favicon.svg?v=0.6.5" type="image/svg+xml" />
   <script>
     (function () {
       var saved = "";
@@ -48,6 +48,14 @@
           <button data-value="moglie" type="button">Moglie</button>
           <button data-value="tutti" class="on" type="button">Combinato</button>
         </div>
+        <div class="wallet-menu" id="wallet-menu">
+          <button class="wallet-toggle" id="wallet-toggle" type="button" aria-expanded="false" aria-haspopup="listbox">Wallet</button>
+          <div class="wallet-pop" id="wallet-pop" hidden role="listbox"></div>
+        </div>
+        <span class="wallet-pill hidden" id="wallet-pill">
+          <span id="wallet-pill-name"></span>
+          <button type="button" id="wallet-clear" aria-label="Torna alla vista precedente">×</button>
+        </span>
         <div class="segmented" data-key="currency">
           <button data-value="USD" class="on" type="button">USD</button>
           <button data-value="THB" type="button">THB</button>
@@ -55,16 +63,6 @@
       </div>
       <div class="owner-cards" id="owner-cards"></div>
       <p class="empty hidden" id="empty-state">Nessun indirizzo ancora. Apri Impostazioni e aggiungi solo indirizzi Ethereum pubblici, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
-    </section>
-
-    <section class="card" id="wallets">
-      <div class="card-head">
-        <div>
-          <h2>Portafogli</h2>
-          <p class="caption">Tocca un portafoglio per vedere solo quello. Tocca di nuovo per tornare a tutti.</p>
-        </div>
-      </div>
-      <div class="wallet-chips" id="wallet-chips"></div>
     </section>
 
     <section class="card" id="split">
@@ -261,7 +259,8 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js?v=0.6.4"></script>
-  <script src="/static/app.js?v=0.6.4"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.6.5"></script>
+  <script src="/static/scope.js?v=0.6.5"></script>
+  <script src="/static/app.js?v=0.6.5"></script>
 </body>
 </html>

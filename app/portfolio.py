@@ -798,5 +798,10 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "saved": data.get("saved") is not False,
         "kept_previous": bool(data.get("kept_previous")),
         "wallet_count": sum(1 for item in (data.get("evm_owners") or []) if filter_owner(owner, item)),
+        "wallet_names": [
+            {"owner": row["owner"], "label": row["label"]}
+            for row in db.list_evm()
+            if filter_owner(owner, row.get("owner"))
+        ],
         "ok": not data.get("errors"),
     }

@@ -245,15 +245,18 @@ function bindSegmented() {
       state[key] = btn.dataset.value;
       el.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === btn));
       if (key === "currency") persistCurrency(state.currency);
-      render();
       if (key === "owner") {
-        state.wallet = "";
+        const next = window.NodoScope.applyOwner(state, btn.dataset.value);
+        state.owner = next.owner;
+        state.wallet = next.wallet;
         state.nfts = null;
+        rememberScope();
         const details = $("#nft-details");
         if (details && details.open) loadNfts(false);
         const sec = $("#security-details");
         if (sec && sec.open) renderSecurity();
       }
+      render();
     });
   });
 }
@@ -352,9 +355,59 @@ function walletKey(row) {
   return (row.owner || "") + "::" + (row.label || "Portafoglio");
 }
 function inScope(row) {
-  if (state.owner !== "tutti" && row.owner !== state.owner) return false;
-  if (state.wallet && walletKey(row) !== state.wallet) return false;
-  return true;
+  return window.NodoScope.inScope(state, row);
+}
+function rememberScope() {
+  const payload = JSON.stringify({ owner: state.owner, wallet: state.wallet });
+  try { localStorage.setItem("nodo-scope", payload); } catch (_) {}
+  const query = window.NodoScope.persistQuery(state);
+  const next = query ? (location.pathname + "?" + query) : location.pathname;
+  if (location.pathname + location.search !== next) history.replaceState(null, "", next);
+}
+function walletCatalog(data) {
+  const map = new Map();
+  (data.wallet_names || []).forEach((row) => {
+    const id = walletKey(row);
+    map.set(id, { id, label: row.label || "Portafoglio", owner: row.owner });
+  });
+  (data.positions || []).forEach((row) => {
+    const id = walletKey(row);
+    if (!map.has(id)) map.set(id, { id, label: row.label || "Portafoglio", owner: row.owner });
+  });
+  return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, "it"));
+}
+function walletLabel(id) {
+  const cut = String(id || "").indexOf("::");
+  return cut >= 0 ? id.slice(cut + 2) : (id || "");
+}
+function closeWalletMenu() {
+  const pop = $("#wallet-pop");
+  const toggle = $("#wallet-toggle");
+  if (pop) pop.hidden = true;
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+}
+function renderWalletMenu(data) {
+  const pop = $("#wallet-pop");
+  const pill = $("#wallet-pill");
+  const name = $("#wallet-pill-name");
+  const toggle = $("#wallet-toggle");
+  if (!pop) return;
+  const wallets = walletCatalog(data);
+  const groups = ["io", "moglie"].map((owner) => {
+    const rows = wallets.filter((item) => item.owner === owner);
+    const buttons = rows.map((item) => `
+      <button type="button" role="option" data-pick-wallet="${escapeHtml(item.id)}" aria-selected="${state.wallet === item.id ? "true" : "false"}" class="${state.wallet === item.id ? "on" : ""}">${escapeHtml(item.label)}</button>
+    `).join("");
+    return `<p class="wallet-group">${OWNER_LABEL[owner]}</p>${buttons || `<p class="mini">Nessun portafoglio</p>`}`;
+  }).join("");
+  pop.innerHTML = groups;
+  if (pill) pill.classList.toggle("hidden", !state.wallet);
+  if (name) name.textContent = state.wallet ? walletLabel(state.wallet) : "";
+  if (toggle) toggle.classList.toggle("on", !!state.wallet);
+  if (new URLSearchParams(location.search).get("menu") === "1") {
+    pop.hidden = false;
+    if (toggle) toggle.setAttribute("aria-expanded", "true");
+  }
 }
 function renderMetrics(data) {
   const box = $("#owner-cards");
@@ -403,26 +456,7 @@ function renderMetrics(data) {
     </article>`;
 }
 function renderWallets(data) {
-  const host = $("#wallet-chips");
-  if (!host) return;
-  const map = new Map();
-  (data.positions || []).forEach((row) => {
-    if (state.owner !== "tutti" && row.owner !== state.owner) return;
-    const id = walletKey(row);
-    const slot = map.get(id) || { id, label: row.label || "Portafoglio", owner: row.owner, usd: 0 };
-    slot.usd += Number(row.usd) || 0;
-    map.set(id, slot);
-  });
-  const chips = [...map.values()].sort((a, b) => b.usd - a.usd);
-  if (!chips.length) {
-    host.innerHTML = `<p class="mini">Nessun portafoglio in questa vista.</p>`;
-    return;
-  }
-  host.innerHTML = chips.map((chip) => `
-    <button type="button" class="wallet-chip${state.wallet === chip.id ? " on" : ""}" data-wallet="${escapeHtml(chip.id)}">
-      ${escapeHtml(chip.label)}
-      <small>${escapeHtml(OWNER_LABEL[chip.owner] || chip.owner || "")} · ${money(chip.usd)}</small>
-    </button>`).join("");
+  renderWalletMenu(data);
 }
 function metric(label, value, detail, klass) {
   return `<div class="metric ${klass || ""}"><div class="value">${value}</div><div class="label">${label}</div>${detail ? `<div class="detail">${detail}</div>` : ""}</div>`;
@@ -785,11 +819,10 @@ function renderAdvice(data) {
 function renderComparisons(data) {
   const host = $("#comparison-list");
   if (!host) return;
-  const rows = (data.comparisons || []).filter((row) => {
-    if (state.owner !== "tutti" && row.owner !== state.owner) return false;
-    if (!state.wallet) return true;
-    return walletKey({ owner: row.owner, label: row.wallet_label || "Portafoglio" }) === state.wallet;
-  });
+  const rows = (data.comparisons || []).filter((row) => window.NodoScope.inScope(state, {
+    owner: row.owner,
+    label: row.wallet_label || "Portafoglio",
+  }));
   if (!rows.length) {
     host.innerHTML = `<p class="mini">Nessuna posizione da confrontare in questa vista.</p>`;
     return;
@@ -813,11 +846,10 @@ function renderComparisons(data) {
 }
 function renderSwitches(data) {
   const box = $("#switches");
-  const all = (data.switches || []).filter((item) => {
-    if (state.owner !== "tutti" && item.owner !== state.owner) return false;
-    if (!state.wallet) return true;
-    return walletKey({ owner: item.owner, label: item.wallet_label || "Portafoglio" }) === state.wallet;
-  });
+  const all = (data.switches || []).filter((item) => window.NodoScope.inScope(state, {
+    owner: item.owner,
+    label: item.wallet_label || "Portafoglio",
+  }));
   const summary = $("#switch-summary");
   if (summary) {
     const n = all.length;
@@ -1249,7 +1281,29 @@ function rememberFold(id) {
   });
 }
 
+function bindWalletMenu() {
+  const toggle = $("#wallet-toggle");
+  if (!toggle) return;
+  toggle.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const pop = $("#wallet-pop");
+    if (!pop) return;
+    const open = pop.hidden;
+    pop.hidden = !open;
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+}
+
 async function boot() {
+  let stored = "";
+  try { stored = localStorage.getItem("nodo-scope") || ""; } catch (_) { stored = ""; }
+  const scope = window.NodoScope.readScope(location.search, stored);
+  state.owner = scope.owner;
+  state.wallet = scope.wallet;
+  document.querySelectorAll('[data-key="owner"] button').forEach((button) => {
+    button.classList.toggle("on", button.dataset.value === state.owner);
+  });
+  bindWalletMenu();
   commonChart();
   bindSegmented();
   const themeButton = $("#btn-theme");
@@ -1274,13 +1328,29 @@ async function boot() {
         render();
       }).catch((err) => alert(err.message));
     }
-    const walletChip = ev.target.closest("[data-wallet]");
-    if (walletChip) {
-      const id = walletChip.dataset.wallet || "";
-      state.wallet = state.wallet === id ? "" : id;
+    const pickWallet = ev.target.closest("[data-pick-wallet]");
+    if (pickWallet) {
+      ev.preventDefault();
+      const next = window.NodoScope.selectWallet(state, pickWallet.dataset.pickWallet || "");
+      state.owner = next.owner;
+      state.wallet = next.wallet;
+      closeWalletMenu();
+      rememberScope();
       render();
       return;
     }
+    const clearWallet = ev.target.closest("#wallet-clear");
+    if (clearWallet) {
+      ev.preventDefault();
+      const next = window.NodoScope.clearWallet(state);
+      state.owner = next.owner;
+      state.wallet = next.wallet;
+      rememberScope();
+      render();
+      return;
+    }
+    const menu = $("#wallet-menu");
+    if (menu && !menu.contains(ev.target)) closeWalletMenu();
     const chartBtn = ev.target.closest("#chart-owner button");
     if (chartBtn) {
       state.chartOwner = chartBtn.dataset.value;
