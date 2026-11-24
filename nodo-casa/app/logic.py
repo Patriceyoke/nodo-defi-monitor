@@ -241,6 +241,45 @@ def format_baht(value) -> str:
     return f"{sign}฿{grouped}"
 
 
+def format_card_amount(value, currency: str) -> str:
+    """Card money: at most two decimals, thousands grouped, currency mark included."""
+    if value is None or value == "" or isinstance(value, bool):
+        return ""
+    try:
+        dec = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return ""
+    if not dec.is_finite():
+        return ""
+    sign = "-" if dec < 0 else ""
+    whole, frac = f"{abs(dec):.2f}".split(".")
+    groups = []
+    while whole:
+        groups.append(whole[-3:])
+        whole = whole[:-3]
+    number = f"{sign}{'.'.join(reversed(groups))},{frac}"
+    code = str(currency or "").upper()
+    if code == "THB":
+        return f"฿{number}"
+    if code == "EUR":
+        return f"{number} EUR"
+    if code == "USD":
+        return f"{number} USD"
+    return f"{number} {code}".strip()
+
+
+def display_merchant(name: str) -> str:
+    """A domain becomes the site name. Anything else keeps its words, without a card number."""
+    raw = " ".join(str(name or "").split())
+    if not raw:
+        return "Altro"
+    match = re.match(r"^(?:https?://)?(?:www\.)?([a-z0-9-]+)(?:\.[a-z0-9.-]+)+(?:/.*)?$", raw, re.I)
+    if match:
+        brand = match.group(1)
+        return brand[:1].upper() + brand[1:].lower()
+    return raw
+
+
 def amount_label(payload: dict) -> str:
     if not isinstance(payload, dict) or payload.get("amount_thb") is None:
         return ""
@@ -570,6 +609,16 @@ CARD_OUT_CATEGORIES = (
     ("Acquisti", ("lazada", "amazon", "amz_")),
 )
 CARD_OUT_LABELS = tuple(name for name, _keys in CARD_OUT_CATEGORIES) + ("Altro",)
+CATEGORY_COLORS = {
+    "Trasporti": "#1d4e89",
+    "Spesa": "#1e6b45",
+    "Ristoranti": "#8a5a12",
+    "Abbonamenti": "#6b3fa0",
+    "Casa": "#0e6b6b",
+    "Salute": "#9b3d55",
+    "Acquisti": "#3d6b4f",
+    "Altro": "#5c5346",
+}
 _CARD_OUT_CANONICAL = {name.lower(): name for name in CARD_OUT_LABELS}
 
 
@@ -1881,7 +1930,7 @@ def _month_public(row, transactions: list[dict]) -> dict:
         "amount_thb": baht,
         "spend": spend,
         "baht_complete": complete,
-        "display": _native_label(spend, currency),
+        "display": format_card_amount(spend, currency),
         "note": row["note"] or "",
         "transactions": transactions,
     }
@@ -2151,7 +2200,7 @@ def _card_spend_lines(conn: sqlite3.Connection, periodo: str, today: date) -> li
                 "amount": text,
                 "baht": text if currency == "THB" else None,
                 "baht_complete": currency == "THB",
-                "display": _native_label(text, currency),
+                "display": format_card_amount(text, currency),
             })
     return lines
 
@@ -2243,8 +2292,8 @@ def cards_summary() -> dict:
                 "currency": currency,
                 "month": month_text,
                 "year": year_text,
-                "month_label": _native_label(month_text, currency) if month_text else "",
-                "year_label": _native_label(year_text, currency) if year_text else "",
+                "month_label": format_card_amount(month_text, currency) if month_text else "",
+                "year_label": format_card_amount(year_text, currency) if year_text else "",
             })
     return {
         "count": len(cards),
@@ -2280,7 +2329,7 @@ def card_chart(periodo: str = "anno") -> list[dict]:
             series.setdefault(currency, {}).setdefault(row["month"], []).append({
                 "name": card["name"],
                 "amount": text,
-                "display": _native_label(text, currency),
+                "display": format_card_amount(text, currency),
             })
     out = []
     for currency in ("THB", "USD", "EUR"):
@@ -2339,7 +2388,7 @@ def _load_chart_rows() -> list[dict]:
     return kept
 
 
-def _percent_bars(amounts: dict[str, Decimal]) -> list[dict]:
+def _percent_bars(amounts: dict[str, Decimal], currency: str) -> list[dict]:
     total = sum(amounts.values(), Decimal("0"))
     if total <= 0:
         return []
@@ -2360,7 +2409,12 @@ def _percent_bars(amounts: dict[str, Decimal]) -> list[dict]:
     bars = []
     for name, amount in sized[:8]:
         pct = int((amount / total * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-        bars.append({"category": name, "percent": pct})
+        bars.append({
+            "category": name,
+            "percent": pct,
+            "amount": format_card_amount(amount, currency),
+            "color": CATEGORY_COLORS.get(name, CATEGORY_COLORS["Altro"]),
+        })
     return bars
 
 
@@ -2388,7 +2442,7 @@ def card_out_charts(periodo: str) -> list[dict]:
         slot[category] = slot.get(category, Decimal("0")) + amount
     charts = []
     for currency in ("THB", "USD", "EUR"):
-        bars = _percent_bars(buckets.get(currency) or {})
+        bars = _percent_bars(buckets.get(currency) or {}, currency)
         if bars:
             charts.append({"currency": currency, "bars": bars})
     return charts
@@ -2420,6 +2474,29 @@ def card_out_merchants(periodo: str, currency: str, category: str) -> list[dict]
         slot = grouped.setdefault(name.lower(), {"name": name, "count": 0})
         slot["count"] += 1
     return sorted(grouped.values(), key=lambda item: (-item["count"], item["name"].lower()))
+
+
+def card_category_transactions(periodo: str, currency: str, category: str) -> list[dict]:
+    """Movements in one category, newest first. No card digits."""
+    if periodo not in ("mese", "anno"):
+        raise Invalid("periodo")
+    currency = str(currency or "").upper()
+    wanted = _stored_category(category) or category
+    today = today_bkk()
+    found = []
+    for row in _load_chart_rows():
+        if row["ccy"] != currency or row["cat"] != wanted:
+            continue
+        if not _in_period(row["stamp"], periodo, today):
+            continue
+        found.append({
+            "date": str(row.get("stamp") or "")[:10],
+            "merchant": display_merchant(str(row.get("merchant") or "")),
+            "card": str(row.get("card_name") or ""),
+            "amount": format_card_amount(row["value"], currency),
+        })
+    found.sort(key=lambda item: item["date"], reverse=True)
+    return found
 
 
 def card_spend_analysis(periodo: str) -> list[dict]:
@@ -2457,14 +2534,12 @@ def card_spend_analysis(periodo: str) -> list[dict]:
         cards = []
         for name, amount in sorted(card_amount.items(), key=lambda item: (-item[1], item[0])):
             count = card_count[name]
-            average = amount / count if count else Decimal("0")
             cards.append({
                 "name": name,
                 "amount": _amount_text(amount),
-                "display": _native_label(_amount_text(amount), currency),
+                "display": format_card_amount(amount, currency),
                 "percent": int((amount / total * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if total else 0,
                 "count": count,
-                "average": _native_label(_amount_text(average), currency),
             })
         merchants: dict[str, dict] = {}
         for row in group:
@@ -2478,7 +2553,7 @@ def card_spend_analysis(periodo: str) -> list[dict]:
                 "name": item["name"],
                 "count": item["count"],
                 "amount": _amount_text(item["amount"]),
-                "display": _native_label(_amount_text(item["amount"]), currency),
+                "display": format_card_amount(item["amount"], currency),
             }
             for item in ranked
         ]
@@ -2520,7 +2595,7 @@ def card_spend_analysis(periodo: str) -> list[dict]:
                     {
                         "month": key,
                         "amount": _amount_text(amount),
-                        "display": _native_label(_amount_text(amount), currency),
+                        "display": format_card_amount(amount, currency),
                     }
                     for key, amount in sorted(months.items())
                 ]

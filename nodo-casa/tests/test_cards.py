@@ -112,9 +112,9 @@ def test_pending_duplicates_rewards_and_missing_fx(casa):
     kast_month = next(row for row in kast["months"] if row["month"] == month)
     assert kast_month["spend"] == "8"
     page = server.page_spese("anno", True)
-    assert "10 USD" in page
-    assert "8 USD" in page
-    assert "18 USD" not in page
+    assert "10,00 USD" in page
+    assert "8,00 USD" in page
+    assert "18,00 USD" not in page
     assert "฿0" not in page
     home = server.page_home("mese", True)
     assert "18 USD" not in home
@@ -149,8 +149,8 @@ def test_blank_fields_keep_imported_months_and_currencies_stay_apart(casa):
     assert ether_month["money_in"] == "5"
     assert ether_month["money_out"] == "40"
     page = server.page_spese("anno", True)
-    assert "12.5 USD" in page
-    assert "40 USD" in page
+    assert "Kast Finance" in page and "Ether.fi" in page
+    assert "52,50" not in page and "52.5" not in page
     assert "52.5" not in page
     assert 'name="amount_' not in page
     assert "Registra il mese" not in page
@@ -164,8 +164,8 @@ def test_blank_fields_keep_imported_months_and_currencies_stay_apart(casa):
     october = next(row for row in usd["months"] if row["month"] == "2026-10")
     assert "total_thb" not in october
     shown = {part["name"]: part["display"] for part in october["parts"]}
-    assert shown["Kast Finance"] == "12.5 USD"
-    assert shown["Ether.fi"] == "40 USD"
+    assert shown["Kast Finance"] == "12,50 USD"
+    assert shown["Ether.fi"] == "40,00 USD"
     handler = server.Handler.__new__(server.Handler)
     handler.client_address = ("127.0.0.1", 9)
     handler.headers = {"Content-Length": "0"}

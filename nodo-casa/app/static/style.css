@@ -269,6 +269,93 @@ a.settings {
   font-size: 1.05rem;
 }
 
+.spese-cards h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 1rem 0 0.35rem;
+}
+
+.quiet-line {
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1.35;
+  margin: 0.15rem 0;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 0.2rem 0 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+
+.swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 0.2rem;
+  flex: none;
+}
+
+h1 .swatch { width: 0.85rem; height: 0.85rem; margin-right: 0.35rem; }
+
+.cat-row {
+  display: block;
+  margin: 0.55rem 0 0.15rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cat-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.cat-name { min-width: 0; }
+
+.cat-meta {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cat-row .bar { margin-top: 0.28rem; height: 0.65rem; }
+
+.back {
+  color: #1e6b45;
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.tx-list { list-style: none; padding: 0; margin: 0.7rem 0 0; }
+
+.tx-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid rgba(28, 25, 21, 0.08);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.tx-list .who { display: block; font-weight: 700; }
+
+.tx-list .meta { display: block; color: #5c5346; font-size: 0.85rem; font-weight: 500; }
+
+.tx-list strong { font-size: 0.95rem; font-weight: 700; white-space: nowrap; }
+
 .bar { display: block; background: rgba(28, 25, 21, 0.08); border-radius: 999px; height: 1.1rem; }
 .bar span { display: block; height: 100%; border-radius: 999px; }
 

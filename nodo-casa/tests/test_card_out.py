@@ -80,7 +80,10 @@ def test_charts_stay_in_one_currency_and_fold_small_shares(casa):
     ]})
     charts = {row["currency"]: row["bars"] for row in logic.card_out_charts("mese")}
     assert set(charts) == {"USD", "THB"}
-    assert charts["USD"] == [{"category": "Abbonamenti", "percent": 100}]
+    assert charts["USD"][0]["category"] == "Abbonamenti"
+    assert charts["USD"][0]["percent"] == 100
+    assert charts["USD"][0]["amount"] == "50,00 USD"
+    assert charts["USD"][0]["color"] == logic.CATEGORY_COLORS["Abbonamenti"]
     thb = {bar["category"]: bar["percent"] for bar in charts["THB"]}
     assert thb["Trasporti"] == 98
     assert thb["Altro"] == 2
@@ -88,17 +91,20 @@ def test_charts_stay_in_one_currency_and_fold_small_shares(casa):
     page = server.page_spese("mese", True)
     assert "Mese scorso" in page
     assert "Questo mese" not in page
-    assert "Uscite USD" in page
-    assert "Uscite THB" in page
+    assert "Categorie USD" in page
+    assert "Categorie THB" in page
+    assert "media " not in page
     assert "Casa / bollette" not in page or "Uscite" in page
     hidden = server.page_spese("mese", False)
-    assert "Uscite USD" not in hidden
+    assert "Categorie USD" not in hidden
     assert "Registra il mese" not in page
     assert 'name="opening_' not in page
     merchants = logic.card_out_merchants("mese", "USD", "Abbonamenti")
     assert merchants == [{"name": "Netflix", "count": 1}]
     detail = server.page_card_merchants("mese", "USD", "Abbonamenti")
-    assert "Netflix · 1" in detail
+    assert "Netflix" in detail
+    assert "50,00 USD" in detail
+    assert "Indietro" in detail
     assert "••••" not in detail
     assert "4242" not in detail
 
@@ -261,12 +267,12 @@ def test_analysis_keeps_currencies_apart_and_drops_excluded_rows(casa):
     assert set(opened) == {"USD", "THB"}
     usd_cards = {row["name"]: row for row in opened["USD"]["cards"]}
     assert usd_cards["Kast Finance"]["count"] == 2
-    assert usd_cards["Kast Finance"]["display"] == "30 USD"
-    assert usd_cards["Ether.fi"]["display"] == "10 USD"
+    assert usd_cards["Kast Finance"]["display"] == "30,00 USD"
+    assert usd_cards["Ether.fi"]["display"] == "10,00 USD"
     assert "months" not in opened["USD"]
     merchants = {row["name"]: row for row in opened["USD"]["merchants"]}
     assert merchants["Grab"]["count"] == 2
-    assert merchants["Grab"]["display"] == "30 USD"
+    assert merchants["Grab"]["display"] == "30,00 USD"
     assert "Received salary" not in merchants
     assert "Shop pending" not in merchants
     change = {row["category"]: row for row in opened["USD"]["changes"]}
@@ -279,9 +285,11 @@ def test_analysis_keeps_currencies_apart_and_drops_excluded_rows(casa):
     page = server.page_spese("mese", True)
     assert "Registra il mese" not in page
     assert "Per carta USD" in page
-    assert "Esercenti USD" in page
+    assert "Categorie USD" in page
+    assert "Esercenti USD" not in page
+    assert "media " not in page
     assert "Andamento USD" not in page
-    assert "••••" not in page.split("Esercenti USD", 1)[1].split("Per carta THB", 1)[0]
+    assert "••••" not in page
     hidden = server.page_spese("mese", False)
     assert "Per carta USD" not in hidden
     assert "Casa / bollette" in hidden or "Categorie" in hidden
@@ -301,4 +309,4 @@ def test_analysis_keeps_currencies_apart_and_drops_excluded_rows(casa):
     assert {card["external_id"] for card in logic.list_cards()} == {"kast", "etherfi", "bbl-visa"}
     _clear(logic)
     assert logic.card_spend_analysis("mese") == []
-    assert "Esercenti USD" not in server.page_spese("mese", True)
+    assert "Categorie USD" not in server.page_spese("mese", True)

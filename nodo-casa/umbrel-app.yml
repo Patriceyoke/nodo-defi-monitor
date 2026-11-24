@@ -2,7 +2,7 @@ manifestVersion: 1.1
 id: nodo-casa
 category: files
 name: Casa Viale
-version: "1.2.4"
+version: "1.2.5"
 tagline: Scadenze di casa, garage, documenti e visto
 description: >-
   Casa Viale elenca le scadenze di casa, del garage, dei documenti e del visto.
@@ -13,7 +13,7 @@ description: >-
   Il database nasce vuoto. I dati restano solo nella cartella dell'app su
   questo Umbrel. Non sono nel repository.
 releaseNotes: >-
-  1.2.4: il modulo per registrare il mese esce dalla pagina. Al suo posto l'analisi delle carte, per valuta: andamento, quota per carta, esercenti, variazione e media. Aggiorna l'app, non disinstallarla.
+  1.2.5: le categorie delle carte hanno un colore fisso e si aprono sui movimenti. Gli importi hanno due decimali. Aggiorna l'app, non disinstallarla.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []

@@ -10,7 +10,7 @@ Altrimenti, sull'Umbrel: **App Store → tre puntini → Community App Stores** 
 
 Poi installa **Casa Viale** (id `nodo-casa`, porta 8795).
 
-Umbrel scarica `ghcr.io/patriceyoke/nodo-casa:1.2.4`. Il proxy punta al contenitore `nodo-casa_web_1`.
+Umbrel scarica `ghcr.io/patriceyoke/nodo-casa:1.2.5`. Il proxy punta al contenitore `nodo-casa_web_1`.
 
 Dopo «Segna pagato» o «Segna fatto», le scadenze non mensili passano alla data successiva. Un rincaro oltre la soglia (di solito +15%) compare in home. Spese mostra le categorie in baht e, accanto, ogni carta nella sua valuta. Non si sommano baht e dollari e non si salva mai un numero di carta.
 

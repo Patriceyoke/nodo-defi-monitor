@@ -450,26 +450,6 @@ def _card_lines_html(lines: list[dict]) -> str:
     return "".join(rows)
 
 
-def _currency_bars(chart: list[dict]) -> str:
-    blocks = []
-    for series in chart:
-        flat = [part for month in series["months"] for part in month["parts"]]
-        peak = max((float(part.get("amount") or 0) for part in flat), default=0) or 1
-        rows = []
-        for month in series["months"]:
-            for part in month["parts"]:
-                width = max(4, float(part.get("amount") or 0) / peak * 100)
-                rows.append(
-                    '<div class="bar-row">'
-                    f'<span>{esc(part.get("name") or "")}</span>'
-                    f'<span class="bar"><span style="width:{width:.1f}%;background:#1e6b45"></span></span>'
-                    f'<strong>{esc(part.get("display") or "")}</strong>'
-                    "</div>"
-                )
-        blocks.append(f'<h3>{esc(series["currency"])}</h3>{"".join(rows)}')
-    return "".join(blocks)
-
-
 def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
     if periodo not in ("mese", "anno"):
         periodo = "mese"
@@ -506,11 +486,11 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
                 f'<span class="sub">{esc(card["kind"])} · {esc(card["currency"])}</span></span>'
                 f'<strong>{esc(current)}</strong></a>'
             )
-        figure = _currency_bars(logic.card_chart(periodo))
         period_lines = _card_lines_html(spese.get("card_lines") or []) or _card_lines_html(header_lines)
+        period_lines = period_lines.replace('class="date"', 'class="quiet-line"')
         cards_block = (
             '<div class="spese-cards"><h2>Carte</h2>'
-            f'{period_lines}{figure}{_out_charts_html(periodo)}{_analysis_html(periodo)}{"".join(rows)}'
+            f'{period_lines}{_out_charts_html(periodo)}{_analysis_html(periodo)}{"".join(rows)}'
             '<h2>Nuova carta</h2>'
             '<form method="post" action="/carte/nuova">'
             '<label>Nome<input name="name" required></label>'
@@ -537,7 +517,9 @@ def _out_charts_html(periodo: str) -> str:
     blocks = []
     for chart in logic.card_out_charts(periodo):
         rows = []
+        legend = []
         for bar in chart["bars"]:
+            color = bar.get("color") or logic.CATEGORY_COLORS.get(bar["category"], "#5c5346")
             href = (
                 "/spese/uscite?periodo="
                 + quote(periodo)
@@ -547,17 +529,25 @@ def _out_charts_html(periodo: str) -> str:
                 + quote(bar["category"])
             )
             width = max(4, int(bar["percent"]))
+            legend.append(
+                f'<span><i class="swatch" style="background:{esc(color)}"></i>{esc(bar["category"])}</span>'
+            )
             rows.append(
-                f'<a class="bar-row" href="{esc(href)}"><span>{esc(bar["category"])}</span>'
-                f'<span class="bar"><span style="width:{width}%;background:#1e6b45"></span></span>'
-                f'<strong>{int(bar["percent"])}%</strong></a>'
+                f'<a class="cat-row" href="{esc(href)}">'
+                f'<span class="cat-top"><span class="cat-name">{esc(bar["category"])}</span>'
+                f'<span class="cat-meta">{int(bar["percent"])}% · {esc(bar.get("amount") or "")}</span></span>'
+                f'<span class="bar"><span style="width:{width}%;background:{esc(color)}"></span></span>'
+                "</a>"
             )
         if rows:
-            blocks.append(f'<h3>Uscite {esc(chart["currency"])}</h3>{"".join(rows)}')
+            blocks.append(
+                f'<section class="cat-block"><h3>Categorie {esc(chart["currency"])}</h3>'
+                f'<p class="legend">{"".join(legend)}</p>{"".join(rows)}</section>'
+            )
     return "".join(blocks)
 
 
-def _amount_bars(title: str, rows: list[dict], label_key: str, amount_key: str, text_key: str) -> str:
+def _amount_bars(title: str, rows: list[dict], label_key: str, amount_key: str, text_key: str, color: str = "#1e6b45") -> str:
     if not rows:
         return ""
     peak = max(float(row.get(amount_key) or 0) for row in rows) or 1
@@ -565,10 +555,10 @@ def _amount_bars(title: str, rows: list[dict], label_key: str, amount_key: str, 
     for row in rows:
         width = max(4, float(row.get(amount_key) or 0) / peak * 100)
         lines.append(
-            '<div class="bar-row">'
-            f'<span>{esc(row.get(label_key) or "")}</span>'
-            f'<span class="bar"><span style="width:{width:.1f}%;background:#1e6b45"></span></span>'
-            f'<strong>{esc(row.get(text_key) or "")}</strong>'
+            '<div class="cat-row">'
+            f'<span class="cat-top"><span class="cat-name">{esc(row.get(label_key) or "")}</span>'
+            f'<span class="cat-meta">{esc(row.get(text_key) or "")}</span></span>'
+            f'<span class="bar"><span style="width:{width:.1f}%;background:{esc(color)}"></span></span>'
             "</div>"
         )
     return f"<h3>{esc(title)}</h3>{''.join(lines)}"
@@ -581,11 +571,15 @@ def _analysis_html(periodo: str) -> str:
         parts = []
         months = block.get("months") or []
         if months:
-            parts.append(_amount_bars(
-                f"Andamento {currency}",
-                [{"label": item["month"][5:], "amount": item["amount"], "text": item["display"]} for item in months],
-                "label", "amount", "text",
-            ))
+            labelled = []
+            for item in months:
+                index = int(item["month"][5:7]) - 1
+                labelled.append({
+                    "label": logic.MONTHS[index],
+                    "amount": item["amount"],
+                    "text": item["display"],
+                })
+            parts.append(_amount_bars(f"Andamento {currency}", labelled, "label", "amount", "text"))
         cards = block.get("cards") or []
         if len(cards) >= 1:
             parts.append(_amount_bars(
@@ -593,50 +587,56 @@ def _analysis_html(periodo: str) -> str:
                 [{"label": item["name"], "amount": item["amount"], "text": f'{item["percent"]}% · {item["display"]}'} for item in cards],
                 "label", "amount", "text",
             ))
-            averages = "".join(
-                f'<p class="date">{esc(item["name"])} · {int(item["count"])} movimenti · media {esc(item["average"])}</p>'
+            counts = "".join(
+                f'<p class="quiet-line">{esc(item["name"])} · {int(item["count"])} movimenti</p>'
                 for item in cards
             )
-            parts.append(f"<h3>Movimenti {esc(currency)}</h3>{averages}")
-        merchants = block.get("merchants") or []
-        if merchants:
-            parts.append(_amount_bars(
-                f"Esercenti {currency}",
-                [{
-                    "label": f'{item["name"]} · {int(item["count"])}',
-                    "amount": item["amount"],
-                    "text": item["display"],
-                } for item in merchants],
-                "label", "amount", "text",
-            ))
+            parts.append(f"<h3>Movimenti {esc(currency)}</h3>{counts}")
         changes = block.get("changes") or []
         if changes:
             lines = []
             for item in changes:
+                color = logic.CATEGORY_COLORS.get(item["category"], "#5c5346")
                 if item["direction"] == "up":
                     sign = "+"
                 elif item["direction"] == "down":
                     sign = "−"
                 else:
                     sign = ""
-                lines.append(f'<p class="date">{esc(item["category"])} · {sign}{int(item["percent"])}%</p>')
+                lines.append(
+                    f'<p class="quiet-line"><i class="swatch" style="background:{esc(color)}"></i>'
+                    f'{esc(item["category"])} · {sign}{int(item["percent"])}%</p>'
+                )
             parts.append(f"<h3>Rispetto al mese prima · {esc(currency)}</h3>{''.join(lines)}")
         if parts:
-            blocks.append("".join(parts))
+            blocks.append(f'<section class="analysis">{"".join(parts)}</section>')
     return "".join(blocks)
 
 
 def page_card_merchants(periodo: str, currency: str, category: str) -> str:
-    rows = logic.card_out_merchants(periodo, currency, category)
+    rows = logic.card_category_transactions(periodo, currency, category)
+    color = logic.CATEGORY_COLORS.get(category, "#5c5346")
     if rows:
-        items = "".join(f'<li>{esc(row["name"])} · {int(row["count"])}</li>' for row in rows)
-        listing = f'<ul class="history">{items}</ul>'
+        items = []
+        for row in rows:
+            when = logic.short_date(row["date"]) if row.get("date") and len(row["date"]) >= 10 else ""
+            if when and not row["date"].startswith(str(logic.today_bkk().year)):
+                when = f"{when} {row['date'][:4]}"
+            items.append(
+                "<li>"
+                f'<span class="tx-main"><span class="who">{esc(row["merchant"])}</span>'
+                f'<span class="meta">{esc(when)} · {esc(row["card"])}</span></span>'
+                f'<strong>{esc(row["amount"])}</strong>'
+                "</li>"
+            )
+        listing = f'<ul class="tx-list">{"".join(items)}</ul>'
     else:
-        listing = "<p>Ancora vuoto.</p>"
+        listing = '<p class="quiet-line">Ancora vuoto.</p>'
     body = (
-        f'<article class="card"><h1>{esc(category)}</h1>'
-        f'<p class="lead">{esc(currency)}</p>{listing}'
-        f'<p><a href="/spese?periodo={esc(periodo)}&amp;carte=1">Spese</a></p></article>'
+        '<article class="card">'
+        f'<p><a class="back" href="/spese?periodo={esc(periodo)}&amp;carte=1">Indietro</a></p>'
+        f'<h1><i class="swatch" style="background:{esc(color)}"></i>{esc(category)}</h1>'
+        f'<p class="quiet-line">{esc(currency)}</p>{listing}</article>'
     )
     return layout(category or "Uscite", body, "spese")
 
