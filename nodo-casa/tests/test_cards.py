@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from io import BytesIO
 
 import pytest
 
@@ -110,10 +111,71 @@ def test_pending_duplicates_rewards_and_missing_fx(casa):
     kast = next(card for card in logic.list_cards() if card["external_id"] == "kast")
     kast_month = next(row for row in kast["months"] if row["month"] == month)
     assert kast_month["spend"] == "8"
-    home = server.page_home("mese", True)
-    assert "18 USD" in home
-    assert "฿0" not in home
-    page = server.page_cards()
+    page = server.page_spese("mese", True)
+    assert "10 USD" in page
+    assert "8 USD" in page
+    assert "18 USD" not in page
     assert "฿0" not in page
+    home = server.page_home("mese", True)
+    assert "18 USD" not in home
+    assert "฿0" not in home
     assert "•••• 1881" in server.page_card(ether)
     assert "4111111111111111" not in server.page_card(ether)
+
+
+def test_blank_fields_keep_imported_months_and_currencies_stay_apart(casa):
+    logic, server = casa
+    kast = next(card for card in logic.list_cards() if card["external_id"] == "kast")
+    before = next(row for row in kast["months"] if row["month"] == "2026-10")
+    logic.save_card_month(kast["id"], {
+        "month": "2026-10",
+        "opening": "",
+        "money_in": "",
+        "money_out": "",
+        "closing": "",
+    })
+    again = next(card for card in logic.list_cards() if card["id"] == kast["id"])
+    month = next(row for row in again["months"] if row["month"] == "2026-10")
+    assert month["opening"] == before["opening"] == "1000"
+    assert month["money_in"] == before["money_in"] == "200"
+    assert month["money_out"] == before["money_out"] == "150"
+    assert month["closing"] == before["closing"] == "1050"
+    assert "0" not in (month["opening"], month["closing"])
+    ether = next(card for card in logic.list_cards() if card["external_id"] == "etherfi")
+    logic.save_card_month(ether["id"], {"month": "2026-10", "opening": "", "closing": ""})
+    ether_month = next(row for row in next(card for card in logic.list_cards() if card["id"] == ether["id"])["months"] if row["month"] == "2026-10")
+    assert ether_month["opening"] is None
+    assert ether_month["closing"] is None
+    assert ether_month["money_in"] == "5"
+    assert ether_month["money_out"] == "40"
+    page = server.page_spese("anno", True)
+    assert "12.5 USD" in page
+    assert "40 USD" in page
+    assert "52.5" not in page
+    assert 'name="amount_' not in page
+    assert "Apertura" in page and "Chiusura" in page
+    nav = page.split("<nav>", 1)[1].split("</nav>", 1)[0]
+    assert "Carte" not in nav
+    assert "Spese" in nav
+    chart = logic.card_chart("anno")
+    assert chart and all(series["currency"] == "USD" or series["currency"] == "THB" for series in chart)
+    usd = next(series for series in chart if series["currency"] == "USD")
+    october = next(row for row in usd["months"] if row["month"] == "2026-10")
+    assert "total_thb" not in october
+    shown = {part["name"]: part["display"] for part in october["parts"]}
+    assert shown["Kast Finance"] == "12.5 USD"
+    assert shown["Ether.fi"] == "40 USD"
+    handler = server.Handler.__new__(server.Handler)
+    handler.client_address = ("127.0.0.1", 9)
+    handler.headers = {"Content-Length": "0"}
+    handler.rfile = BytesIO(b"")
+    handler.wfile = BytesIO()
+    handler.path = "/carte"
+    handler.command = "GET"
+    handler.requestline = "GET /carte HTTP/1.1"
+    handler.request_version = "HTTP/1.1"
+    handler.close_connection = True
+    handler.do_GET()
+    raw = handler.wfile.getvalue().decode()
+    assert raw.startswith("HTTP/1.1 303")
+    assert "Location: /spese" in raw

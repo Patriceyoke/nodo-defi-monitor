@@ -65,6 +65,12 @@ ICONS = {
         f'<path {_STROKE} d="M3 10h18"/>'
         "</svg>"
     ),
+    "spese": (
+        '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        f'<path {_STROKE} d="M7 3.5h10v17l-1.7-1.1L13.6 20.5 12 19.4 10.4 20.5 8.7 19.4 7 20.5z"/>'
+        f'<path {_STROKE} d="M9.2 8h5.6M9.2 11.5h5.6M9.2 15h3.4"/>'
+        "</svg>"
+    ),
 }
 CHART_COLORS = {
     "bollette": "#1e6b45",
@@ -208,39 +214,6 @@ def page_home(periodo: str = "mese", with_cards: bool = False) -> str:
                 + f'<p class="pills">{pill(word, tone)}{count_pill(section["red"])}</p>'
             )
         parts.append(f'<a class="tile" href="/{section["id"]}">{inner}</a>')
-    parts.append(
-        f'<a class="tile" href="/carte">{tile_head("carte", "Carte")}'
-        f'<p class="date">{esc(data["carte"].get("month_label") or "—")}</p></a>'
-    )
-    spese = data["spese_con_carte" if with_cards else "spese"] if periodo != "anno" else (
-        data["spese_anno_con_carte"] if with_cards else data["spese_anno"]
-    )
-    carte_flag = "1" if with_cards else "0"
-    other = "anno" if periodo != "anno" else "mese"
-    other_label = "Quest'anno" if other == "anno" else "Questo mese"
-    current_label = "Quest'anno" if periodo == "anno" else "Questo mese"
-    card_other = "0" if with_cards else "1"
-    card_label = "Senza carte" if with_cards else "Con carte"
-    chart = ""
-    if spese.get("empty"):
-        chart = '<p class="empty">Ancora nessun pagamento con importo.</p>'
-    else:
-        chart = donut_svg(spese["slices"]) + bar_rows(spese["slices"]) if spese.get("slices") else ""
-        for line in spese.get("card_lines") or []:
-            chart += f'<p class="lead">Carte {esc(line.get("display") or "")}</p>'
-        if spese.get("total_thb"):
-            chart += f'<p class="lead">Totale {esc(logic.format_baht(spese["total_thb"]))}</p>'
-    parts.append(
-        '<section class="card" id="spese"><h2>Spese</h2>'
-        '<p class="toggle">'
-        f'<a class="{"on" if periodo != "anno" else ""}" href="/?spese=mese&amp;carte={carte_flag}#spese">Questo mese</a>'
-        f'<a class="{"on" if periodo == "anno" else ""}" href="/?spese=anno&amp;carte={carte_flag}#spese">Quest\'anno</a>'
-        "</p>"
-        '<p class="toggle">'
-        f'<a href="/?spese={esc(periodo)}&amp;carte={card_other}#spese">{esc(card_label)}</a>'
-        "</p>"
-        f"{chart}</section>"
-    )
     if not data["empty"]:
         parts.append('<h2 class="strip">Prossimi 30 giorni</h2>')
         if not data["upcoming"]:
@@ -468,64 +441,115 @@ def page_schema() -> str:
     return layout("Schema", body, "")
 
 
-def page_cards() -> str:
-    cards = logic.list_cards()
-    summary = logic.cards_summary()
-    chart = logic.card_chart()
-    bars = []
-    peak = 0.0
-    for month in chart:
-        peak = max(peak, sum(float(part.get("amount") or 0) for part in month["parts"]))
-    peak = peak or 1
-    for month in chart:
-        total = sum(float(part.get("amount") or 0) for part in month["parts"]) or 1
-        height = total / peak * 100
-        segs = []
-        for index, part in enumerate(month["parts"]):
-            share = float(part.get("amount") or 0) / total * height
-            color = list(CHART_COLORS.values())[index % len(CHART_COLORS)]
-            segs.append(f'<span style="height:{share:.1f}%;background:{color}" title="{esc(part.get("display") or "")}"></span>')
-        bars.append(
-            f'<div class="stack"><div class="stack-bar">{"".join(segs)}</div>'
-            f'<span>{esc(month["total_label"])}</span></div>'
-        )
+def _card_lines_html(lines: list[dict]) -> str:
     rows = []
-    fields = []
-    for card in cards:
-        current = ""
+    for line in lines:
+        rows.append(
+            f'<p class="date">{esc(line.get("name") or "")} · {esc(line.get("display") or "")}</p>'
+        )
+    return "".join(rows)
+
+
+def _currency_bars(chart: list[dict]) -> str:
+    blocks = []
+    for series in chart:
+        flat = [part for month in series["months"] for part in month["parts"]]
+        peak = max((float(part.get("amount") or 0) for part in flat), default=0) or 1
+        rows = []
+        for month in series["months"]:
+            for part in month["parts"]:
+                width = max(4, float(part.get("amount") or 0) / peak * 100)
+                rows.append(
+                    '<div class="bar-row">'
+                    f'<span>{esc(part.get("name") or "")}</span>'
+                    f'<span class="bar"><span style="width:{width:.1f}%;background:#1e6b45"></span></span>'
+                    f'<strong>{esc(part.get("display") or "")}</strong>'
+                    "</div>"
+                )
+        blocks.append(f'<h3>{esc(series["currency"])}</h3>{"".join(rows)}')
+    return "".join(blocks)
+
+
+def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
+    if periodo not in ("mese", "anno"):
+        periodo = "mese"
+    spese = logic.spending(periodo, with_cards)
+    summary = logic.cards_summary()
+    label_key = "year_label" if periodo == "anno" else "month_label"
+    header_lines = [
+        {"name": line["name"], "display": line.get(label_key) or ""}
+        for line in summary.get("lines") or []
+        if line.get(label_key)
+    ]
+    carte_flag = "1" if with_cards else "0"
+    card_other = "0" if with_cards else "1"
+    card_label = "Senza carte" if with_cards else "Con carte"
+    categories = ""
+    if spese.get("slices"):
+        categories = donut_svg(spese["slices"]) + bar_rows(spese["slices"])
+        if spese.get("total_thb"):
+            categories += f'<p class="lead">Categorie {esc(logic.format_baht(spese["total_thb"]))}</p>'
+    elif not with_cards or not spese.get("card_lines"):
+        categories = '<p class="empty">Ancora nessun pagamento con importo.</p>'
+    cards_block = ""
+    if with_cards:
+        cards = logic.list_cards()
+        rows = []
+        fields = []
         today = logic.today_bkk()
         key = f"{today.year:04d}-{today.month:02d}"
-        for month in card["months"]:
-            if month["month"] == key:
-                current = month.get("display") or ""
-        rows.append(
-            f'<a class="row" href="/carte/{esc(card["id"])}"><span class="row-copy"><strong>{esc(card["name"])}</strong>'
-            f'<span class="sub">{esc(card["kind"])} · {esc(card["currency"])}</span></span>'
-            f'<strong>{esc(current)}</strong></a>'
-        )
-        fields.append(
-            f'<label>{esc(card["name"])} ({esc(card["currency"])})'
-            f'<input name="amount_{esc(card["id"])}" inputmode="decimal"></label>'
+        for card in cards:
+            current = ""
+            for month in card["months"]:
+                if month["month"] == key and month.get("currency") == card["currency"]:
+                    current = month.get("display") or ""
+            rows.append(
+                f'<a class="row" href="/carte/{esc(card["id"])}"><span class="row-copy"><strong>{esc(card["name"])}</strong>'
+                f'<span class="sub">{esc(card["kind"])} · {esc(card["currency"])}</span></span>'
+                f'<strong>{esc(current)}</strong></a>'
+            )
+            cid = esc(card["id"])
+            fields.append(
+                f'<h3>{esc(card["name"])} ({esc(card["currency"])})</h3>'
+                f'<label>Apertura<input name="opening_{cid}" inputmode="decimal"></label>'
+                f'<label>Entrate<input name="money_in_{cid}" inputmode="decimal"></label>'
+                f'<label>Uscite<input name="money_out_{cid}" inputmode="decimal"></label>'
+                f'<label>Chiusura<input name="closing_{cid}" inputmode="decimal"></label>'
+            )
+        figure = _currency_bars(logic.card_chart(periodo))
+        period_lines = _card_lines_html(spese.get("card_lines") or []) or _card_lines_html(header_lines)
+        cards_block = (
+            '<div class="spese-cards"><h2>Carte</h2>'
+            f'{period_lines}{figure}{"".join(rows)}'
+            '<h2>Registra il mese</h2>'
+            '<form method="post" action="/carte/mese">'
+            '<label>Mese<input name="month" placeholder="2026-11" required></label>'
+            + "".join(fields)
+            + '<button type="submit">Registra il mese</button></form>'
+            '<h2>Nuova carta</h2>'
+            '<form method="post" action="/carte/nuova">'
+            '<label>Nome<input name="name" required></label>'
+            '<label>Tipo<select name="kind"><option value="credito">credito</option><option value="debito">debito</option></select></label>'
+            '<label>Valuta<select name="currency"><option>THB</option><option>USD</option><option>EUR</option></select></label>'
+            '<button type="submit">Aggiungi carta</button></form></div>'
         )
     body = (
-        '<article class="card"><h1>Carte</h1>'
-        f'<p class="date">{esc(summary.get("month_label") or "—")}</p>'
-        f'<p class="lead">Anno {esc(summary.get("year_label") or "—")}</p>'
-        f'<div class="stacks">{"".join(bars)}</div>'
-        f'{"".join(rows)}'
-        '<h2>Registra il mese</h2>'
-        '<form method="post" action="/carte/mese">'
-        '<label>Mese<input name="month" placeholder="2026-11" required></label>'
-        + "".join(fields)
-        + '<button type="submit">Registra il mese</button></form>'
-        '<h2>Nuova carta</h2>'
-        '<form method="post" action="/carte/nuova">'
-        '<label>Nome<input name="name" required></label>'
-        '<label>Tipo<select name="kind"><option value="credito">credito</option><option value="debito">debito</option></select></label>'
-        '<label>Valuta<select name="currency"><option>THB</option><option>USD</option><option>EUR</option></select></label>'
-        '<button type="submit">Aggiungi carta</button></form></article>'
+        '<article class="card"><h1>Spese</h1>'
+        '<p class="toggle">'
+        f'<a class="{"on" if periodo != "anno" else ""}" href="/spese?periodo=mese&amp;carte={carte_flag}">Questo mese</a>'
+        f'<a class="{"on" if periodo == "anno" else ""}" href="/spese?periodo=anno&amp;carte={carte_flag}">Quest\'anno</a>'
+        "</p>"
+        '<p class="toggle">'
+        f'<a href="/spese?periodo={esc(periodo)}&amp;carte={card_other}">{esc(card_label)}</a>'
+        "</p>"
+        f'<div class="spese-split"><div class="spese-cats"><h2>Categorie</h2>{categories}</div>{cards_block}</div>'
+        "</article>"
     )
-    return layout("Carte", body, "carte")
+    return layout("Spese", body, "spese")
+
+
+def page_cards() -> str:
+    return page_spese("mese", True)
 
 
 def page_card(card: dict) -> str:
@@ -558,8 +582,10 @@ def page_card(card: dict) -> str:
         '<h2>Registra il mese</h2>'
         f'<form method="post" action="/carte/{esc(card["id"])}/mese">'
         '<label>Mese<input name="month" required></label>'
-        '<label>Entrate<input name="money_in" inputmode="decimal"></label>'
-        '<label>Uscite<input name="money_out" inputmode="decimal"></label>'
+        f'<label>Apertura ({esc(card["currency"])})<input name="opening" inputmode="decimal"></label>'
+        f'<label>Entrate ({esc(card["currency"])})<input name="money_in" inputmode="decimal"></label>'
+        f'<label>Uscite ({esc(card["currency"])})<input name="money_out" inputmode="decimal"></label>'
+        f'<label>Chiusura ({esc(card["currency"])})<input name="closing" inputmode="decimal"></label>'
         '<label>Nota<input name="note"></label>'
         '<button type="submit">Salva</button></form>'
         '<h2>Modifica</h2>'
@@ -571,7 +597,7 @@ def page_card(card: dict) -> str:
         f'<form method="post" action="/carte/{esc(card["id"])}/elimina"><button type="submit">Elimina</button></form>'
         "</article>"
     )
-    return layout(card["name"], body, "carte")
+    return layout(card["name"], body, "spese")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -726,17 +752,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/":
             query = parse_qs(urlparse(self.path).query)
-            periodo = (query.get("spese") or ["mese"])[0]
-            if periodo not in ("mese", "anno"):
-                periodo = "mese"
-            with_cards = (query.get("carte") or ["0"])[0] == "1"
-            self._html(200, page_home(periodo, with_cards))
+            if query.get("spese"):
+                periodo = (query.get("spese") or ["mese"])[0]
+                carte = (query.get("carte") or ["1"])[0]
+                self._redirect(f"/spese?periodo={periodo}&carte={carte}")
+                return
+            self._html(200, page_home())
+            return
+        if path == "/spese":
+            query = parse_qs(urlparse(self.path).query)
+            periodo = (query.get("periodo") or query.get("spese") or ["mese"])[0]
+            with_cards = (query.get("carte") or ["1"])[0] != "0"
+            self._html(200, page_spese(periodo, with_cards))
             return
         if path == "/schema":
             self._html(200, page_schema())
             return
         if path == "/carte":
-            self._html(200, page_cards())
+            self._redirect("/spese")
             return
         if path.startswith("/carte/"):
             card_id = path.removeprefix("/carte/").strip("/")
@@ -809,7 +842,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/carte/nuova":
             form = self._form_body()
             logic.create_card({"name": form.get("name"), "kind": form.get("kind"), "currency": form.get("currency")})
-            self._redirect("/carte")
+            self._redirect("/spese")
             return
         if path == "/carte/mese":
             form = self._form_body()
@@ -817,11 +850,17 @@ class Handler(BaseHTTPRequestHandler):
                 logic.set_rates(form.get("rate_usd"), form.get("rate_eur"))
             month = form.get("month")
             for card in logic.list_cards():
-                amount = form.get(f"amount_{card['id']}", "")
-                if amount == "":
+                payload = {"month": month, "currency": card["currency"]}
+                filled = False
+                for key in ("opening", "money_in", "money_out", "closing"):
+                    value = form.get(f"{key}_{card['id']}", "")
+                    if value != "":
+                        payload[key] = value
+                        filled = True
+                if not filled:
                     continue
-                logic.save_card_month(card["id"], {"month": month, "amount": amount, "currency": card["currency"]})
-            self._redirect("/carte")
+                logic.save_card_month(card["id"], payload)
+            self._redirect("/spese")
             return
         if path.startswith("/carte/") and path.endswith("/mese"):
             card_id = path.removeprefix("/carte/").removesuffix("/mese").strip("/")
@@ -839,7 +878,7 @@ class Handler(BaseHTTPRequestHandler):
             card_id = path.removeprefix("/carte/").removesuffix("/elimina").strip("/")
             self._read_body()
             logic.delete_card(card_id)
-            self._redirect("/carte")
+            self._redirect("/spese")
             return
         if path == "/api/cards":
             if not self._write_allowed():

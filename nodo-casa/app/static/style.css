@@ -255,6 +255,11 @@ a.settings {
 
 .donut { width: 9rem; height: 9rem; display: block; margin: 0.6rem auto; }
 
+.spese-split { display: grid; gap: 1.2rem; }
+@media (min-width: 720px) {
+  .spese-split { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+
 .bar-row {
   display: grid;
   grid-template-columns: 8.5rem 1fr auto;

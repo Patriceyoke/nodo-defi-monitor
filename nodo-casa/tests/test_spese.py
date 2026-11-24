@@ -56,14 +56,23 @@ def test_chart_uses_payments_and_cards_do_not_double_count(casa):
     assert ids == {"bollette", "garage"}
     assert "carte" not in ids
     assert sum(float(row["amount_thb"]) for row in plain["slices"]) == 500
-    assert sum(float(row["amount_thb"]) for row in with_cards["slices"]) == 750
-    assert any(row["id"] == "carte" and row["amount_thb"] == "250" for row in with_cards["slices"])
+    assert sum(float(row["amount_thb"]) for row in with_cards["slices"]) == 500
+    assert "carte" not in {row["id"] for row in with_cards["slices"]}
+    assert any(
+        line["name"] == "Bangkok Bank" and line["currency"] == "THB" and line["amount"] == "250"
+        for line in with_cards["card_lines"]
+    )
     home = server.page_home()
-    assert "Spese" in home
-    assert "Ancora nessun pagamento con importo." not in home
-    assert "Casa / bollette" in home
-    toggled = server.page_home("mese", True)
-    assert "Carte" in toggled
+    nav = home.split("<nav>", 1)[1].split("</nav>", 1)[0]
+    assert nav.index("Casa") < nav.index("Garage") < nav.index("Documenti") < nav.index("Visto") < nav.index("Spese")
+    assert "Carte" not in nav
+    page = server.page_spese("mese", True)
+    assert "Casa / bollette" in page
+    assert "Bangkok Bank" in page
+    assert "฿250" in page
+    hidden = server.page_spese("mese", False)
+    assert "Casa / bollette" in hidden
+    assert "Registra il mese" not in hidden
     with pytest.raises(logic.Invalid) as caught:
         logic.import_items({"items": [{
             "external_id": "no-carte",

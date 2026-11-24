@@ -34,7 +34,7 @@ NAV = (
     ("garage", "Garage"),
     ("documenti", "Documenti"),
     ("immigrazione", "Visto"),
-    ("carte", "Carte"),
+    ("spese", "Spese"),
 )
 CATEGORIES = ("bollette", "condominio", "abbonamenti", "garage", "documenti", "altro")
 CATEGORY_LABELS = {
@@ -1671,47 +1671,73 @@ def _save_plastics(conn: sqlite3.Connection, card_id: str, plastics) -> None:
             )
 
 
+def _supplied_money(raw: dict, key: str) -> bool:
+    return key in raw and raw.get(key) not in (None, "")
+
+
 def _write_month(conn: sqlite3.Connection, card_id: str, raw: dict, stamp: str) -> None:
+    """Blank opening, in, out or closing stays null and does not replace a saved figure."""
     month = _month_text(raw.get("month"))
     card = conn.execute("SELECT currency FROM cards WHERE id = ?", (card_id,)).fetchone()
-    currency = card["currency"] if card else "THB"
+    existing = conn.execute(
+        "SELECT * FROM card_months WHERE card_id = ? AND month = ?",
+        (card_id, month),
+    ).fetchone()
+    currency = (existing["currency"] if existing else None) or (card["currency"] if card else "THB")
     if raw.get("currency"):
         currency = str(raw["currency"]).strip().upper()
         if currency not in CARD_CURRENCIES:
             raise Invalid("currency")
-    opening = _optional_money(raw, "opening")
-    money_in = _optional_money(raw, "money_in")
-    money_out = _optional_money(raw, "money_out")
-    closing = _optional_money(raw, "closing")
-    if money_out is None and raw.get("amount") not in (None, ""):
+
+    def keep(key: str):
+        if _supplied_money(raw, key):
+            return _optional_money(raw, key)
+        if existing is not None:
+            return existing[key]
+        return None
+
+    opening = keep("opening")
+    money_in = keep("money_in")
+    money_out = keep("money_out")
+    closing = keep("closing")
+    if not _supplied_money(raw, "money_out") and raw.get("amount") not in (None, ""):
         parsed_amount = _parse_amount(raw.get("amount"))
         if parsed_amount is None or parsed_amount < 0:
             raise Invalid("amount")
         money_out = _amount_text(parsed_amount)
-    if money_out is None and raw.get("amount_thb") not in (None, "") and currency == "THB":
+    elif (
+        money_out is None
+        and existing is None
+        and raw.get("amount_thb") not in (None, "")
+        and currency == "THB"
+    ):
         money_out = _amount_text(_parse_amount(raw.get("amount_thb")))
-    note = raw.get("note") or ""
+    if "note" in raw and raw.get("note") is not None:
+        note = raw.get("note") or ""
+    else:
+        note = existing["note"] if existing else ""
     if not isinstance(note, str) or len(note) > 500:
         raise Invalid("note")
-    conn.execute(
-        """
-        INSERT INTO card_months (
-          card_id, month, amount_thb, currency, amount_original, rate_to_thb, note, updated_at,
-          opening, money_in, money_out, closing
-        ) VALUES (?, ?, '', ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(card_id, month) DO UPDATE SET
-          currency = excluded.currency,
-          note = excluded.note,
-          updated_at = excluded.updated_at,
-          opening = excluded.opening,
-          money_in = excluded.money_in,
-          money_out = excluded.money_out,
-          closing = excluded.closing,
-          amount_thb = '',
-          rate_to_thb = NULL
-        """,
-        (card_id, month, currency, note, stamp, opening, money_in, money_out, closing),
-    )
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO card_months (
+              card_id, month, amount_thb, currency, amount_original, rate_to_thb, note, updated_at,
+              opening, money_in, money_out, closing
+            ) VALUES (?, ?, '', ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+            """,
+            (card_id, month, currency, note, stamp, opening, money_in, money_out, closing),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE card_months
+            SET currency = ?, note = ?, updated_at = ?,
+                opening = ?, money_in = ?, money_out = ?, closing = ?
+            WHERE card_id = ? AND month = ?
+            """,
+            (currency, note, stamp, opening, money_in, money_out, closing, card_id, month),
+        )
     if "transactions" in raw:
         if not isinstance(raw.get("transactions"), list):
             raise Invalid("transactions")
@@ -1778,7 +1804,7 @@ def _month_public(row, transactions: list[dict]) -> dict:
         "amount_thb": baht,
         "spend": spend,
         "baht_complete": complete,
-        "display": format_baht(baht) if complete and baht else _native_label(spend, currency),
+        "display": _native_label(spend, currency),
         "note": row["note"] or "",
         "transactions": transactions,
     }
@@ -2010,34 +2036,39 @@ def _in_period(stamp: str, periodo: str, today: date) -> bool:
 
 
 def _card_spend_lines(conn: sqlite3.Connection, periodo: str, today: date) -> list[dict]:
+    """One line per card and currency. Two dollar cards are not added together."""
+    cards = conn.execute("SELECT id, name, currency FROM cards ORDER BY name").fetchall()
     months = conn.execute("SELECT * FROM card_months").fetchall()
     txs = conn.execute("SELECT * FROM card_tx").fetchall()
     grouped: dict[tuple[str, str], list] = {}
     for row in txs:
         grouped.setdefault((row["card_id"], row["month"]), []).append(dict(row))
-    buckets: dict[str, dict] = {}
+    names = {row["id"]: row["name"] for row in cards}
+    totals: dict[tuple[str, str], Decimal] = {}
     for row in months:
         if not _in_period(row["month"], periodo, today):
             continue
         currency = row["currency"] or "THB"
-        spend, baht, complete = _month_spend(row, grouped.get((row["card_id"], row["month"]), []), currency)
+        spend, _baht, _complete = _month_spend(row, grouped.get((row["card_id"], row["month"]), []), currency)
         if not spend or _parse_amount(spend) == 0:
             continue
-        slot = buckets.setdefault(currency, {"amount": Decimal("0"), "baht": Decimal("0"), "complete": True})
-        slot["amount"] += _parse_amount(spend) or Decimal("0")
-        if complete and baht is not None:
-            slot["baht"] += _parse_amount(baht) or Decimal("0")
-        else:
-            slot["complete"] = False
+        key = (row["card_id"], currency)
+        totals[key] = totals.get(key, Decimal("0")) + (_parse_amount(spend) or Decimal("0"))
     lines = []
-    for currency, slot in buckets.items():
-        lines.append({
-            "currency": currency,
-            "amount": _amount_text(slot["amount"]),
-            "baht": _amount_text(slot["baht"]) if slot["complete"] else None,
-            "baht_complete": slot["complete"],
-            "display": format_baht(slot["baht"]) if slot["complete"] else _native_label(_amount_text(slot["amount"]), currency),
-        })
+    for card in cards:
+        for (card_id, currency), amount in totals.items():
+            if card_id != card["id"]:
+                continue
+            text = _amount_text(amount)
+            lines.append({
+                "id": card_id,
+                "name": names.get(card_id) or "",
+                "currency": currency,
+                "amount": text,
+                "baht": text if currency == "THB" else None,
+                "baht_complete": currency == "THB",
+                "display": _native_label(text, currency),
+            })
     return lines
 
 
@@ -2062,10 +2093,7 @@ def spending(periodo: str, include_cards: bool) -> dict:
         card_lines: list[dict] = []
         if include_cards:
             card_lines = _card_spend_lines(conn, periodo, today)
-            for line in card_lines:
-                if line.get("baht_complete") and _parse_amount(line.get("baht")):
-                    totals["carte"] = totals.get("carte", Decimal("0")) + _parse_amount(line["baht"])
-    order = list(CATEGORIES) + (["carte"] if include_cards else [])
+    order = list(CATEGORIES)
     slices = []
     grand = sum(totals.values(), Decimal("0"))
     for key in order:
@@ -2096,85 +2124,89 @@ def _join_labels(parts: list[str]) -> str:
 
 
 def cards_summary() -> dict:
+    """One line per card and currency. No combined dollar total and no baht conversion."""
     today = today_bkk()
     month = f"{today.year:04d}-{today.month:02d}"
     year = f"{today.year:04d}"
     cards = list_cards()
-    month_bits: list[str] = []
-    year_bits: list[str] = []
-    month_buckets: dict[str, Decimal] = {}
-    year_buckets: dict[str, Decimal] = {}
-    month_baht = Decimal("0")
-    year_baht = Decimal("0")
-    month_complete = True
-    year_complete = True
+    buckets: dict[tuple[str, str], dict] = {}
     for card in cards:
         for row in card["months"]:
             amount = _parse_amount(row.get("spend"))
             if not amount:
                 continue
             currency = row.get("currency") or card["currency"]
+            slot = buckets.setdefault(
+                (card["id"], currency),
+                {"id": card["id"], "name": card["name"], "currency": currency, "month": Decimal("0"), "year": Decimal("0"), "month_any": False, "year_any": False},
+            )
             if row["month"] == month:
-                month_buckets[currency] = month_buckets.get(currency, Decimal("0")) + amount
-                if row.get("baht_complete") and row.get("amount_thb"):
-                    month_baht += _parse_amount(row["amount_thb"]) or Decimal("0")
-                else:
-                    month_complete = False
-            if row["month"].startswith(year):
-                year_buckets[currency] = year_buckets.get(currency, Decimal("0")) + amount
-                if row.get("baht_complete") and row.get("amount_thb"):
-                    year_baht += _parse_amount(row["amount_thb"]) or Decimal("0")
-                else:
-                    year_complete = False
-    for currency, amount in month_buckets.items():
-        month_bits.append(format_baht(amount) if currency == "THB" else _native_label(_amount_text(amount), currency))
-    for currency, amount in year_buckets.items():
-        year_bits.append(format_baht(amount) if currency == "THB" else _native_label(_amount_text(amount), currency))
-    if month_complete and month_baht and all(code == "THB" for code in month_buckets):
-        month_label = format_baht(month_baht)
-    else:
-        month_label = _join_labels(month_bits)
-    if year_complete and year_baht and all(code == "THB" for code in year_buckets):
-        year_label = format_baht(year_baht)
-    else:
-        year_label = _join_labels(year_bits)
+                slot["month"] += amount
+                slot["month_any"] = True
+            if str(row["month"]).startswith(year):
+                slot["year"] += amount
+                slot["year_any"] = True
+    lines = []
+    for card in cards:
+        for (card_id, currency), slot in buckets.items():
+            if card_id != card["id"]:
+                continue
+            month_text = _amount_text(slot["month"]) if slot["month_any"] else None
+            year_text = _amount_text(slot["year"]) if slot["year_any"] else None
+            lines.append({
+                "id": card_id,
+                "name": slot["name"],
+                "currency": currency,
+                "month": month_text,
+                "year": year_text,
+                "month_label": _native_label(month_text, currency) if month_text else "",
+                "year_label": _native_label(year_text, currency) if year_text else "",
+            })
     return {
         "count": len(cards),
-        "month_thb": _amount_text(month_baht) if month_complete and month_baht else None,
-        "year_thb": _amount_text(year_baht) if year_complete and year_baht else None,
-        "month_label": month_label,
-        "year_label": year_label,
+        "lines": lines,
+        "month_thb": None,
+        "year_thb": None,
+        "month_label": None,
+        "year_label": None,
         "names": [card["name"] for card in cards],
     }
 
 
-def card_chart() -> list[dict]:
+def card_chart(periodo: str = "anno") -> list[dict]:
+    """Separate series per currency. A bar is one card, never a mix of baht and dollars."""
     today = today_bkk()
     year = f"{today.year:04d}"
+    month_key = f"{year}-{today.month:02d}"
     cards = list_cards()
-    months: dict[str, list] = {}
+    series: dict[str, dict[str, list]] = {}
     for card in cards:
         for row in card["months"]:
-            if not str(row["month"]).startswith(year):
+            if periodo == "mese":
+                if row["month"] != month_key:
+                    continue
+            elif not str(row["month"]).startswith(year):
                 continue
             amount = _parse_amount(row.get("spend"))
             if not amount:
                 continue
-            months.setdefault(row["month"], []).append({
+            currency = row.get("currency") or card["currency"]
+            text = _amount_text(amount)
+            series.setdefault(currency, {}).setdefault(row["month"], []).append({
                 "name": card["name"],
-                "amount": _amount_text(amount),
-                "display": row.get("display") or "",
-                "baht_complete": bool(row.get("baht_complete")),
+                "amount": text,
+                "display": _native_label(text, currency),
             })
     out = []
-    for month in sorted(months):
-        parts = months[month]
-        complete = all(part["baht_complete"] for part in parts)
-        total_native = sum((_parse_amount(part["amount"]) or Decimal("0")) for part in parts)
+    for currency in ("THB", "USD", "EUR"):
+        months = series.get(currency)
+        if not months:
+            continue
         out.append({
-            "month": month,
-            "total_thb": None if not complete else _amount_text(total_native),
-            "total_label": " · ".join(part["display"] for part in parts),
-            "parts": parts,
+            "currency": currency,
+            "months": [
+                {"month": month, "parts": months[month]}
+                for month in sorted(months)
+            ],
         })
     return out
