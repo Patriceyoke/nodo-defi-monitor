@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Any
 
-from . import db, ens, evm, flows, markets, nft, switches
+from . import config, db, ens, evm, flows, markets, nft, switches, yield_history
 from .security import annotate_light_alerts
 from .validation import normalize_owner
 
@@ -115,6 +115,9 @@ def failed_view(owner: str, errors: list[str]) -> dict[str, Any]:
         "btc_security": [],
         "btc_moves": [],
         "history": [],
+        "wallet_series": yield_history.empty_wallet_series(),
+        "realized_yield": yield_history.empty_realized_yield(),
+        "comparisons": [],
         "ens_alerts": [],
         "ens_names": [],
         "security_summary": {
@@ -264,6 +267,42 @@ def consistency_notes(
     if abs(float(income["tutti"]["apy_year"]) - float(st["wapy"])) > 0.01:
         notes.append("L'APY medio non è pesato sul valore.")
     return notes
+
+
+def history_snapshot(positions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Hourly row: totals, per wallet, and each position's amount (not only dollars)."""
+    summary = stats(positions)
+    wallets: dict[tuple[str, str], dict[str, Any]] = {}
+    packed: list[dict[str, Any]] = []
+    for row in positions:
+        label = str(row.get("label") or "Portafoglio")
+        owner = str(row.get("owner") or "")
+        slot = wallets.setdefault(owner + "\0" + label, {"label": label, "owner": owner, "total_usd": 0.0})
+        usd = row.get("usd")
+        if usd is not None:
+            slot["total_usd"] += float(usd)
+        apy = row.get("apy")
+        packed.append({
+            "label": label,
+            "owner": owner,
+            "protocol": row.get("protocol"),
+            "asset": row.get("asset"),
+            "value_usd": None if usd is None else round(float(usd), 6),
+            "apy": None if apy is None else float(apy),
+            "amount": float(row.get("amount") or 0),
+            "chain": row.get("chain") or "",
+        })
+    return {
+        "defi_usd": summary["defi_usd"] + summary["wallet_usd"],
+        "year_usd": summary["year_usd"],
+        "wapy": summary["wapy"],
+        "total_usd": summary["total_usd"],
+        "wallets": [
+            {"label": item["label"], "owner": item["owner"], "total_usd": round(item["total_usd"], 6)}
+            for item in wallets.values()
+        ],
+        "positions": packed,
+    }
 
 
 def position_summary(positions: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
@@ -541,15 +580,8 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                 errors.append(f"Scadenze ENS non lette: {exc}")
         ens_alerts = ens.alerts_for(ens_names)
 
-        def hist_payload(owner: str) -> dict[str, Any]:
-            pos = [p for p in positions if filter_owner(owner, p["owner"])]
-            s = stats(pos)
-            return {
-                "defi_usd": s["defi_usd"] + s["wallet_usd"],
-                "year_usd": s["year_usd"],
-                "wapy": s["wapy"],
-                "total_usd": s["total_usd"],
-            }
+        def hist_payload(owner_name: str) -> dict[str, Any]:
+            return history_snapshot([p for p in positions if filter_owner(owner_name, p["owner"])])
 
         if evm_wallets and not positions:
             errors.append(
@@ -691,7 +723,25 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
 
     ens_alerts = [a for a in (data.get("ens_alerts") or []) if filter_owner(owner, a.get("owner"))]
     ens_names = [a for a in (data.get("ens_names") or []) if filter_owner(owner, a.get("owner"))]
-    history = db.get_history(owner, days=90)
+    try:
+        history = db.get_history(owner, days=config.HISTORY_KEEP_DAYS)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Storico non letto: %s", exc)
+        history = []
+    series_rows = [row for row in history if str(row.get("owner") or "") == owner]
+    try:
+        history_view = yield_history.build(series_rows, now=data.get("ts"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Rendimento reale non calcolato: %s", exc)
+        history_view = {
+            "wallet_series": yield_history.empty_wallet_series(),
+            "realized_yield": yield_history.empty_realized_yield(),
+        }
+    try:
+        comparisons = switches.compare_rates(positions, float(data.get("gas_usd") or 0))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Confronto tassi non calcolato: %s", exc)
+        comparisons = []
 
     built_totals = {
         "io": totals("io"),
@@ -721,6 +771,9 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
         "switch_anomalies": [row for row in (data.get("switch_anomalies") or []) if filter_owner(owner, row.get("owner"))],
         "security": security,
         "history": history,
+        "wallet_series": history_view["wallet_series"],
+        "realized_yield": history_view["realized_yield"],
+        "comparisons": comparisons,
         "ens_alerts": ens_alerts,
         "ens_names": ens_names,
         "security_summary": summaries,

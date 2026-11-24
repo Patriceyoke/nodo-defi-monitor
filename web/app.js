@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", chartOwner: "tutti", histOwner: "tutti", histDays: 7, currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
+const state = { owner: "tutti", chartOwner: "tutti", histOwner: "tutti", histDays: 7, wallet: "", currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
 let loadGen = 0;
 let applyingPositions = false;
 const charts = {};
@@ -247,6 +247,7 @@ function bindSegmented() {
       if (key === "currency") persistCurrency(state.currency);
       render();
       if (key === "owner") {
+        state.wallet = "";
         state.nfts = null;
         const details = $("#nft-details");
         if (details && details.open) loadNfts(false);
@@ -271,14 +272,28 @@ function paintChart(id, config) {
   charts[id] = new Chart(canvas, config);
 }
 
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("nodo-theme", next); } catch (_) {}
+  const button = $("#btn-theme");
+  if (button) button.textContent = next === "dark" ? "Tema chiaro" : "Tema scuro";
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.color = next === "dark" ? "#F5F5F4" : "#1C1917";
+    Chart.defaults.borderColor = next === "dark" ? "#3F3F46" : "#E7E5E4";
+  }
+}
 function commonChart() {
   Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-  Chart.defaults.color = "#1C1917";
+  applyTheme(document.documentElement.getAttribute("data-theme") || "light");
 }
 
 function renderSplit(data) {
-  const owner = state.chartOwner || "tutti";
-  const rows = (data.positions || []).filter((row) => owner === "tutti" || row.owner === owner);
+  const owner = state.wallet ? "tutti" : (state.chartOwner || "tutti");
+  const rows = (data.positions || []).filter((row) => {
+    if (state.wallet) return walletKey(row) === state.wallet;
+    return owner === "tutti" || row.owner === owner;
+  });
   const grouped = new Map();
   rows.forEach((row) => {
     const value = Number(row.usd) || 0;
@@ -333,28 +348,46 @@ function splitRow(label, stats, total) {
     <td class="num">${money(stats.month)}</td>
   </tr>`;
 }
+function walletKey(row) {
+  return (row.owner || "") + "::" + (row.label || "Portafoglio");
+}
+function inScope(row) {
+  if (state.owner !== "tutti" && row.owner !== state.owner) return false;
+  if (state.wallet && walletKey(row) !== state.wallet) return false;
+  return true;
+}
 function renderMetrics(data) {
   const box = $("#owner-cards");
   if (!box) return;
   const totals = data.totals || {};
-  const positions = data.positions || [];
-  const keys = ["io", "moglie", "tutti"];
-  box.innerHTML = keys.map((key) => {
-    const row = totals[key] || {};
-    const apy = row.wapy == null ? "–" : pct(row.wapy);
-    const month = row.year_usd == null ? "–" : money(Number(row.year_usd) / 12);
-    const rows = positions.filter((item) => key === "tutti" || item.owner === key);
-    const stable = groupIncome(rows.filter((item) => assetKind(item.asset) === "stable"));
-    const eth = groupIncome(rows.filter((item) => assetKind(item.asset) === "eth"));
-    const base = Number(row.total_usd) || (stable.usd + eth.usd);
-    return `<article class="owner-card${key === "tutti" ? " sum" : ""}">
-      <h3>${OWNER_LABEL[key] || key}</h3>
+  const positions = (data.positions || []).filter(inScope);
+  const selected = state.wallet ? null : (totals[state.owner] || {});
+  const grouped = groupIncome(positions);
+  const total = state.wallet ? grouped.usd : Number(selected.total_usd) || 0;
+  const year = state.wallet ? grouped.year : Number(selected.year_usd) || 0;
+  const apyValue = state.wallet ? grouped.apy : selected.wapy;
+  const sample = positions[0] || {};
+  const title = state.wallet
+    ? (sample.label || "Portafoglio") + " · " + (OWNER_LABEL[sample.owner] || "")
+    : (OWNER_LABEL[state.owner] || "Totale");
+  const stable = groupIncome(positions.filter((item) => assetKind(item.asset) === "stable"));
+  const eth = groupIncome(positions.filter((item) => assetKind(item.asset) === "eth"));
+  const base = total || (stable.usd + eth.usd);
+  const side = !state.wallet && state.owner === "tutti"
+    ? `<dl class="headline">
+        <dt>Io</dt><dd>${money((totals.io || {}).total_usd || 0)}</dd>
+        <dt>Moglie</dt><dd>${money((totals.moglie || {}).total_usd || 0)}</dd>
+      </dl>`
+    : "";
+  box.innerHTML = `<article class="owner-card sum">
+      <h3>${escapeHtml(title)}</h3>
       <p class="total-label">Totale</p>
-      <p class="figure">${money(row.total_usd || 0)}</p>
+      <p class="figure">${money(total)}</p>
       <dl class="headline">
-        <dt>Reddito mensile</dt><dd>${month}</dd>
-        <dt>APY ponderato</dt><dd>${apy}</dd>
+        <dt>Reddito mensile</dt><dd>${money(year / 12)}</dd>
+        <dt>APY ponderato</dt><dd>${apyValue == null ? "–" : pct(apyValue)}</dd>
       </dl>
+      ${side}
       <div class="table-scroll">
         <table class="split-table">
           <caption>Stablecoin e ETH</caption>
@@ -368,7 +401,28 @@ function renderMetrics(data) {
         </table>
       </div>
     </article>`;
-  }).join("");
+}
+function renderWallets(data) {
+  const host = $("#wallet-chips");
+  if (!host) return;
+  const map = new Map();
+  (data.positions || []).forEach((row) => {
+    if (state.owner !== "tutti" && row.owner !== state.owner) return;
+    const id = walletKey(row);
+    const slot = map.get(id) || { id, label: row.label || "Portafoglio", owner: row.owner, usd: 0 };
+    slot.usd += Number(row.usd) || 0;
+    map.set(id, slot);
+  });
+  const chips = [...map.values()].sort((a, b) => b.usd - a.usd);
+  if (!chips.length) {
+    host.innerHTML = `<p class="mini">Nessun portafoglio in questa vista.</p>`;
+    return;
+  }
+  host.innerHTML = chips.map((chip) => `
+    <button type="button" class="wallet-chip${state.wallet === chip.id ? " on" : ""}" data-wallet="${escapeHtml(chip.id)}">
+      ${escapeHtml(chip.label)}
+      <small>${escapeHtml(OWNER_LABEL[chip.owner] || chip.owner || "")} · ${money(chip.usd)}</small>
+    </button>`).join("");
 }
 function metric(label, value, detail, klass) {
   return `<div class="metric ${klass || ""}"><div class="value">${value}</div><div class="label">${label}</div>${detail ? `<div class="detail">${detail}</div>` : ""}</div>`;
@@ -470,12 +524,27 @@ function formatHistDate(ts, withYear) {
 }
 function historyPoints(data) {
   const days = Number(state.histDays) || 7;
-  const owner = state.histOwner || "tutti";
+  const owner = state.owner || "tutti";
   const now = Number(data.ts) || Math.floor(Date.now() / 1000);
   const cutoff = now - days * 86400;
+  const series = ((data.wallet_series || {}).points || []).filter((row) => Number(row.ts) >= cutoff);
+  if (series.length) {
+    const points = series.map((row) => {
+      let value = Number(row.total_usd);
+      if (state.wallet) {
+        const hit = (row.wallets || []).find((item) => item.id === state.wallet);
+        value = hit ? Number(hit.total_usd) : NaN;
+      } else if (owner !== "tutti") {
+        const rows = (row.wallets || []).filter((item) => item.owner === owner);
+        value = rows.length ? rows.reduce((sum, item) => sum + (Number(item.total_usd) || 0), 0) : NaN;
+      }
+      return { ts: Number(row.ts), value };
+    }).filter((point) => Number.isFinite(point.value));
+    return { days, owner, cutoff, points };
+  }
   const byDay = new Map();
   (data.history || [])
-    .filter((row) => Number(row.ts) >= cutoff && (row.owner || "tutti") === owner)
+    .filter((row) => Number(row.ts) >= cutoff && (row.owner || "tutti") === (state.wallet ? "tutti" : owner))
     .sort((a, b) => Number(a.ts) - Number(b.ts))
     .forEach((row) => {
       const date = new Date(Number(row.ts) * 1000);
@@ -483,11 +552,56 @@ function historyPoints(data) {
       const value = Number(row.total_usd != null ? row.total_usd : row.defi_usd);
       byDay.set(key, { ts: Number(row.ts), value: Number.isFinite(value) ? value : 0 });
     });
-  return { days, owner, cutoff, points: [...byDay.values()] };
+  return { days, owner, cutoff, points: state.wallet ? [] : [...byDay.values()] };
+}
+function monthName(key) {
+  const parts = String(key || "").split("-");
+  const date = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+  if (Number.isNaN(date.getTime())) return String(key || "");
+  return date.toLocaleDateString("it-IT", { month: "long", year: "numeric" });
+}
+function yieldScope(data) {
+  const pack = data.realized_yield || {};
+  if (state.wallet) {
+    const row = (pack.by_wallet || []).find((item) => item.id === state.wallet);
+    return {
+      note: pack.note || "Stima.",
+      current: row ? Number(row.current_month_usd) || 0 : 0,
+      months: row ? (row.months || []) : [],
+    };
+  }
+  if (state.owner !== "tutti") {
+    const rows = (pack.by_wallet || []).filter((item) => item.owner === state.owner);
+    const map = new Map();
+    rows.forEach((row) => (row.months || []).forEach((item) => {
+      map.set(item.month, (map.get(item.month) || 0) + (Number(item.usd) || 0));
+    }));
+    return {
+      note: pack.note || "Stima.",
+      current: rows.reduce((sum, row) => sum + (Number(row.current_month_usd) || 0), 0),
+      months: [...map.entries()].sort().map(([month, usd]) => ({ month, usd })),
+    };
+  }
+  return { note: pack.note || "Stima.", current: Number(pack.current_month_usd) || 0, months: pack.months || [] };
+}
+function renderYield(data) {
+  const host = $("#yield-months");
+  const note = $("#yield-note");
+  const scope = yieldScope(data);
+  if (note) note.textContent = "Stima. " + scope.note;
+  if (!host) return;
+  const cards = [{ month: "Questo mese", usd: scope.current, current: true }].concat(scope.months || []);
+  host.innerHTML = cards.map((item) => `
+    <article class="yield-card">
+      <div class="label">${escapeHtml(item.current ? "Questo mese" : monthName(item.month))}</div>
+      <div class="value">${money(item.usd || 0)}</div>
+      <p class="mini">stima</p>
+    </article>`).join("");
 }
 function renderHist(data) {
   const series = historyPoints(data);
-  const label = OWNER_LABEL[series.owner] || "Combinato";
+  const walletName = state.wallet ? state.wallet.split("::").slice(1).join("::") : "";
+  const label = walletName || OWNER_LABEL[series.owner] || "Combinato";
   const caption = $("#hist-caption");
   const empty = $("#hist-empty");
   const box = $("#hist-chart-box");
@@ -609,13 +723,19 @@ function positionTable(title, rows) {
 }
 function renderPositions(data) {
   const summary = $("#pos-summary");
-  const pos = data.positions || [];
+  const pos = (data.positions || []).filter(inScope);
   if (summary) {
     const n = pos.length;
     summary.textContent = n === 1 ? "1 posizione." : n ? `${n} posizioni.` : "Nessuna posizione.";
   }
   const host = $("#pos-groups");
   if (!host) return;
+  if (state.wallet) {
+    const sample = pos[0] || {};
+    const title = (sample.label || "Portafoglio") + (sample.owner ? " · " + (OWNER_LABEL[sample.owner] || sample.owner) : "");
+    host.innerHTML = positionTable(title, pos.slice().sort((a, b) => (Number(b.usd) || 0) - (Number(a.usd) || 0)));
+    return;
+  }
   const groups = state.owner === "tutti" ? ["io", "moglie"] : [state.owner];
   host.innerHTML = groups.map((owner) => {
     const rows = pos.filter((row) => row.owner === owner).slice().sort((a, b) => (Number(b.usd) || 0) - (Number(a.usd) || 0));
@@ -624,7 +744,7 @@ function renderPositions(data) {
 }
 
 const YIELD_HOSTS = new Set([
-  "app.aave.com", "app.compound.xyz", "app.spark.finance", "fluid.io",
+  "app.aave.com", "aave.com", "pro.aave.com", "app.compound.xyz", "app.spark.finance", "fluid.io",
   "stake.lido.fi", "app.sky.money", "stake.rocketpool.net", "maple.finance",
 ]);
 function yieldLink(url) {
@@ -633,9 +753,42 @@ function yieldLink(url) {
   if (parsed.protocol !== "https:" || !YIELD_HOSTS.has(parsed.hostname)) return "";
   return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Vai alla yield</a>`;
 }
+function renderComparisons(data) {
+  const host = $("#comparison-list");
+  if (!host) return;
+  const rows = (data.comparisons || []).filter((row) => {
+    if (state.owner !== "tutti" && row.owner !== state.owner) return false;
+    if (!state.wallet) return true;
+    return walletKey({ owner: row.owner, label: row.wallet_label || "Portafoglio" }) === state.wallet;
+  });
+  if (!rows.length) {
+    host.innerHTML = `<p class="mini">Nessuna posizione da confrontare in questa vista.</p>`;
+    return;
+  }
+  host.innerHTML = rows.map((row) => {
+    const alts = row.alternatives || [];
+    const body = alts.length ? `<div class="alt-grid">${alts.map((alt) => `
+      <article class="alt-card">
+        <div class="label">${escapeHtml(alt.protocol || "")} ${escapeHtml(alt.asset || "")}</div>
+        <div class="value">${pct(alt.apy)}</div>
+        <p>${escapeHtml(alt.risk_label || "Rischio: uguale")}</p>
+        <p>Guadagno dopo il gas, stima 12 mesi: +${money(alt.net_year_usd)}</p>
+        <p>${yieldLink(alt.url)}</p>
+      </article>`).join("")}</div>` : `<p class="mini">${escapeHtml(row.empty_text || "Nessuna alternativa migliore a pari rischio")}</p>`;
+    return `<article class="compare-card">
+      <h3>${escapeHtml(row.wallet_label || "Portafoglio")}</h3>
+      <p>${escapeHtml(OWNER_LABEL[row.owner] || "")} · ${escapeHtml(row.protocol || "")} ${escapeHtml(row.asset || "")} · ${row.apy == null ? "–" : pct(row.apy)} · ${money(row.usd)}</p>
+      ${body}
+    </article>`;
+  }).join("");
+}
 function renderSwitches(data) {
   const box = $("#switches");
-  const all = (data.switches || []).filter((item) => state.owner === "tutti" || item.owner === state.owner);
+  const all = (data.switches || []).filter((item) => {
+    if (state.owner !== "tutti" && item.owner !== state.owner) return false;
+    if (!state.wallet) return true;
+    return walletKey({ owner: item.owner, label: item.wallet_label || "Portafoglio" }) === state.wallet;
+  });
   const summary = $("#switch-summary");
   if (summary) {
     const n = all.length;
@@ -908,9 +1061,12 @@ function render() {
     });
     $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.wallet_count));
     renderMetrics(data);
+    renderWallets(data);
     renderSplit(data);
     renderPositions(data);
     renderHist(data);
+    renderYield(data);
+    renderComparisons(data);
     renderSwitches(data);
     renderSecurityNotes(data);
     renderSecuritySummary(data);
@@ -1065,6 +1221,13 @@ function rememberFold(id) {
 async function boot() {
   commonChart();
   bindSegmented();
+  const themeButton = $("#btn-theme");
+  if (themeButton) {
+    themeButton.addEventListener("click", () => {
+      applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
+      if (state.data) render();
+    });
+  }
   $("#btn-refresh").addEventListener("click", () => load(true, { full: true }));
   document.addEventListener("click", (ev) => {
     const dismiss = ev.target.closest("#btn-dismiss-alert");
@@ -1079,6 +1242,13 @@ async function boot() {
         if (state.data) state.data.fund_flows = result.outflows || state.data.fund_flows;
         render();
       }).catch((err) => alert(err.message));
+    }
+    const walletChip = ev.target.closest("[data-wallet]");
+    if (walletChip) {
+      const id = walletChip.dataset.wallet || "";
+      state.wallet = state.wallet === id ? "" : id;
+      render();
+      return;
     }
     const chartBtn = ev.target.closest("#chart-owner button");
     if (chartBtn) {

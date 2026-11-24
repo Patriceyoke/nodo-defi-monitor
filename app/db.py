@@ -681,19 +681,37 @@ def delete_btc(wallet_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def save_history(owner: str, payload: dict[str, Any]) -> None:
-    now = int(time.time())
+def save_history(
+    owner: str,
+    payload: dict[str, Any],
+    *,
+    ts: int | None = None,
+    min_interval: int | None = None,
+    force: bool = False,
+) -> bool:
+    """Store one snapshot. Hourly by default, and drop rows past the keep window.
+
+    Returns True when a row was written. The database file lives under DATA_DIR,
+    so these rows stay on the Umbrel data volume across an app update.
+    """
+    now = int(time.time() if ts is None else ts)
+    interval = config.HISTORY_MIN_INTERVAL if min_interval is None else int(min_interval)
+    keep_after = now - int(config.HISTORY_KEEP_DAYS) * 86400
     with connect() as conn:
-        last = conn.execute(
-            "SELECT ts FROM history WHERE owner=? ORDER BY ts DESC LIMIT 1",
-            (owner,),
-        ).fetchone()
-        if last and now - int(last["ts"]) < 30 * 60:
-            return
+        if not force:
+            last = conn.execute(
+                "SELECT ts FROM history WHERE owner=? ORDER BY ts DESC LIMIT 1",
+                (owner,),
+            ).fetchone()
+            if last and now - int(last["ts"]) < interval:
+                conn.execute("DELETE FROM history WHERE ts < ?", (keep_after,))
+                return False
         conn.execute(
             "INSERT INTO history(ts, owner, payload) VALUES(?,?,?)",
             (now, owner, json.dumps(payload)),
         )
+        conn.execute("DELETE FROM history WHERE ts < ?", (keep_after,))
+        return True
 
 
 def get_history(owner: str = "tutti", days: int = 90) -> list[dict[str, Any]]:

@@ -4,8 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.5.12" />
-  <link rel="icon" href="/static/favicon.svg?v=0.5.12" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.6.0" />
+  <link rel="icon" href="/static/favicon.svg?v=0.6.0" type="image/svg+xml" />
+  <script>
+    (function () {
+      var saved = "";
+      try { saved = localStorage.getItem("nodo-theme") || ""; } catch (err) { saved = ""; }
+      var theme = saved === "light" || saved === "dark"
+        ? saved
+        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
 </head>
 <body>
   <header class="appbar">
@@ -13,6 +23,7 @@
       <div class="brand"><span class="logo">Đ</span> Monitor DeFi</div>
       <span class="pill ok">sola lettura</span>
       <div class="spacer"></div>
+      <button class="btn" id="btn-theme" type="button">Tema scuro</button>
       <button class="btn" id="btn-refresh" type="button">Aggiorna</button>
       <button class="btn ghost" id="btn-settings" type="button">Impostazioni</button>
     </div>
@@ -23,11 +34,11 @@
     <div id="outflow-banners"></div>
     <div id="security-summary"></div>
 
-    <section class="card" id="overview">
+    <section class="card hero" id="overview">
       <div class="card-head">
         <div>
-          <h2>Totale combinato</h2>
-          <p class="caption">Io, Moglie e il totale restano sempre visibili. Le stime usano l'APY di adesso. <span id="source-line"></span></p>
+          <h2>Totale</h2>
+          <p class="caption">Il numero grande segue il titolare o il portafoglio scelto. Le stime usano l'APY di adesso. <span id="source-line"></span></p>
         </div>
         <span class="pill muted" id="source-pill" aria-live="polite">in sola lettura</span>
       </div>
@@ -46,6 +57,16 @@
       <p class="empty hidden" id="empty-state">Nessun indirizzo ancora. Apri Impostazioni e aggiungi solo indirizzi Ethereum pubblici, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
     </section>
 
+    <section class="card" id="wallets">
+      <div class="card-head">
+        <div>
+          <h2>Portafogli</h2>
+          <p class="caption">Tocca un portafoglio per vedere solo quello. Tocca di nuovo per tornare a tutti.</p>
+        </div>
+      </div>
+      <div class="wallet-chips" id="wallet-chips"></div>
+    </section>
+
     <section class="card" id="split">
       <div class="card-head">
         <div>
@@ -62,6 +83,28 @@
       <ul class="legend" id="chart-legend"></ul>
     </section>
 
+    <section class="card" id="changes">
+      <div class="card-head">
+        <div>
+          <h2>Storico e rendimento reale</h2>
+          <p class="caption" id="hist-caption">Valore nel tempo. Il filtro cambia solo questo grafico.</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="segmented" id="hist-range">
+          <button data-value="7" class="on" type="button">7 giorni</button>
+          <button data-value="30" type="button">30 giorni</button>
+          <button data-value="90" type="button">90 giorni</button>
+          <button data-value="365" type="button">365 giorni</button>
+        </div>
+      </div>
+      <div class="chart-box line tall" id="hist-chart-box"><canvas id="chart-hist"></canvas></div>
+      <p class="mini hidden" id="hist-empty">Ancora nessuno storico in questo periodo. Uno snapshot all'ora, dopo il primo aggiornamento riuscito.</p>
+      <h3>Interesse stimato per mese</h3>
+      <p class="caption" id="yield-note">Stima.</p>
+      <div class="yield-grid" id="yield-months"></div>
+    </section>
+
     <section class="card" id="positions">
       <details id="positions-details">
         <summary>
@@ -73,27 +116,14 @@
       </details>
     </section>
 
-    <section class="card" id="changes">
+    <section class="card" id="comparisons">
       <div class="card-head">
         <div>
-          <h2>Variazioni recenti</h2>
-          <p class="caption" id="hist-caption">Valore del portafoglio nel tempo. Il selettore cambia solo questo grafico.</p>
+          <h2>Confronto tassi per rischio</h2>
+          <p class="caption">Per ogni posizione, solo alternative a rischio uguale o più basso, dopo il gas di un anno. Nessuna transazione parte da qui.</p>
         </div>
       </div>
-      <div class="toolbar">
-        <div class="segmented" id="hist-owner">
-          <button data-value="tutti" class="on" type="button">Combinato</button>
-          <button data-value="io" type="button">Io</button>
-          <button data-value="moglie" type="button">Moglie</button>
-        </div>
-        <div class="segmented" id="hist-range">
-          <button data-value="7" class="on" type="button">7 giorni</button>
-          <button data-value="30" type="button">30 giorni</button>
-          <button data-value="90" type="button">90 giorni</button>
-        </div>
-      </div>
-      <div class="chart-box line" id="hist-chart-box"><canvas id="chart-hist"></canvas></div>
-      <p class="mini hidden" id="hist-empty">Ancora nessuno storico in questo periodo. Resta dopo il primo aggiornamento riuscito.</p>
+      <div id="comparison-list"></div>
     </section>
 
     <section class="card" id="switches-card">
@@ -234,7 +264,7 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js?v=0.5.12"></script>
-  <script src="/static/app.js?v=0.5.12"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.6.0"></script>
+  <script src="/static/app.js?v=0.6.0"></script>
 </body>
 </html>

@@ -445,6 +445,88 @@ def suggest_switches(positions: list[dict[str, Any]], gas_usd: float) -> list[di
     return ideas
 
 
+def compare_rates(positions: list[dict[str, Any]], gas_usd: float) -> list[dict[str, Any]]:
+    """Every position, with every equal-or-safer alternative that still pays after gas.
+
+    The same exclusions as the suggestion cards apply: illiquid markets, high
+    utilization, anomalous yield, and risk-capital vaults such as stUSDS.
+    """
+    cards: list[dict[str, Any]] = []
+    by_owner: dict[str, list[dict[str, Any]]] = {}
+    for pos in positions:
+        if pos.get("protocol") == "Wallet" or pos.get("apy") is None:
+            continue
+        by_owner.setdefault(str(pos.get("owner") or ""), []).append(pos)
+    for owner, rows in by_owner.items():
+        held = {(row.get("protocol"), row.get("asset")) for row in rows}
+        extras: list[dict[str, Any]] = []
+        seen_extra: set[tuple[Any, Any]] = set()
+        for row in rows:
+            for alt in row.get("alternatives") or []:
+                key = (alt.get("protocol"), alt.get("asset"))
+                if key in held or key in seen_extra:
+                    continue
+                seen_extra.add(key)
+                extras.append(alt)
+        destinations = list(rows) + extras
+        for src in rows:
+            src_bucket = bucket(str(src.get("asset") or ""))
+            src_tier = source_tier(src.get("protocol"), src.get("asset"))
+            src_live = float(src["apy"])
+            src_apy, _spike = decision_apy(src_live, src.get("apy30"))
+            usd = float(src.get("usd") or 0)
+            alternatives: list[dict[str, Any]] = []
+            for dest in destinations:
+                if dest is src:
+                    continue
+                if dest.get("owner") not in {None, owner}:
+                    continue
+                if bucket(str(dest.get("asset") or "")) != src_bucket:
+                    continue
+                if dest.get("apy") is None:
+                    continue
+                if dest.get("protocol") == src.get("protocol") and dest.get("asset") == src.get("asset"):
+                    continue
+                if usd < 50:
+                    continue
+                dest_live = float(dest["apy"])
+                if dest_live <= src_live:
+                    continue
+                if _anomaly_reason(dest, dest_live, dest.get("apy30")):
+                    continue
+                if _block_reason(dest, usd):
+                    continue
+                dest_tier = destination_tier(dest.get("protocol"), dest.get("asset"))
+                if dest_tier is None or dest_tier > src_tier:
+                    continue
+                gross = usd * (dest_live - src_apy) / 100.0
+                net = gross - float(gas_usd or 0)
+                if net <= 0:
+                    continue
+                alternatives.append({
+                    "protocol": dest.get("protocol"),
+                    "asset": dest.get("asset"),
+                    "apy": dest_live,
+                    "tier": dest_tier,
+                    "risk_label": _risk_label(src_tier, dest_tier),
+                    "net_year_usd": round(net, 2),
+                    "gas_usd": float(gas_usd or 0),
+                    "url": official_yield_url(str(dest.get("protocol") or ""), str(dest.get("asset") or "")),
+                })
+            alternatives.sort(key=lambda item: item["net_year_usd"], reverse=True)
+            cards.append({
+                "owner": owner,
+                "wallet_label": _wallet_label(src),
+                "protocol": src.get("protocol"),
+                "asset": src.get("asset"),
+                "apy": src_live,
+                "usd": usd,
+                "alternatives": alternatives,
+                "empty_text": "" if alternatives else "Nessuna alternativa migliore a pari rischio",
+            })
+    return cards
+
+
 def _wallet_label(src: dict[str, Any]) -> str:
     return str(src.get("label") or "").strip() or "Portafoglio"
 

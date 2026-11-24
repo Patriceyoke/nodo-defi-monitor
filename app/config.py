@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 APP_NAME = "Monitor DeFi"
-APP_VERSION = "0.5.12"
+APP_VERSION = "0.6.0"
 DEFAULT_PORT = int(os.environ.get("PORT", "3847"))
 
 _DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data"
@@ -137,3 +137,5 @@ SWITCH_GAS_UNITS = 220_000
 DUST_SATS = 1000
 DEFAULT_GAP_LIMIT = 50
 HISTORY_DAYS = 90
+HISTORY_MIN_INTERVAL = 3600
+HISTORY_KEEP_DAYS = 400

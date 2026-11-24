@@ -107,7 +107,30 @@ h2 { font-size: 1.6rem; }
 .owner-card.sum { background: #fff; }
 .owner-card h3 { margin: 0 0 8px; font-size: 22px; }
 .owner-card .total-label { margin: 0; font-size: 18px; font-weight: 700; color: var(--ink); }
-.owner-card .figure { margin: 0 0 12px; font-size: 40px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; color: var(--ink); }
+.owner-card .figure { margin: 0 0 12px; font-size: 56px; font-weight: 800; letter-spacing: -0.04em; line-height: 1.1; color: var(--ink); }
+.hero { padding-bottom: 8px; }
+.wallet-chips, .yield-grid, .alt-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.wallet-chip, .yield-card, .alt-card, .compare-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--ink);
+}
+.wallet-chip {
+  min-height: 48px;
+  padding: 12px 16px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+.wallet-chip.on { outline: 3px solid var(--teal); }
+.wallet-chip small { display: block; font-size: 18px; font-weight: 700; }
+.yield-card, .alt-card { padding: 14px 16px; min-width: 180px; flex: 1 1 180px; }
+.yield-card .value, .alt-card .value { font-size: 28px; font-weight: 800; }
+.compare-card { padding: 16px; margin: 12px 0; width: 100%; }
+.alt-grid { margin-top: 10px; }
 .owner-card .headline {
   display: grid; grid-template-columns: 1fr auto; gap: 10px 18px; margin: 0 0 16px;
 }
@@ -176,9 +199,9 @@ tr:hover td { background: #F8FAFC; }
 .outflow-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .outflow-actions .btn { flex: 1 1 220px; }
 .flow-line { font-size: 18px; color: var(--ink); margin: 8px 0; }
-.chart-box { position: relative; height: 280px; overflow: hidden; }
-.chart-box.donut { height: 220px; max-width: 420px; margin: 0 auto; }
-.chart-box.line { height: 180px; }
+.chart-box { position: relative; height: 320px; overflow: hidden; }
+.chart-box.donut { height: 280px; max-width: 460px; margin: 0 auto; }
+.chart-box.line { height: 360px; }
 #changes .toolbar { margin-top: 0; }
 .legend { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .legend li { display: flex; align-items: center; gap: 8px; font-size: 18px; color: var(--ink); }
@@ -243,6 +266,40 @@ form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .btn, button.btn, .segmented button { min-height: 48px; }
   th, td { padding: 10px 6px; }
 }
+:root[data-theme="dark"] {
+  --bg: #0C1116;
+  --card: #171D25;
+  --ink: #F5F5F4;
+  --muted: #F5F5F4;
+  --line: #3F3F46;
+  --ok: #6EE7B7;
+  --warn: #FCD34D;
+  --bad: #FDA4AF;
+  --ok-bg: #052E26;
+  --warn-bg: #3B2A08;
+  --bad-bg: #4C0519;
+  --info-bg: #1F2933;
+  --shadow: none;
+}
+:root[data-theme="dark"] body { background: var(--bg); color: var(--ink); }
+:root[data-theme="dark"] header.appbar { background: rgba(12, 17, 22, 0.94); }
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .owner-card,
+:root[data-theme="dark"] .metric,
+:root[data-theme="dark"] .pill,
+:root[data-theme="dark"] .btn,
+:root[data-theme="dark"] .wallet-chip,
+:root[data-theme="dark"] .nft-card,
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea { background: var(--card); color: var(--ink); }
+:root[data-theme="dark"] .segmented { background: #0C1116; }
+:root[data-theme="dark"] .segmented button.on { background: #243041; color: var(--ink); }
+:root[data-theme="dark"] tr.sum td,
+:root[data-theme="dark"] tr:hover td { background: #1F2933; }
+:root[data-theme="dark"] .pill.ok { color: #D1FAE5; }
+:root[data-theme="dark"] .pill.warn { color: #FEF3C7; }
+:root[data-theme="dark"] .pill.bad { color: #FFE4E6; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .btn:hover { transform: none; }
