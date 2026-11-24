@@ -210,6 +210,21 @@ def _allowance_is_broad(row: dict[str, Any]) -> bool:
     return False
 
 
+def _risk_value(row: dict[str, Any]) -> float | None:
+    risk = row.get("value_at_risk_usd")
+    if risk is None or risk == "":
+        return None
+    try:
+        return float(risk)
+    except (TypeError, ValueError):
+        return None
+
+
+def _zero_stale_approval(row: dict[str, Any]) -> bool:
+    """An old unlimited approval with nothing left to move is not a theft."""
+    return _risk_value(row) == 0 and "stale" in (row.get("flags") or [])
+
+
 def _holds_meaningful_value(row: dict[str, Any]) -> bool:
     risk = row.get("value_at_risk_usd")
     try:
@@ -252,6 +267,8 @@ def classify_approval(row: dict[str, Any], positions: list[dict[str, Any]] | Non
     if book and book.get("active") and (in_use or permit2_in_use):
         return "normale", f"Contratto attivo di {book.get('protocol')} per un token che stai usando."
     if broad and not (book and book.get("active") and in_use):
+        if _zero_stale_approval(row):
+            return "normale", "permesso vecchio, saldo zero"
         if book and book.get("active"):
             return "rischiosa", f"Permesso ampio verso {book.get('protocol')}, ma quel protocollo non risulta in uso."
         return "rischiosa", "Permesso ampio verso un contratto che non è un protocollo che stai usando."
@@ -271,6 +288,9 @@ def annotate_risk(rows: list[dict[str, Any]], positions: list[dict[str, Any]] | 
         item["risk_class"] = kind
         item["risk_reason"] = reason
         item["severity"] = "danger" if kind == "rischiosa" else "ok"
+        if reason == "permesso vecchio, saldo zero":
+            item["hidden"] = True
+            item["severity"] = "ok"
         labelled.append(item)
     labelled.sort(key=lambda item: (0 if item.get("risk_class") == "rischiosa" else 1, item.get("symbol") or ""))
     return labelled
@@ -585,6 +605,17 @@ def risky_keys(rows: list[dict[str, Any]]) -> list[str]:
     return sorted({approval_key(row) for row in _risky_visible(rows) if approval_key(row).strip("|")})
 
 
+def approval_is_urgent(row: dict[str, Any], usd_min: float) -> bool:
+    """Urgent only for an unlimited unknown spender above the outflow threshold."""
+    if row.get("hidden") or row.get("risk_class") != "rischiosa":
+        return False
+    flags = row.get("flags") or []
+    if "unlimited" not in flags and row.get("allowance") != "unlimited":
+        return False
+    value = _risk_value(row)
+    return value is not None and value > float(usd_min)
+
+
 def _key_part(value: Any) -> str:
     text = str(value or "").replace("|", " ").strip().lower()
     return (text or "-")[:80]
@@ -629,8 +660,16 @@ def _four_part(keys: list[str]) -> list[str]:
     return sorted({key for key in keys if key.count("|") == 3 and all(len(part) <= 80 for part in key.split("|"))})
 
 
-def heavy_urgent_keys(approvals: list[dict[str, Any]], incidents: list[dict[str, Any]], outflows: list[dict[str, Any]]) -> list[str]:
-    keys = list(risky_keys(approvals))
+def heavy_urgent_keys(
+    approvals: list[dict[str, Any]],
+    incidents: list[dict[str, Any]],
+    outflows: list[dict[str, Any]],
+    usd_min: float | None = None,
+) -> list[str]:
+    if usd_min is None:
+        _, usd_min = _thresholds()
+    urgent_rows = [row for row in approvals if approval_is_urgent(row, float(usd_min))]
+    keys = list(risky_keys(urgent_rows))
     keys.extend(incident_urgent_key(row) for row in incidents if incident_is_urgent(row))
     keys.extend(outflow_urgent_key(row) for row in outflows)
     return _four_part(keys)
@@ -733,7 +772,13 @@ def security_summary(owner: str = "tutti") -> dict[str, Any]:
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
     visible_approvals = _risky_visible(approvals)
-    urgent = heavy_urgent_keys(visible_approvals, incidents, outflows)
+    _, default_min = _thresholds()
+    raw_min = report.get("usd_min")
+    try:
+        usd_min = float(default_min if raw_min is None else raw_min)
+    except (TypeError, ValueError):
+        usd_min = default_min
+    urgent = heavy_urgent_keys(approvals, incidents, outflows, usd_min)
     return {
         "approvals": len(visible_approvals),
         "hidden": sum(1 for row in approvals if row.get("hidden")),
@@ -808,10 +853,24 @@ def reclassify_cached_report(report: dict[str, Any]) -> dict[str, Any]:
     for incident in incidents:
         for owner in incident.get("owners") or []:
             alerts.append(_alert_from_incident(incident, str(owner)))
-    errors = [str(item) for item in (report.get("errors") or []) if str(item).strip()]
+    positions = _portfolio_positions()
+    holding = _chains_with_holdings(positions, db.list_evm(), db.list_balance_marks())
+    approvals = [_reclassify_approval(row, positions) for row in list(report.get("approvals") or [])]
+    alerts = [row for row in alerts if row.get("kind") != "approval"]
+    for row in approvals:
+        if row.get("hidden"):
+            continue
+        fresh = _alert_from_approval(row)
+        if fresh:
+            alerts.append(fresh)
+    errors = [
+        str(item) for item in (report.get("errors") or [])
+        if str(item).strip() and _error_counts(str(item), holding)
+    ]
     skipped = [item for item in errors if _is_skip_error(item)]
-    partial = bool(report.get("partial")) and bool(skipped)
+    partial = bool(skipped)
     cleaned = dict(report)
+    cleaned["approvals"] = approvals
     cleaned["incidents"] = incidents
     cleaned["alerts"] = alerts
     cleaned["partial"] = partial
@@ -825,13 +884,75 @@ def _is_skip_error(message: str) -> bool:
     return text.startswith("approvazioni su") or "tempo scaduto" in text or "saltat" in text
 
 
+def _chains_with_holdings(
+    positions: list[dict[str, Any]],
+    wallets: list[dict[str, Any]] | None = None,
+    marks: list[dict[str, Any]] | None = None,
+) -> set[str]:
+    """Chains where a saved wallet still has a position or a balance."""
+    saved = {str(row.get("address") or "").lower() for row in (wallets or [])}
+    found: set[str] = set()
+
+    def take(chain: str, address: str, amount: Any, usd: Any) -> None:
+        if chain not in WATCH_CHAINS:
+            return
+        if saved and address and address not in saved:
+            return
+        if not saved:
+            return
+        try:
+            holds = float(amount or 0) > 0 or float(usd or 0) > 0
+        except (TypeError, ValueError):
+            holds = False
+        if holds:
+            found.add(chain)
+
+    for row in positions:
+        take(str(row.get("chain") or ""), str(row.get("address") or row.get("wallet") or "").lower(), row.get("amount"), row.get("usd"))
+    for row in marks or []:
+        take(str(row.get("chain") or ""), str(row.get("wallet") or row.get("address") or "").lower(), row.get("amount"), row.get("usd"))
+    return found
+
+
+def _error_chain(message: str) -> str | None:
+    text = message.lower()
+    for chain in WATCH_CHAINS:
+        if f"su {chain}" in text:
+            return chain
+    return None
+
+
+def _error_counts(message: str, holding: set[str]) -> bool:
+    """A failed read of a chain with nothing on it does not belong in the report."""
+    chain = _error_chain(message)
+    if chain is None:
+        return True
+    return chain in holding
+
+
+def _reclassify_approval(row: dict[str, Any], positions: list[dict[str, Any]]) -> dict[str, Any]:
+    item = dict(row)
+    kind, reason = classify_approval(item, positions)
+    item["risk_class"] = kind
+    item["risk_reason"] = reason
+    item["severity"] = "danger" if kind == "rischiosa" else "ok"
+    if reason == "permesso vecchio, saldo zero":
+        item["hidden"] = True
+        item["severity"] = "ok"
+    return item
+
+
 def _cache_signature(report: dict[str, Any]) -> str:
     incidents = [
         (row.get("protocol"), row.get("name"), row.get("detail"), row.get("severity"))
         for row in report.get("incidents") or []
     ]
     alerts = [(row.get("kind"), row.get("title"), row.get("text"), row.get("level")) for row in report.get("alerts") or []]
-    return repr((incidents, alerts, bool(report.get("partial")), report.get("note")))
+    approvals = [
+        (row.get("symbol"), row.get("severity"), bool(row.get("hidden")), row.get("risk_reason"), row.get("risk_class"))
+        for row in report.get("approvals") or []
+    ]
+    return repr((incidents, alerts, approvals, list(report.get("errors") or []), bool(report.get("partial")), report.get("note")))
 
 
 def cached_report() -> dict[str, Any] | None:
@@ -930,16 +1051,17 @@ async def _head_block(chain: str) -> int:
     return int(raw, 16)
 
 
-async def _approval_logs(chain: str, wallet: str) -> tuple[list[dict[str, Any]], bool]:
+async def _approval_logs(chain: str, wallet: str, chunk_blocks: int = CHUNK_BLOCKS) -> tuple[list[dict[str, Any]], bool]:
     chain_id = WATCH_CHAINS[chain]["id"]
     head = await _head_block(chain)
     partial = False
     found: list[dict[str, Any]] = []
+    width = max(1, int(chunk_blocks))
     for topic in (APPROVAL_TOPIC, APPROVAL_FOR_ALL_TOPIC):
         cursor = head
         reached_start = False
         for _ in range(MAX_CHUNKS):
-            start = max(0, cursor - CHUNK_BLOCKS)
+            start = max(0, cursor - width)
             try:
                 found.extend(await _routescan_logs(chain_id, topic, wallet, start, cursor))
             except Exception as exc:  # noqa: BLE001
@@ -952,6 +1074,31 @@ async def _approval_logs(chain: str, wallet: str) -> tuple[list[dict[str, Any]],
             cursor = start - 1
         del reached_start
     return found, partial
+
+
+async def _read_approval_logs(chain: str, wallet: str) -> tuple[list[dict[str, Any]], str | None]:
+    """Logs, or a short reason after one shorter retry. None means the read finished."""
+    async def once(blocks: int) -> tuple[list[dict[str, Any]], bool]:
+        return await asyncio.wait_for(_approval_logs(chain, wallet, blocks), timeout=CHAIN_TIMEOUT)
+
+    timed_out = False
+    try:
+        logs, failed = await once(CHUNK_BLOCKS)
+    except asyncio.TimeoutError:
+        logs, failed, timed_out = [], True, True
+    except Exception:
+        logs, failed = [], True
+    if not failed:
+        return logs, None
+    try:
+        logs, failed = await once(max(10_000, CHUNK_BLOCKS // 4))
+    except asyncio.TimeoutError:
+        return [], "tempo scaduto"
+    except Exception:
+        return [], "la lettura dei log si è interrotta"
+    if failed:
+        return [], "tempo scaduto" if timed_out else "la lettura dei log si è interrotta"
+    return logs, None
 
 
 async def _code_empty(chain: str, spender: str) -> bool:
@@ -1150,26 +1297,22 @@ async def scan_and_store() -> dict[str, Any]:
     errors: list[str] = []
     partial = False
     spender_bad: dict[str, bool] = {}
+    holding = _chains_with_holdings(positions, wallets, db.list_balance_marks())
     for wallet in wallets:
         address = wallet["address"]
         for chain in WATCH_CHAINS:
-            try:
-                logs, chunk_partial = await asyncio.wait_for(
-                    _approval_logs(chain, address),
-                    timeout=CHAIN_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                errors.append(f"Approvazioni su {chain} non lette: tempo scaduto.")
-                partial = True
+            if chain not in holding:
                 continue
+            try:
+                logs, failure = await _read_approval_logs(chain, address)
             except Exception as exc:  # noqa: BLE001
                 log.info("Approvazioni %s non lette (%s).", chain, type(exc).__name__)
-                errors.append(f"Approvazioni su {chain} non lette.")
-                partial = True
+                logs, failure = [], "la lettura dei log si è interrotta"
+            if failure:
+                if chain in holding:
+                    partial = True
+                    errors.append(f"Approvazioni su {chain} non lette: {failure}.")
                 continue
-            if chunk_partial:
-                partial = True
-                errors.append(f"Approvazioni su {chain} non lette: la lettura dei log si è interrotta.")
             for item in latest_approvals(logs):
                 current = await _allowance(chain, item["token"], address, item["spender"], item["kind"])
                 if current == 0:
@@ -1332,7 +1475,13 @@ def public_report(owner: str = "tutti", *, from_cache: bool | None = None) -> di
     if owner != "tutti":
         incidents = [row for row in incidents if owner in (row.get("owners") or [])]
     visible_approvals = _risky_visible(approvals)
-    urgent = heavy_urgent_keys(visible_approvals, incidents, outflows)
+    _, default_min = _thresholds()
+    raw_min = report.get("usd_min")
+    try:
+        usd_min = float(default_min if raw_min is None else raw_min)
+    except (TypeError, ValueError):
+        usd_min = default_min
+    urgent = heavy_urgent_keys(approvals, incidents, outflows, usd_min)
     summary = {
         "approvals": len(visible_approvals),
         "hidden": sum(1 for row in approvals if row.get("hidden")),

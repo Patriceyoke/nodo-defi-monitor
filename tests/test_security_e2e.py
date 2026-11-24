@@ -273,9 +273,13 @@ def test_a_chain_that_times_out_is_partial_with_a_reason(tmp_path, monkeypatch):
 
     db = _isolate(monkeypatch, tmp_path)
     db.add_evm("Casa", WALLET, "io")
+    db.cache_set("portfolio", {"positions": [{
+        "address": WALLET, "chain": "ethereum", "protocol": "Aave", "asset": "USDC",
+        "amount": 1, "usd": 10, "owner": "io",
+    }]})
     monkeypatch.setattr(security, "CHAIN_TIMEOUT", 0.05)
 
-    async def slow_logs(chain, address):
+    async def slow_logs(chain, address, chunk_blocks=400_000):
         await asyncio.sleep(1)
         return [], False
 
@@ -292,4 +296,5 @@ def test_a_chain_that_times_out_is_partial_with_a_reason(tmp_path, monkeypatch):
     assert report["from_cache"] is False
     assert any("tempo scaduto" in item for item in report["errors"])
     assert "tempo scaduto" in report["note"]
+    assert all("polygon" not in item and "arbitrum" not in item and "base" not in item for item in report["errors"])
     assert db.list_evm()[0]["address"] == WALLET
