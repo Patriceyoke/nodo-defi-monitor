@@ -495,7 +495,6 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
     if with_cards:
         cards = logic.list_cards()
         rows = []
-        fields = []
         shown = {
             (line.get("id"), line.get("currency")): line.get("display") or ""
             for line in (spese.get("card_lines") or [])
@@ -507,24 +506,11 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
                 f'<span class="sub">{esc(card["kind"])} · {esc(card["currency"])}</span></span>'
                 f'<strong>{esc(current)}</strong></a>'
             )
-            cid = esc(card["id"])
-            fields.append(
-                f'<h3>{esc(card["name"])} ({esc(card["currency"])})</h3>'
-                f'<label>Apertura<input name="opening_{cid}" inputmode="decimal"></label>'
-                f'<label>Entrate<input name="money_in_{cid}" inputmode="decimal"></label>'
-                f'<label>Uscite<input name="money_out_{cid}" inputmode="decimal"></label>'
-                f'<label>Chiusura<input name="closing_{cid}" inputmode="decimal"></label>'
-            )
         figure = _currency_bars(logic.card_chart(periodo))
         period_lines = _card_lines_html(spese.get("card_lines") or []) or _card_lines_html(header_lines)
         cards_block = (
             '<div class="spese-cards"><h2>Carte</h2>'
-            f'{period_lines}{figure}{_out_charts_html(periodo)}{"".join(rows)}'
-            '<h2>Registra il mese</h2>'
-            '<form method="post" action="/carte/mese">'
-            '<label>Mese<input name="month" placeholder="2026-11" required></label>'
-            + "".join(fields)
-            + '<button type="submit">Registra il mese</button></form>'
+            f'{period_lines}{figure}{_out_charts_html(periodo)}{_analysis_html(periodo)}{"".join(rows)}'
             '<h2>Nuova carta</h2>'
             '<form method="post" action="/carte/nuova">'
             '<label>Nome<input name="name" required></label>'
@@ -568,6 +554,75 @@ def _out_charts_html(periodo: str) -> str:
             )
         if rows:
             blocks.append(f'<h3>Uscite {esc(chart["currency"])}</h3>{"".join(rows)}')
+    return "".join(blocks)
+
+
+def _amount_bars(title: str, rows: list[dict], label_key: str, amount_key: str, text_key: str) -> str:
+    if not rows:
+        return ""
+    peak = max(float(row.get(amount_key) or 0) for row in rows) or 1
+    lines = []
+    for row in rows:
+        width = max(4, float(row.get(amount_key) or 0) / peak * 100)
+        lines.append(
+            '<div class="bar-row">'
+            f'<span>{esc(row.get(label_key) or "")}</span>'
+            f'<span class="bar"><span style="width:{width:.1f}%;background:#1e6b45"></span></span>'
+            f'<strong>{esc(row.get(text_key) or "")}</strong>'
+            "</div>"
+        )
+    return f"<h3>{esc(title)}</h3>{''.join(lines)}"
+
+
+def _analysis_html(periodo: str) -> str:
+    blocks = []
+    for block in logic.card_spend_analysis(periodo):
+        currency = block["currency"]
+        parts = []
+        months = block.get("months") or []
+        if months:
+            parts.append(_amount_bars(
+                f"Andamento {currency}",
+                [{"label": item["month"][5:], "amount": item["amount"], "text": item["display"]} for item in months],
+                "label", "amount", "text",
+            ))
+        cards = block.get("cards") or []
+        if len(cards) >= 1:
+            parts.append(_amount_bars(
+                f"Per carta {currency}",
+                [{"label": item["name"], "amount": item["amount"], "text": f'{item["percent"]}% · {item["display"]}'} for item in cards],
+                "label", "amount", "text",
+            ))
+            averages = "".join(
+                f'<p class="date">{esc(item["name"])} · {int(item["count"])} movimenti · media {esc(item["average"])}</p>'
+                for item in cards
+            )
+            parts.append(f"<h3>Movimenti {esc(currency)}</h3>{averages}")
+        merchants = block.get("merchants") or []
+        if merchants:
+            parts.append(_amount_bars(
+                f"Esercenti {currency}",
+                [{
+                    "label": f'{item["name"]} · {int(item["count"])}',
+                    "amount": item["amount"],
+                    "text": item["display"],
+                } for item in merchants],
+                "label", "amount", "text",
+            ))
+        changes = block.get("changes") or []
+        if changes:
+            lines = []
+            for item in changes:
+                if item["direction"] == "up":
+                    sign = "+"
+                elif item["direction"] == "down":
+                    sign = "−"
+                else:
+                    sign = ""
+                lines.append(f'<p class="date">{esc(item["category"])} · {sign}{int(item["percent"])}%</p>')
+            parts.append(f"<h3>Rispetto al mese prima · {esc(currency)}</h3>{''.join(lines)}")
+        if parts:
+            blocks.append("".join(parts))
     return "".join(blocks)
 
 
@@ -617,15 +672,6 @@ def page_card(card: dict) -> str:
     body = (
         f'<article class="card"><h1>{esc(card["name"])}</h1>'
         f'<p class="lead">{esc(card["kind"])} · {esc(card["currency"])}</p>{history}'
-        '<h2>Registra il mese</h2>'
-        f'<form method="post" action="/carte/{esc(card["id"])}/mese">'
-        '<label>Mese<input name="month" required></label>'
-        f'<label>Apertura ({esc(card["currency"])})<input name="opening" inputmode="decimal"></label>'
-        f'<label>Entrate ({esc(card["currency"])})<input name="money_in" inputmode="decimal"></label>'
-        f'<label>Uscite ({esc(card["currency"])})<input name="money_out" inputmode="decimal"></label>'
-        f'<label>Chiusura ({esc(card["currency"])})<input name="closing" inputmode="decimal"></label>'
-        '<label>Nota<input name="note"></label>'
-        '<button type="submit">Salva</button></form>'
         '<h2>Modifica</h2>'
         f'<form method="post" action="/carte/{esc(card["id"])}/modifica">'
         f'<label>Nome<input name="name" value="{esc(card["name"])}" required></label>'

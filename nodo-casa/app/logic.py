@@ -2298,10 +2298,45 @@ def card_chart(periodo: str = "anno") -> list[dict]:
 
 
 def _is_chart_out(row: dict) -> bool:
+    if str(row.get("section") or "").lower() == "pending":
+        return False
     if not _is_spending_tx(row):
         return False
     merchant = str(row.get("merchant") or "").lower()
     return "saldo precedente" not in merchant and "previous balance" not in merchant
+
+
+def _shift_month(year: int, month: int, steps: int) -> tuple[int, int]:
+    index = year * 12 + (month - 1) + steps
+    return index // 12, index % 12 + 1
+
+
+def _load_chart_rows() -> list[dict]:
+    """Spending rows only. Last digits and account ids are not loaded."""
+    with _db_lock() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.tx_date, t.month, t.merchant, t.direction, t.statement_amount,
+                   t.statement_currency, t.section, t.category, c.name AS card_name
+            FROM card_tx t JOIN cards c ON c.id = t.card_id
+            """
+        ).fetchall()
+    kept = []
+    for row in rows:
+        item = dict(row)
+        if not _is_chart_out(item):
+            continue
+        amount = _parse_amount(item.get("statement_amount")) or Decimal("0")
+        if amount <= 0:
+            continue
+        stamp = str(item.get("tx_date") or "") or str(item.get("month") or "")
+        item["stamp"] = stamp
+        item["ym"] = stamp[:7]
+        item["ccy"] = str(item.get("statement_currency") or "THB").upper()
+        item["value"] = amount
+        item["cat"] = _stored_category(item.get("category")) or merchant_category(str(item.get("merchant") or ""))
+        kept.append(item)
+    return kept
 
 
 def _percent_bars(amounts: dict[str, Decimal]) -> list[dict]:
@@ -2385,3 +2420,109 @@ def card_out_merchants(periodo: str, currency: str, category: str) -> list[dict]
         slot = grouped.setdefault(name.lower(), {"name": name, "count": 0})
         slot["count"] += 1
     return sorted(grouped.values(), key=lambda item: (-item["count"], item["name"].lower()))
+
+
+def card_spend_analysis(periodo: str) -> list[dict]:
+    """Per-currency card detail for the selected period. Empty currencies are omitted."""
+    if periodo not in ("mese", "anno"):
+        raise Invalid("periodo")
+    today = today_bkk()
+    loaded = _load_chart_rows()
+    rows = [row for row in loaded if _in_period(row["stamp"], periodo, today)]
+    if periodo == "anno":
+        year_rows = rows
+        focus = max((row["ym"] for row in year_rows), default="")
+    else:
+        year, month = previous_month(today)
+        focus = f"{year:04d}-{month:02d}"
+    if focus:
+        prev = "{:04d}-{:02d}".format(*_shift_month(int(focus[:4]), int(focus[5:7]), -1))
+    else:
+        prev = ""
+    by_currency: dict[str, list] = {}
+    for row in rows:
+        by_currency.setdefault(row["ccy"], []).append(row)
+    blocks = []
+    for currency in ("THB", "USD", "EUR"):
+        group = by_currency.get(currency) or []
+        if not group:
+            continue
+        card_amount: dict[str, Decimal] = {}
+        card_count: dict[str, int] = {}
+        for row in group:
+            name = str(row.get("card_name") or "")
+            card_amount[name] = card_amount.get(name, Decimal("0")) + row["value"]
+            card_count[name] = card_count.get(name, 0) + 1
+        total = sum(card_amount.values(), Decimal("0"))
+        cards = []
+        for name, amount in sorted(card_amount.items(), key=lambda item: (-item[1], item[0])):
+            count = card_count[name]
+            average = amount / count if count else Decimal("0")
+            cards.append({
+                "name": name,
+                "amount": _amount_text(amount),
+                "display": _native_label(_amount_text(amount), currency),
+                "percent": int((amount / total * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if total else 0,
+                "count": count,
+                "average": _native_label(_amount_text(average), currency),
+            })
+        merchants: dict[str, dict] = {}
+        for row in group:
+            name = str(row.get("merchant") or "").strip() or "Altro"
+            slot = merchants.setdefault(name.lower(), {"name": name, "count": 0, "amount": Decimal("0")})
+            slot["count"] += 1
+            slot["amount"] += row["value"]
+        ranked = sorted(merchants.values(), key=lambda item: (-item["amount"], -item["count"], item["name"].lower()))[:8]
+        merchant_rows = [
+            {
+                "name": item["name"],
+                "count": item["count"],
+                "amount": _amount_text(item["amount"]),
+                "display": _native_label(_amount_text(item["amount"]), currency),
+            }
+            for item in ranked
+        ]
+
+        def _cats(ym: str) -> dict[str, Decimal]:
+            found: dict[str, Decimal] = {}
+            for row in loaded:
+                if row["ccy"] != currency or row["ym"] != ym:
+                    continue
+                found[row["cat"]] = found.get(row["cat"], Decimal("0")) + row["value"]
+            return found
+
+        changes = []
+        now_cats = _cats(focus) if focus else {}
+        prev_cats = _cats(prev) if prev else {}
+        if now_cats and prev_cats:
+            for cat in sorted(set(now_cats) & set(prev_cats)):
+                before = prev_cats[cat]
+                if before <= 0:
+                    continue
+                delta = (now_cats[cat] - before) / before * Decimal(100)
+                pct = int(delta.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                if pct > 0:
+                    direction = "up"
+                elif pct < 0:
+                    direction = "down"
+                else:
+                    direction = "flat"
+                changes.append({"category": cat, "percent": abs(pct), "direction": direction})
+        block = {"currency": currency, "cards": cards, "merchants": merchant_rows}
+        if changes:
+            block["changes"] = changes
+        if periodo == "anno":
+            months: dict[str, Decimal] = {}
+            for row in group:
+                months[row["ym"]] = months.get(row["ym"], Decimal("0")) + row["value"]
+            if len(months) >= 1:
+                block["months"] = [
+                    {
+                        "month": key,
+                        "amount": _amount_text(amount),
+                        "display": _native_label(_amount_text(amount), currency),
+                    }
+                    for key, amount in sorted(months.items())
+                ]
+        blocks.append(block)
+    return blocks

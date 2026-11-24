@@ -28,7 +28,7 @@ def test_seed_ids_survive_and_are_not_duplicated(casa):
     assert names.count("Ether.fi") == 0
     assert names.count("Bangkok Bank") == 1
     page = server.page_cards()
-    assert "Registra il mese" in page
+    assert "Registra il mese" not in page
     assert "Ether.fi" not in page
 
 
@@ -153,7 +153,8 @@ def test_blank_fields_keep_imported_months_and_currencies_stay_apart(casa):
     assert "40 USD" in page
     assert "52.5" not in page
     assert 'name="amount_' not in page
-    assert "Apertura" in page and "Chiusura" in page
+    assert "Registra il mese" not in page
+    assert 'name="opening_' not in page
     nav = page.split("<nav>", 1)[1].split("</nav>", 1)[0]
     assert "Carte" not in nav
     assert "Spese" in nav

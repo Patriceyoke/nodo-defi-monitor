@@ -93,7 +93,8 @@ def test_charts_stay_in_one_currency_and_fold_small_shares(casa):
     assert "Casa / bollette" not in page or "Uscite" in page
     hidden = server.page_spese("mese", False)
     assert "Uscite USD" not in hidden
-    assert "Apertura" in page and "Chiusura" in page
+    assert "Registra il mese" not in page
+    assert 'name="opening_' not in page
     merchants = logic.card_out_merchants("mese", "USD", "Abbonamenti")
     assert merchants == [{"name": "Netflix", "count": 1}]
     detail = server.page_card_merchants("mese", "USD", "Abbonamenti")
@@ -162,7 +163,10 @@ def test_eight_bars_and_a_saved_category_survives_refresh(casa):
     again = conn.execute("SELECT category FROM card_tx WHERE merchant = 'Grab'").fetchone()[0]
     conn.close()
     assert again == "Salute"
-    assert "Apertura" in server.page_spese("mese", True)
+    page = server.page_spese("mese", True)
+    assert "Registra il mese" not in page
+    card_page = server.page_card(ether)
+    assert "Registra il mese" not in card_page
 
 
 def test_january_opens_december_and_the_merchant_list_follows(casa, monkeypatch):
@@ -201,3 +205,100 @@ def test_january_opens_december_and_the_merchant_list_follows(casa, monkeypatch)
     detail = server.page_card_merchants("mese", "USD", "Trasporti")
     assert "Grab dicembre" in detail
     assert "Netflix gennaio" not in detail
+
+
+def test_analysis_keeps_currencies_apart_and_drops_excluded_rows(casa):
+    logic, server = casa
+    _clear(logic)
+    year, month = logic.previous_month()
+    prev_year, prev_month = logic._shift_month(year, month, -1)
+    closed = f"{year:04d}-{month:02d}-12"
+    earlier = f"{prev_year:04d}-{prev_month:02d}-12"
+    closed_month = closed[:7]
+    earlier_month = earlier[:7]
+    logic.import_items({"cards": [
+        {
+            "external_id": "kast",
+            "name": "Kast Finance",
+            "type": "debito",
+            "currency": "USD",
+            "month": earlier_month,
+            "transactions": [_tx("Grab", 10, "USD", day=earlier)],
+        },
+        {
+            "external_id": "kast",
+            "name": "Kast Finance",
+            "type": "debito",
+            "currency": "USD",
+            "month": closed_month,
+            "transactions": [
+                _tx("Grab", 20, "USD", day=closed, fx=32),
+                _tx("Grab", 10, "USD", day=closed),
+                _tx("Received salary", 40, "USD", direction="in", day=closed),
+                _tx("KAST cash reward", 3, "USD", day=closed),
+                _tx("Pagamento del saldo precedente", 8, "USD", day=closed),
+                _tx("Shop pending", 7, "USD", section="pending", day=closed),
+            ],
+        },
+        {
+            "external_id": "etherfi",
+            "name": "Ether.fi",
+            "type": "debito",
+            "currency": "USD",
+            "month": closed_month,
+            "transactions": [_tx("Netflix", 10, "USD", day=closed)],
+        },
+        {
+            "external_id": "bbl-visa",
+            "name": "Bangkok Bank",
+            "type": "credito",
+            "currency": "THB",
+            "month": closed_month,
+            "transactions": [_tx("Lotus", 40, "THB", day=closed)],
+        },
+    ]})
+    opened = {block["currency"]: block for block in logic.card_spend_analysis("mese")}
+    assert set(opened) == {"USD", "THB"}
+    usd_cards = {row["name"]: row for row in opened["USD"]["cards"]}
+    assert usd_cards["Kast Finance"]["count"] == 2
+    assert usd_cards["Kast Finance"]["display"] == "30 USD"
+    assert usd_cards["Ether.fi"]["display"] == "10 USD"
+    assert "months" not in opened["USD"]
+    merchants = {row["name"]: row for row in opened["USD"]["merchants"]}
+    assert merchants["Grab"]["count"] == 2
+    assert merchants["Grab"]["display"] == "30 USD"
+    assert "Received salary" not in merchants
+    assert "Shop pending" not in merchants
+    change = {row["category"]: row for row in opened["USD"]["changes"]}
+    assert change["Trasporti"]["direction"] == "up"
+    assert change["Trasporti"]["percent"] == 200
+    assert opened["THB"]["cards"][0]["display"].startswith("฿")
+    year_view = {block["currency"]: block for block in logic.card_spend_analysis("anno")}
+    assert "months" in year_view["USD"]
+    assert len(year_view["USD"]["months"]) == 2
+    page = server.page_spese("mese", True)
+    assert "Registra il mese" not in page
+    assert "Per carta USD" in page
+    assert "Esercenti USD" in page
+    assert "Andamento USD" not in page
+    assert "••••" not in page.split("Esercenti USD", 1)[1].split("Per carta THB", 1)[0]
+    hidden = server.page_spese("mese", False)
+    assert "Per carta USD" not in hidden
+    assert "Casa / bollette" in hidden or "Categorie" in hidden
+    saved = [
+        (card["external_id"], row["month"], row["opening"], row["closing"])
+        for card in logic.list_cards()
+        for row in card["months"]
+    ]
+    page_again = server.page_spese("mese", True)
+    assert "Registra il mese" not in page_again
+    after = [
+        (card["external_id"], row["month"], row["opening"], row["closing"])
+        for card in logic.list_cards()
+        for row in card["months"]
+    ]
+    assert after == saved
+    assert {card["external_id"] for card in logic.list_cards()} == {"kast", "etherfi", "bbl-visa"}
+    _clear(logic)
+    assert logic.card_spend_analysis("mese") == []
+    assert "Esercenti USD" not in server.page_spese("mese", True)
