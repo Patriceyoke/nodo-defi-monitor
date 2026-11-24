@@ -227,13 +227,71 @@ a.settings {
   text-decoration: none;
 }
 
+.banner.rincaro, .badge.rincaro {
+  background: #8a5a12;
+  color: #fffdf9;
+  font-weight: 750;
+}
+
+.banner.rincaro {
+  padding: 0.85rem 1rem;
+  border-radius: 16px;
+  font-size: 1.15rem;
+}
+
+.badge.rincaro {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  margin-left: 0.4rem;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.95rem;
+}
+
+.toggle { display: flex; gap: 0.8rem; margin: 0.6rem 0; }
+.toggle a { color: #1c1915; font-weight: 750; text-decoration: none; min-height: 2.5rem; }
+.toggle a.on { color: #1e6b45; text-decoration: underline; }
+
+.donut { width: 9rem; height: 9rem; display: block; margin: 0.6rem auto; }
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 8.5rem 1fr auto;
+  gap: 0.55rem;
+  align-items: center;
+  margin: 0.45rem 0;
+  font-size: 1.05rem;
+}
+
+.bar { display: block; background: rgba(28, 25, 21, 0.08); border-radius: 999px; height: 1.1rem; }
+.bar span { display: block; height: 100%; border-radius: 999px; }
+
+.stacks { display: flex; align-items: flex-end; gap: 0.45rem; min-height: 8rem; margin: 0.8rem 0; }
+.stack { display: flex; flex-direction: column; align-items: center; width: 2.2rem; }
+.stack-bar { display: flex; flex-direction: column-reverse; width: 1.4rem; height: 7rem; background: rgba(28, 25, 21, 0.06); }
+.stack-bar span { display: block; width: 100%; }
+
+label { display: block; font-weight: 750; margin: 0.8rem 0 0.3rem; }
+input, select {
+  width: 100%;
+  min-height: 3rem;
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  border-radius: 12px;
+  border: 1px solid rgba(28, 25, 21, 0.25);
+  background: #fffdf9;
+  color: #1c1915;
+}
+pre { white-space: pre-wrap; font-size: 0.95rem; }
+
 nav {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: #fffdf9;
   border-top: 1px solid rgba(28, 25, 21, 0.12);
   box-shadow: 0 -6px 20px rgba(28, 25, 21, 0.04);

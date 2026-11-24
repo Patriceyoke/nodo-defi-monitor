@@ -9,7 +9,7 @@ import re
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import logic
 
@@ -59,6 +59,21 @@ ICONS = {
         f'<path {_STROKE} d="M8 15.2h8M9.2 15.2v3.1M14.8 15.2v3.1M8.4 18.3h7.2"/>'
         "</svg>"
     ),
+    "carte": (
+        '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        f'<rect {_STROKE} x="3" y="6" width="18" height="12" rx="2"/>'
+        f'<path {_STROKE} d="M3 10h18"/>'
+        "</svg>"
+    ),
+}
+CHART_COLORS = {
+    "bollette": "#1e6b45",
+    "condominio": "#1d4e89",
+    "abbonamenti": "#6b3fa0",
+    "garage": "#0e6b6b",
+    "documenti": "#8a5a12",
+    "altro": "#5c5346",
+    "carte": "#7a2e0e",
 }
 
 
@@ -117,9 +132,56 @@ def count_pill(red: int) -> str:
     return pill(f"{red} in rosso")
 
 
-def page_home() -> str:
+def _rincaro_badge(view: dict) -> str:
+    alert = view.get("rincaro") or {}
+    if not alert:
+        return ""
+    return f'<span class="badge rincaro">{esc(alert.get("badge") or "")}</span>'
+
+
+def donut_svg(slices: list[dict]) -> str:
+    if not slices:
+        return ""
+    radius = 54
+    circ = 2 * 3.14159265 * radius
+    offset = 0.0
+    total = sum(float(item["amount_thb"]) for item in slices) or 1
+    circles = []
+    for item in slices:
+        length = float(item["amount_thb"]) / total * circ
+        color = CHART_COLORS.get(item["id"], "#1e6b45")
+        circles.append(
+            f'<circle cx="72" cy="72" r="{radius}" fill="none" stroke="{color}" stroke-width="24" '
+            f'stroke-dasharray="{length:.2f} {circ - length:.2f}" stroke-dashoffset="{-offset:.2f}" '
+            'transform="rotate(-90 72 72)"/>'
+        )
+        offset += length
+    return f'<svg class="donut" viewBox="0 0 144 144" role="img">{"".join(circles)}</svg>'
+
+
+def bar_rows(slices: list[dict]) -> str:
+    if not slices:
+        return ""
+    peak = max(float(item["amount_thb"]) for item in slices) or 1
+    rows = []
+    for item in slices:
+        width = max(4, float(item["amount_thb"]) / peak * 100)
+        color = CHART_COLORS.get(item["id"], "#1e6b45")
+        rows.append(
+            "<div class=\"bar-row\">"
+            f"<span>{esc(item['label'])}</span>"
+            f"<span class=\"bar\"><span style=\"width:{width:.1f}%;background:{color}\"></span></span>"
+            f"<strong>{esc(logic.format_baht(item['amount_thb']))}</strong>"
+            "</div>"
+        )
+    return "".join(rows)
+
+
+def page_home(periodo: str = "mese", with_cards: bool = False) -> str:
     data = logic.home()
     parts = []
+    for alert in data.get("rincari") or []:
+        parts.append(f'<p class="banner rincaro">{esc(alert["text"])}</p>')
     if data["empty"]:
         parts.append(
             '<div class="empty-hero">'
@@ -146,6 +208,36 @@ def page_home() -> str:
                 + f'<p class="pills">{pill(word, tone)}{count_pill(section["red"])}</p>'
             )
         parts.append(f'<a class="tile" href="/{section["id"]}">{inner}</a>')
+    parts.append(
+        f'<a class="tile" href="/carte">{tile_head("carte", "Carte")}'
+        f'<p class="date">{esc(logic.format_baht(data["carte"]["month_thb"]) or "—")}</p></a>'
+    )
+    spese = data["spese_con_carte" if with_cards else "spese"] if periodo != "anno" else (
+        data["spese_anno_con_carte"] if with_cards else data["spese_anno"]
+    )
+    carte_flag = "1" if with_cards else "0"
+    other = "anno" if periodo != "anno" else "mese"
+    other_label = "Quest'anno" if other == "anno" else "Questo mese"
+    current_label = "Quest'anno" if periodo == "anno" else "Questo mese"
+    card_other = "0" if with_cards else "1"
+    card_label = "Senza carte" if with_cards else "Con carte"
+    chart = ""
+    if spese.get("empty"):
+        chart = '<p class="empty">Ancora nessun pagamento con importo.</p>'
+    else:
+        chart = donut_svg(spese["slices"]) + bar_rows(spese["slices"])
+        chart += f'<p class="lead">Totale {esc(logic.format_baht(spese["total_thb"]))}</p>'
+    parts.append(
+        '<section class="card" id="spese"><h2>Spese</h2>'
+        '<p class="toggle">'
+        f'<a class="{"on" if periodo != "anno" else ""}" href="/?spese=mese&amp;carte={carte_flag}#spese">Questo mese</a>'
+        f'<a class="{"on" if periodo == "anno" else ""}" href="/?spese=anno&amp;carte={carte_flag}#spese">Quest\'anno</a>'
+        "</p>"
+        '<p class="toggle">'
+        f'<a href="/?spese={esc(periodo)}&amp;carte={card_other}#spese">{esc(card_label)}</a>'
+        "</p>"
+        f"{chart}</section>"
+    )
     if not data["empty"]:
         parts.append('<h2 class="strip">Prossimi 30 giorni</h2>')
         if not data["upcoming"]:
@@ -231,7 +323,7 @@ def page_section(section: str) -> str:
             f'<span class="row-copy"><strong>{esc(view["label"])}</strong>'
             f'{("<span class=\"sub\">" + esc(" · ".join(bits)) + "</span>") if bits else ""}'
             f"{extra}"
-            f'{pill(status, color)}</span></a>'
+            f'{pill(status, color)}{_rincaro_badge(view)}</span></a>'
         )
 
     rows = [f"<h1>{esc(name)}</h1>"]
@@ -329,9 +421,10 @@ def page_item(view: dict) -> str:
         '<article class="card">'
         f'<span class="tile-top"><span class="mark">{ICONS[view["section"]]}</span>'
         f"<h1>{esc(view['label'])}</h1></span>"
-        f'<p class="pills">{pill(status, color)}</p>'
-        f"<dl>{rows}</dl>"
-        f"{history}</article>{action}"
+        f'<p class="pills">{pill(status, color)}{_rincaro_badge(view)}</p>'
+        + (f'<p class="banner rincaro">{esc(view["rincaro"]["text"])}</p>' if view.get("rincaro") else "")
+        + f"<dl>{rows}</dl>"
+        + f"{history}</article>{action}"
     )
     return layout(view["label"], body, view["section"])
 
@@ -354,8 +447,110 @@ def page_confirm(view: dict) -> str:
 
 def page_settings() -> str:
     text = "Token agente presente" if logic.token_present() else "Token agente assente"
-    body = f'<article class="card"><h1>Impostazioni</h1><p class="lead">{text}</p></article>'
+    rates = logic.get_rates()
+    body = (
+        f'<article class="card"><h1>Impostazioni</h1><p class="lead">{text}</p>'
+        '<form method="post" action="/impostazioni/cambi">'
+        f'<label>Cambio dollaro in baht<input name="rate_usd" inputmode="decimal" value="{esc(rates["rate_usd"])}"></label>'
+        f'<label>Cambio euro in baht<input name="rate_eur" inputmode="decimal" value="{esc(rates["rate_eur"])}"></label>'
+        "<button type=\"submit\">Salva cambi</button></form>"
+        '<p><a href="/schema">Schema di importazione</a></p></article>'
+    )
     return layout("Impostazioni", body, "")
+
+
+def page_schema() -> str:
+    raw = json.dumps(logic.IMPORT_EXAMPLE, ensure_ascii=False, indent=2)
+    body = f'<article class="card"><h1>Schema di importazione</h1><pre>{esc(raw)}</pre></article>'
+    return layout("Schema", body, "")
+
+
+def page_cards() -> str:
+    cards = logic.list_cards()
+    summary = logic.cards_summary()
+    chart = logic.card_chart()
+    bars = []
+    peak = 0.0
+    for month in chart:
+        peak = max(peak, float(month["total_thb"] or 0))
+    peak = peak or 1
+    for month in chart:
+        height = float(month["total_thb"] or 0) / peak * 100
+        segs = []
+        total = float(month["total_thb"] or 0) or 1
+        for index, part in enumerate(month["parts"]):
+            share = float(part["amount_thb"]) / total * height
+            color = list(CHART_COLORS.values())[index % len(CHART_COLORS)]
+            segs.append(f'<span style="height:{share:.1f}%;background:{color}"></span>')
+        bars.append(
+            f'<div class="stack"><div class="stack-bar">{"".join(segs)}</div><span>{esc(month["month"][5:])}</span></div>'
+        )
+    rows = []
+    fields = []
+    for card in cards:
+        current = ""
+        today = logic.today_bkk()
+        key = f"{today.year:04d}-{today.month:02d}"
+        for month in card["months"]:
+            if month["month"] == key:
+                current = logic.format_baht(month["amount_thb"])
+        rows.append(
+            f'<a class="row" href="/carte/{esc(card["id"])}"><span class="row-copy"><strong>{esc(card["name"])}</strong>'
+            f'<span class="sub">{esc(card["kind"])} · {esc(card["currency"])}</span></span>'
+            f'<strong>{esc(current)}</strong></a>'
+        )
+        fields.append(
+            f'<label>{esc(card["name"])} ({esc(card["currency"])})'
+            f'<input name="amount_{esc(card["id"])}" inputmode="decimal"></label>'
+        )
+    body = (
+        '<article class="card"><h1>Carte</h1>'
+        f'<p class="date">{esc(logic.format_baht(summary["month_thb"]) or "—")}</p>'
+        f'<p class="lead">Anno {esc(logic.format_baht(summary["year_thb"]))}</p>'
+        f'<div class="stacks">{"".join(bars)}</div>'
+        f'{"".join(rows)}'
+        '<h2>Registra il mese</h2>'
+        '<form method="post" action="/carte/mese">'
+        '<label>Mese<input name="month" placeholder="2026-11" required></label>'
+        + "".join(fields)
+        + '<label>Cambio dollaro<input name="rate_usd" inputmode="decimal"></label>'
+        '<label>Cambio euro<input name="rate_eur" inputmode="decimal"></label>'
+        '<button type="submit">Registra il mese</button></form>'
+        '<h2>Nuova carta</h2>'
+        '<form method="post" action="/carte/nuova">'
+        '<label>Nome<input name="name" required></label>'
+        '<label>Tipo<select name="kind"><option value="credito">credito</option><option value="debito">debito</option></select></label>'
+        '<label>Valuta<select name="currency"><option>THB</option><option>USD</option><option>EUR</option></select></label>'
+        '<button type="submit">Aggiungi carta</button></form></article>'
+    )
+    return layout("Carte", body, "carte")
+
+
+def page_card(card: dict) -> str:
+    lines = []
+    for month in card["months"]:
+        lines.append(f'<li>{esc(month["month"])} · {esc(logic.format_baht(month["amount_thb"]))}</li>')
+    history = "<ul class=\"history\">" + "".join(lines) + "</ul>" if lines else "<p>Ancora vuoto.</p>"
+    body = (
+        f'<article class="card"><h1>{esc(card["name"])}</h1>'
+        f'<p class="lead">{esc(card["kind"])} · {esc(card["currency"])}</p>{history}'
+        '<h2>Registra il mese</h2>'
+        f'<form method="post" action="/carte/{esc(card["id"])}/mese">'
+        '<label>Mese<input name="month" required></label>'
+        '<label>Importo<input name="amount" inputmode="decimal" required></label>'
+        '<label>Cambio in baht<input name="rate_to_thb" inputmode="decimal"></label>'
+        '<label>Nota<input name="note"></label>'
+        '<button type="submit">Salva</button></form>'
+        '<h2>Modifica</h2>'
+        f'<form method="post" action="/carte/{esc(card["id"])}/modifica">'
+        f'<label>Nome<input name="name" value="{esc(card["name"])}" required></label>'
+        f'<label>Tipo<select name="kind"><option value="credito"{" selected" if card["kind"]=="credito" else ""}>credito</option>'
+        f'<option value="debito"{" selected" if card["kind"]=="debito" else ""}>debito</option></select></label>'
+        '<button type="submit">Salva nome</button></form>'
+        f'<form method="post" action="/carte/{esc(card["id"])}/elimina"><button type="submit">Elimina</button></form>'
+        "</article>"
+    )
+    return layout(card["name"], body, "carte")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -453,6 +648,32 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/home":
             self._json(200, logic.home())
             return
+        if path == "/api/spese":
+            query = parse_qs(urlparse(self.path).query)
+            periodo = (query.get("periodo") or ["mese"])[0]
+            carte = (query.get("carte") or ["0"])[0] == "1"
+            self._json(200, logic.spending(periodo, carte))
+            return
+        if path == "/api/cards":
+            if not self._write_allowed():
+                self._json(401, {"error": "unauthorized"})
+                return
+            self._json(200, {"cards": logic.list_cards()})
+            return
+        if path.startswith("/api/cards/"):
+            if not self._write_allowed():
+                self._json(401, {"error": "unauthorized"})
+                return
+            card_id = path.removeprefix("/api/cards/").strip("/")
+            if not card_id or "/" in card_id:
+                self._json(404, {"error": "non trovato"})
+                return
+            found = next((card for card in logic.list_cards() if card["id"] == card_id), None)
+            if found is None:
+                self._json(404, {"error": "non trovato"})
+                return
+            self._json(200, found)
+            return
         if path == "/api/export":
             self._json(200, logic.export_all())
             return
@@ -483,8 +704,26 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/":
-            self._html(200, page_home())
+            query = parse_qs(urlparse(self.path).query)
+            periodo = (query.get("spese") or ["mese"])[0]
+            if periodo not in ("mese", "anno"):
+                periodo = "mese"
+            with_cards = (query.get("carte") or ["0"])[0] == "1"
+            self._html(200, page_home(periodo, with_cards))
             return
+        if path == "/schema":
+            self._html(200, page_schema())
+            return
+        if path == "/carte":
+            self._html(200, page_cards())
+            return
+        if path.startswith("/carte/"):
+            card_id = path.removeprefix("/carte/").strip("/")
+            if card_id and "/" not in card_id:
+                found = next((card for card in logic.list_cards() if card["id"] == card_id), None)
+                if found:
+                    self._html(200, page_card(found))
+                    return
         if path == "/impostazioni":
             self._html(200, page_settings())
             return
@@ -522,6 +761,11 @@ class Handler(BaseHTTPRequestHandler):
             print("errore interno", flush=True)
             self._json(500, {"error": "errore interno"})
 
+    def _form_body(self) -> dict:
+        raw = self._read_body()
+        parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+        return {key: values[-1] for key, values in parsed.items()}
+
     def _json_body(self) -> dict:
         raw = self._read_body()
         if not raw:
@@ -536,6 +780,66 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self) -> None:
         path = urlparse(self.path).path.rstrip("/")
+        if path == "/impostazioni/cambi":
+            form = self._form_body()
+            logic.set_rates(form.get("rate_usd"), form.get("rate_eur"))
+            self._redirect("/impostazioni")
+            return
+        if path == "/carte/nuova":
+            form = self._form_body()
+            logic.create_card({"name": form.get("name"), "kind": form.get("kind"), "currency": form.get("currency")})
+            self._redirect("/carte")
+            return
+        if path == "/carte/mese":
+            form = self._form_body()
+            if form.get("rate_usd") or form.get("rate_eur"):
+                logic.set_rates(form.get("rate_usd"), form.get("rate_eur"))
+            month = form.get("month")
+            for card in logic.list_cards():
+                amount = form.get(f"amount_{card['id']}", "")
+                if amount == "":
+                    continue
+                logic.save_card_month(card["id"], {"month": month, "amount": amount, "currency": card["currency"]})
+            self._redirect("/carte")
+            return
+        if path.startswith("/carte/") and path.endswith("/mese"):
+            card_id = path.removeprefix("/carte/").removesuffix("/mese").strip("/")
+            form = self._form_body()
+            logic.save_card_month(card_id, form)
+            self._redirect(f"/carte/{card_id}")
+            return
+        if path.startswith("/carte/") and path.endswith("/modifica"):
+            card_id = path.removeprefix("/carte/").removesuffix("/modifica").strip("/")
+            form = self._form_body()
+            logic.patch_card(card_id, form)
+            self._redirect(f"/carte/{card_id}")
+            return
+        if path.startswith("/carte/") and path.endswith("/elimina"):
+            card_id = path.removeprefix("/carte/").removesuffix("/elimina").strip("/")
+            self._read_body()
+            logic.delete_card(card_id)
+            self._redirect("/carte")
+            return
+        if path == "/api/cards":
+            if not self._write_allowed():
+                self._read_body()
+                self._json(401, {"error": "unauthorized"})
+                return
+            card = logic.create_card(self._json_body())
+            self._json(201, card)
+            return
+        if path.startswith("/api/cards/") and path.endswith("/months"):
+            if not self._write_allowed():
+                self._read_body()
+                self._json(401, {"error": "unauthorized"})
+                return
+            card_id = path.removeprefix("/api/cards/").removesuffix("/months").strip("/")
+            saved = logic.save_card_month(card_id, self._json_body())
+            if saved is None:
+                self._json(404, {"error": "non trovato"})
+                return
+            self._json(200, saved)
+            return
         if path == "/api/import":
             if not self._write_allowed():
                 self._read_body()
@@ -575,6 +879,29 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         try:
             path = urlparse(self.path).path.rstrip("/")
+            if path.startswith("/api/cards/") and "/months/" in path:
+                if not self._write_allowed():
+                    self._json(401, {"error": "unauthorized"})
+                    return
+                card_id, _, month = path.removeprefix("/api/cards/").partition("/months/")
+                if not logic.delete_card_month(card_id, month):
+                    self._json(404, {"error": "non trovato"})
+                    return
+                self._json(200, {"ok": True})
+                return
+            if path.startswith("/api/cards/"):
+                if not self._write_allowed():
+                    self._json(401, {"error": "unauthorized"})
+                    return
+                card_id = path.removeprefix("/api/cards/")
+                if not card_id or "/" in card_id:
+                    self._json(404, {"error": "non trovato"})
+                    return
+                if not logic.delete_card(card_id):
+                    self._json(404, {"error": "non trovato"})
+                    return
+                self._json(200, {"ok": True})
+                return
             prefix = "/api/items/"
             if not path.startswith(prefix):
                 self._json(404, {"error": "non trovato"})
@@ -597,6 +924,22 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         try:
             path = urlparse(self.path).path.rstrip("/")
+            if path.startswith("/api/cards/"):
+                if not self._write_allowed():
+                    self._read_body()
+                    self._json(401, {"error": "unauthorized"})
+                    return
+                card_id = path.removeprefix("/api/cards/")
+                if not card_id or "/" in card_id:
+                    self._read_body()
+                    self._json(404, {"error": "non trovato"})
+                    return
+                card = logic.patch_card(card_id, self._json_body())
+                if card is None:
+                    self._json(404, {"error": "non trovato"})
+                    return
+                self._json(200, card)
+                return
             if not path.startswith("/api/items/"):
                 self._read_body()
                 self._json(404, {"error": "non trovato"})
