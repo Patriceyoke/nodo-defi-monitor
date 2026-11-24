@@ -10,7 +10,8 @@ import pytest
 def test_chart_uses_payments_and_cards_do_not_double_count(casa):
     logic, server = casa
     today = logic.today_bkk()
-    paid = today.isoformat()
+    year, month = logic.previous_month(today)
+    paid = f"{year:04d}-{month:02d}-15"
     conn = sqlite3.connect(logic.DB_PATH)
     conn.execute(
         "INSERT INTO items (id, external_id, section, payload, created_at, updated_at) VALUES (?, ?, 'casa', ?, ?, ?)",

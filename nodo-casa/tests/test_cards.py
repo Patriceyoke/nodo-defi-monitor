@@ -111,7 +111,7 @@ def test_pending_duplicates_rewards_and_missing_fx(casa):
     kast = next(card for card in logic.list_cards() if card["external_id"] == "kast")
     kast_month = next(row for row in kast["months"] if row["month"] == month)
     assert kast_month["spend"] == "8"
-    page = server.page_spese("mese", True)
+    page = server.page_spese("anno", True)
     assert "10 USD" in page
     assert "8 USD" in page
     assert "18 USD" not in page

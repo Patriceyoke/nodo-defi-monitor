@@ -496,13 +496,12 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
         cards = logic.list_cards()
         rows = []
         fields = []
-        today = logic.today_bkk()
-        key = f"{today.year:04d}-{today.month:02d}"
+        shown = {
+            (line.get("id"), line.get("currency")): line.get("display") or ""
+            for line in (spese.get("card_lines") or [])
+        }
         for card in cards:
-            current = ""
-            for month in card["months"]:
-                if month["month"] == key and month.get("currency") == card["currency"]:
-                    current = month.get("display") or ""
+            current = shown.get((card["id"], card["currency"]), "")
             rows.append(
                 f'<a class="row" href="/carte/{esc(card["id"])}"><span class="row-copy"><strong>{esc(card["name"])}</strong>'
                 f'<span class="sub">{esc(card["kind"])} · {esc(card["currency"])}</span></span>'
@@ -536,7 +535,7 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
     body = (
         '<article class="card"><h1>Spese</h1>'
         '<p class="toggle">'
-        f'<a class="{"on" if periodo != "anno" else ""}" href="/spese?periodo=mese&amp;carte={carte_flag}">Questo mese</a>'
+        f'<a class="{"on" if periodo != "anno" else ""}" href="/spese?periodo=mese&amp;carte={carte_flag}">Mese scorso</a>'
         f'<a class="{"on" if periodo == "anno" else ""}" href="/spese?periodo=anno&amp;carte={carte_flag}">Quest\'anno</a>'
         "</p>"
         '<p class="toggle">'

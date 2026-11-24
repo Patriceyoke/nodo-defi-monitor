@@ -178,6 +178,14 @@ def today_bkk() -> date:
     return datetime.now(TZ).date()
 
 
+def previous_month(today: date | None = None) -> tuple[int, int]:
+    """The closed statement month in Asia/Bangkok. January opens December of the year before."""
+    today = today or today_bkk()
+    if today.month == 1:
+        return today.year - 1, 12
+    return today.year, today.month - 1
+
+
 def now_iso() -> str:
     return datetime.now(TZ).replace(microsecond=0).isoformat()
 
@@ -2098,11 +2106,17 @@ def item_category(section: str, payload: dict) -> str:
 
 
 def _in_period(stamp: str, periodo: str, today: date) -> bool:
+    """mese is the previous Bangkok month. anno runs from January through today."""
     if not stamp or len(stamp) < 7:
         return False
     if periodo == "anno":
-        return stamp.startswith(f"{today.year:04d}")
-    return stamp.startswith(f"{today.year:04d}-{today.month:02d}")
+        if not stamp.startswith(f"{today.year:04d}"):
+            return False
+        if len(stamp) >= 10:
+            return stamp[:10] <= today.isoformat()
+        return stamp[:7] <= f"{today.year:04d}-{today.month:02d}"
+    year, month = previous_month(today)
+    return stamp.startswith(f"{year:04d}-{month:02d}")
 
 
 def _card_spend_lines(conn: sqlite3.Connection, periodo: str, today: date) -> list[dict]:
@@ -2247,7 +2261,8 @@ def card_chart(periodo: str = "anno") -> list[dict]:
     """Separate series per currency. A bar is one card, never a mix of baht and dollars."""
     today = today_bkk()
     year = f"{today.year:04d}"
-    month_key = f"{year}-{today.month:02d}"
+    closed_year, closed_month = previous_month(today)
+    month_key = f"{closed_year:04d}-{closed_month:02d}"
     cards = list_cards()
     series: dict[str, dict[str, list]] = {}
     for card in cards:
@@ -2255,7 +2270,7 @@ def card_chart(periodo: str = "anno") -> list[dict]:
             if periodo == "mese":
                 if row["month"] != month_key:
                     continue
-            elif not str(row["month"]).startswith(year):
+            elif not str(row["month"]).startswith(year) or str(row["month"]) > f"{year}-{today.month:02d}":
                 continue
             amount = _parse_amount(row.get("spend"))
             if not amount:
