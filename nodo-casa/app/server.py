@@ -210,7 +210,7 @@ def page_home(periodo: str = "mese", with_cards: bool = False) -> str:
         parts.append(f'<a class="tile" href="/{section["id"]}">{inner}</a>')
     parts.append(
         f'<a class="tile" href="/carte">{tile_head("carte", "Carte")}'
-        f'<p class="date">{esc(logic.format_baht(data["carte"]["month_thb"]) or "—")}</p></a>'
+        f'<p class="date">{esc(data["carte"].get("month_label") or "—")}</p></a>'
     )
     spese = data["spese_con_carte" if with_cards else "spese"] if periodo != "anno" else (
         data["spese_anno_con_carte"] if with_cards else data["spese_anno"]
@@ -225,8 +225,11 @@ def page_home(periodo: str = "mese", with_cards: bool = False) -> str:
     if spese.get("empty"):
         chart = '<p class="empty">Ancora nessun pagamento con importo.</p>'
     else:
-        chart = donut_svg(spese["slices"]) + bar_rows(spese["slices"])
-        chart += f'<p class="lead">Totale {esc(logic.format_baht(spese["total_thb"]))}</p>'
+        chart = donut_svg(spese["slices"]) + bar_rows(spese["slices"]) if spese.get("slices") else ""
+        for line in spese.get("card_lines") or []:
+            chart += f'<p class="lead">Carte {esc(line.get("display") or "")}</p>'
+        if spese.get("total_thb"):
+            chart += f'<p class="lead">Totale {esc(logic.format_baht(spese["total_thb"]))}</p>'
     parts.append(
         '<section class="card" id="spese"><h2>Spese</h2>'
         '<p class="toggle">'
@@ -472,18 +475,19 @@ def page_cards() -> str:
     bars = []
     peak = 0.0
     for month in chart:
-        peak = max(peak, float(month["total_thb"] or 0))
+        peak = max(peak, sum(float(part.get("amount") or 0) for part in month["parts"]))
     peak = peak or 1
     for month in chart:
-        height = float(month["total_thb"] or 0) / peak * 100
+        total = sum(float(part.get("amount") or 0) for part in month["parts"]) or 1
+        height = total / peak * 100
         segs = []
-        total = float(month["total_thb"] or 0) or 1
         for index, part in enumerate(month["parts"]):
-            share = float(part["amount_thb"]) / total * height
+            share = float(part.get("amount") or 0) / total * height
             color = list(CHART_COLORS.values())[index % len(CHART_COLORS)]
-            segs.append(f'<span style="height:{share:.1f}%;background:{color}"></span>')
+            segs.append(f'<span style="height:{share:.1f}%;background:{color}" title="{esc(part.get("display") or "")}"></span>')
         bars.append(
-            f'<div class="stack"><div class="stack-bar">{"".join(segs)}</div><span>{esc(month["month"][5:])}</span></div>'
+            f'<div class="stack"><div class="stack-bar">{"".join(segs)}</div>'
+            f'<span>{esc(month["total_label"])}</span></div>'
         )
     rows = []
     fields = []
@@ -493,7 +497,7 @@ def page_cards() -> str:
         key = f"{today.year:04d}-{today.month:02d}"
         for month in card["months"]:
             if month["month"] == key:
-                current = logic.format_baht(month["amount_thb"])
+                current = month.get("display") or ""
         rows.append(
             f'<a class="row" href="/carte/{esc(card["id"])}"><span class="row-copy"><strong>{esc(card["name"])}</strong>'
             f'<span class="sub">{esc(card["kind"])} · {esc(card["currency"])}</span></span>'
@@ -505,17 +509,15 @@ def page_cards() -> str:
         )
     body = (
         '<article class="card"><h1>Carte</h1>'
-        f'<p class="date">{esc(logic.format_baht(summary["month_thb"]) or "—")}</p>'
-        f'<p class="lead">Anno {esc(logic.format_baht(summary["year_thb"]))}</p>'
+        f'<p class="date">{esc(summary.get("month_label") or "—")}</p>'
+        f'<p class="lead">Anno {esc(summary.get("year_label") or "—")}</p>'
         f'<div class="stacks">{"".join(bars)}</div>'
         f'{"".join(rows)}'
         '<h2>Registra il mese</h2>'
         '<form method="post" action="/carte/mese">'
         '<label>Mese<input name="month" placeholder="2026-11" required></label>'
         + "".join(fields)
-        + '<label>Cambio dollaro<input name="rate_usd" inputmode="decimal"></label>'
-        '<label>Cambio euro<input name="rate_eur" inputmode="decimal"></label>'
-        '<button type="submit">Registra il mese</button></form>'
+        + '<button type="submit">Registra il mese</button></form>'
         '<h2>Nuova carta</h2>'
         '<form method="post" action="/carte/nuova">'
         '<label>Nome<input name="name" required></label>'
@@ -529,16 +531,35 @@ def page_cards() -> str:
 def page_card(card: dict) -> str:
     lines = []
     for month in card["months"]:
-        lines.append(f'<li>{esc(month["month"])} · {esc(logic.format_baht(month["amount_thb"]))}</li>')
-    history = "<ul class=\"history\">" + "".join(lines) + "</ul>" if lines else "<p>Ancora vuoto.</p>"
+        bits = [month["month"], month.get("display") or ""]
+        if month.get("opening"):
+            bits.append("apertura " + str(month["opening"]))
+        if month.get("money_in"):
+            bits.append("entrate " + str(month["money_in"]))
+        if month.get("money_out"):
+            bits.append("uscite " + str(month["money_out"]))
+        if month.get("closing"):
+            bits.append("chiusura " + str(month["closing"]))
+        lines.append(f'<li>{esc(" · ".join(bit for bit in bits if bit))}</li>')
+        for tx in month.get("transactions") or []:
+            last4 = f' •••• {tx["last4"]}' if tx.get("last4") else ""
+            lines.append(
+                f'<li>{esc(tx.get("date") or "")} {esc(tx.get("merchant") or "")} '
+                f'{esc(tx.get("statement_amount") or "")} {esc(tx.get("statement_currency") or "")}{esc(last4)}</li>'
+            )
+    plastics = "".join(
+        f'<li>•••• {esc(item["last4"])} {esc(item.get("label") or "")}</li>' for item in card.get("plastics") or []
+    )
+    plastic_block = f'<h2>Carte</h2><ul class="history">{plastics}</ul>' if plastics else ""
+    history = plastic_block + ("<ul class=\"history\">" + "".join(lines) + "</ul>" if lines else "<p>Ancora vuoto.</p>")
     body = (
         f'<article class="card"><h1>{esc(card["name"])}</h1>'
         f'<p class="lead">{esc(card["kind"])} · {esc(card["currency"])}</p>{history}'
         '<h2>Registra il mese</h2>'
         f'<form method="post" action="/carte/{esc(card["id"])}/mese">'
         '<label>Mese<input name="month" required></label>'
-        '<label>Importo<input name="amount" inputmode="decimal" required></label>'
-        '<label>Cambio in baht<input name="rate_to_thb" inputmode="decimal"></label>'
+        '<label>Entrate<input name="money_in" inputmode="decimal"></label>'
+        '<label>Uscite<input name="money_out" inputmode="decimal"></label>'
         '<label>Nota<input name="note"></label>'
         '<button type="submit">Salva</button></form>'
         '<h2>Modifica</h2>'

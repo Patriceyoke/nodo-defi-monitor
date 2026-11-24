@@ -2,7 +2,7 @@ manifestVersion: 1.1
 id: nodo-casa
 category: files
 name: Casa Viale
-version: "1.1.0"
+version: "1.2.0"
 tagline: Scadenze di casa, garage, documenti e visto
 description: >-
   Casa Viale elenca le scadenze di casa, del garage, dei documenti e del visto.
@@ -13,7 +13,7 @@ description: >-
   Il database nasce vuoto. I dati restano solo nella cartella dell'app su
   questo Umbrel. Non sono nel repository.
 releaseNotes: >-
-  1.1.0: dopo Segna pagato o Segna fatto, le scadenze non mensili passano da sole alla data successiva (ogni N giorni, mesi o anni; il rapporto 90 giorni avanza di 90 giorni). Lo storico resta. Un avviso compare se una bolletta sale oltre la soglia (di solito +15%). In home c'è il grafico delle spese per categoria, mese e anno, in baht. La sezione Carte registra le spese mensili di credito e debito (anche in dollari, con cambio in baht), con storico e grafico. Aggiorna l'app, non disinstallarla.
+  1.2.0: gli estratti delle carte si importano per conto (Kast, Ether.fi, Bangkok Bank), con entrate, uscite e, se ci sono, apertura e chiusura. Le cifre in dollari restano in dollari finché ogni movimento ha il suo cambio. Si vedono solo le ultime 4 cifre. Aggiorna l'app, non disinstallarla.
 developer: Nodo
 website: https://github.com/Patriceyoke/nodo-defi-monitor
 dependencies: []
