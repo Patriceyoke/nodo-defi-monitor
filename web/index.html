@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.7.0" />
-  <link rel="icon" href="/static/favicon.svg?v=0.7.0" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.7.1" />
+  <link rel="icon" href="/static/favicon.svg?v=0.7.1" type="image/svg+xml" />
   <script>
     (function () {
       var saved = "";
@@ -65,10 +65,26 @@
       <p class="empty hidden" id="empty-state">Nessun indirizzo ancora. Apri Impostazioni e aggiungi solo indirizzi Ethereum pubblici, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
     </section>
 
+    <section class="card" id="split">
+      <div class="card-head">
+        <div>
+          <h2 id="split-title">Ripartizione · Combinato</h2>
+          <p class="caption">Quota di ogni posizione sul valore. Il selettore cambia solo questo grafico.</p>
+        </div>
+        <div class="segmented" id="chart-owner">
+          <button data-value="tutti" class="on" type="button">Combinato</button>
+          <button data-value="io" type="button">Io</button>
+          <button data-value="moglie" type="button">Moglie</button>
+        </div>
+      </div>
+      <div class="chart-box donut"><canvas id="chart-split"></canvas></div>
+      <ul class="legend" id="chart-legend"></ul>
+    </section>
+
     <section class="card" id="trend">
       <div class="card-head">
         <div>
-          <h2>Andamento</h2>
+          <h2 id="trend-title">Andamento · Combinato</h2>
           <p class="caption" id="trend-caption">Valore nel tempo, nella vista scelta sopra.</p>
         </div>
         <div class="segmented" id="trend-range">
@@ -80,22 +96,6 @@
       </div>
       <div class="chart-box line" id="trend-chart-box"><canvas id="chart-trend"></canvas></div>
       <p class="empty hidden" id="trend-empty">Lo storico si riempie da solo dopo i prossimi aggiornamenti</p>
-    </section>
-
-    <section class="card" id="split">
-      <div class="card-head">
-        <div>
-          <h2>Ripartizione</h2>
-          <p class="caption">Quota di ogni posizione sul valore. Il selettore cambia solo questo grafico.</p>
-        </div>
-        <div class="segmented" id="chart-owner">
-          <button data-value="tutti" class="on" type="button">Combinato</button>
-          <button data-value="io" type="button">Io</button>
-          <button data-value="moglie" type="button">Moglie</button>
-        </div>
-      </div>
-      <div class="chart-box donut"><canvas id="chart-split"></canvas></div>
-      <ul class="legend" id="chart-legend"></ul>
     </section>
 
     <section class="card" id="changes">
@@ -276,8 +276,8 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js?v=0.7.0"></script>
-  <script src="/static/scope.js?v=0.7.0"></script>
-  <script src="/static/app.js?v=0.7.0"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.7.1"></script>
+  <script src="/static/scope.js?v=0.7.1"></script>
+  <script src="/static/app.js?v=0.7.1"></script>
 </body>
 </html>

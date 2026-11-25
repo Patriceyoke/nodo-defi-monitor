@@ -60,6 +60,40 @@ def test_scope_persists_in_the_query_and_storage():
     assert result["fromStore"] == result["fromUrl"]
 
 
+def test_card_titles_name_the_view_without_an_address():
+    result = _run(
+        """
+        const scope = require("./web/scope.js");
+        const combined = scope.cardTitle("Andamento", { owner: "tutti", wallet: "" });
+        const person = scope.cardTitle("Ripartizione", { owner: "moglie", wallet: "" });
+        const wallet = scope.cardTitle("Andamento", { owner: "io", wallet: "io::Demo Jade" });
+        console.log(JSON.stringify({ combined, person, wallet }));
+        """
+    )
+    assert result == {
+        "combined": "Andamento · Combinato",
+        "person": "Ripartizione · Moglie",
+        "wallet": "Andamento · Demo Jade",
+    }
+    owner = _run(
+        """
+        const scope = require("./web/scope.js");
+        console.log(JSON.stringify({
+          combined: scope.historyOwner({ owner: "tutti", wallet: "" }),
+          wallet: scope.historyOwner({ owner: "tutti", wallet: "io::Demo Jade" })
+        }));
+        """
+    )
+    assert owner == {"combined": "combinato", "wallet": "io"}
+
+
+def test_ripartizione_comes_before_andamento():
+    html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    assert html.index('id="split"') < html.index('id="trend"')
+    assert "Andamento · Combinato" in html
+    assert "Ripartizione · Combinato" in html
+
+
 def test_dashboard_selector_replaces_the_wallet_tiles():
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     assert 'id="wallet-menu"' in html

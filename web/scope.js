@@ -28,6 +28,34 @@
     return true;
   }
 
+  function viewName(state) {
+    if (state && state.wallet) {
+      const id = String(state.wallet);
+      const cut = id.indexOf("::");
+      const name = cut >= 0 ? id.slice(cut + 2) : id;
+      return name || "Portafoglio";
+    }
+    const owner = state && state.owner;
+    if (owner === "io") return "Io";
+    if (owner === "moglie") return "Moglie";
+    return "Combinato";
+  }
+
+  function cardTitle(prefix, state) {
+    return prefix + " · " + viewName(state);
+  }
+
+  function historyOwner(state) {
+    if (state && state.wallet) {
+      const id = String(state.wallet);
+      const cut = id.indexOf("::");
+      const who = cut >= 0 ? id.slice(0, cut) : "";
+      if (who === "io" || who === "moglie") return who;
+    }
+    if (state && (state.owner === "io" || state.owner === "moglie")) return state.owner;
+    return "combinato";
+  }
+
   function persistQuery(state) {
     const params = new URLSearchParams();
     if (state.owner && state.owner !== "tutti") params.set("vista", state.owner);
@@ -54,5 +82,5 @@
     return { owner: owner, wallet: wallet || "" };
   }
 
-  return { walletKey, applyOwner, selectWallet, clearWallet, inScope, persistQuery, readScope };
+  return { walletKey, applyOwner, selectWallet, clearWallet, inScope, viewName, cardTitle, historyOwner, persistQuery, readScope };
 });

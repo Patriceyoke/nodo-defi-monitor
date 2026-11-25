@@ -291,7 +291,17 @@ function commonChart() {
   applyTheme(document.documentElement.getAttribute("data-theme") || "light");
 }
 
+function paintCardTitles() {
+  const trend = $("#trend-title");
+  const split = $("#split-title");
+  if (trend) trend.textContent = window.NodoScope.cardTitle("Andamento", state);
+  if (split) {
+    const shown = state.wallet ? state : { owner: state.chartOwner || "tutti", wallet: "" };
+    split.textContent = window.NodoScope.cardTitle("Ripartizione", shown);
+  }
+}
 function renderSplit(data) {
+  paintCardTitles();
   const owner = state.wallet ? "tutti" : (state.chartOwner || "tutti");
   const rows = (data.positions || []).filter((row) => {
     if (state.wallet) return walletKey(row) === state.wallet;
@@ -633,7 +643,7 @@ function renderYield(data) {
     </article>`).join("");
 }
 function trendOwner() {
-  return state.owner === "tutti" ? "combinato" : state.owner;
+  return window.NodoScope.historyOwner(state);
 }
 function trendQueryKey() {
   const wallet = state.wallet ? walletLabel(state.wallet) : "";
@@ -642,6 +652,7 @@ function trendQueryKey() {
 }
 let trendKey = "";
 function renderTrend() {
+  paintCardTitles();
   const points = state.trendPoints || [];
   const empty = $("#trend-empty");
   const box = $("#trend-chart-box");
