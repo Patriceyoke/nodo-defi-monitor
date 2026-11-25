@@ -214,6 +214,18 @@ def page_home(periodo: str = "mese", with_cards: bool = False) -> str:
                 + f'<p class="pills">{pill(word, tone)}{count_pill(section["red"])}</p>'
             )
         parts.append(f'<a class="tile" href="/{section["id"]}">{inner}</a>')
+    watch = data.get("watch") or []
+    if watch:
+        parts.append('<h2 class="strip">Entro 90 giorni</h2>')
+        for row in watch:
+            when = " · ".join(bit for bit in (row["due_label"], row["distance"]) if bit)
+            parts.append(
+                f'<a class="row" href="/voce/{esc(row["id"])}">'
+                f'<span class="mark">{ICONS[row["section"]]}</span>'
+                f'<span class="row-copy"><strong>{esc(row["label"])}</strong>'
+                f'<span class="sub">{esc(row["section_name"])}</span>'
+                f"{pill(when, row['color'] or '')}</span></a>"
+            )
     if not data["empty"]:
         parts.append('<h2 class="strip">Prossimi 30 giorni</h2>')
         if not data["upcoming"]:
@@ -488,9 +500,10 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
             )
         period_lines = _card_lines_html(spese.get("card_lines") or []) or _card_lines_html(header_lines)
         period_lines = period_lines.replace('class="date"', 'class="quiet-line"')
+        charts, analysis = logic.card_views(periodo)
         cards_block = (
             '<div class="spese-cards"><h2>Carte</h2>'
-            f'{period_lines}{_out_charts_html(periodo)}{_analysis_html(periodo)}{"".join(rows)}'
+            f'{period_lines}{_out_charts_html(periodo, charts)}{_analysis_html(analysis)}{"".join(rows)}'
             '<h2>Nuova carta</h2>'
             '<form method="post" action="/carte/nuova">'
             '<label>Nome<input name="name" required></label>'
@@ -513,9 +526,9 @@ def page_spese(periodo: str = "mese", with_cards: bool = True) -> str:
     return layout("Spese", body, "spese")
 
 
-def _out_charts_html(periodo: str) -> str:
+def _out_charts_html(periodo: str, charts: list) -> str:
     blocks = []
-    for chart in logic.card_out_charts(periodo):
+    for chart in charts:
         rows = []
         legend = []
         for bar in chart["bars"]:
@@ -564,9 +577,9 @@ def _amount_bars(title: str, rows: list[dict], label_key: str, amount_key: str, 
     return f"<h3>{esc(title)}</h3>{''.join(lines)}"
 
 
-def _analysis_html(periodo: str) -> str:
+def _analysis_html(blocks_in: list) -> str:
     blocks = []
-    for block in logic.card_spend_analysis(periodo):
+    for block in blocks_in:
         currency = block["currency"]
         parts = []
         months = block.get("months") or []
@@ -659,13 +672,12 @@ def page_card(card: dict) -> str:
             bits.append("chiusura " + str(month["closing"]))
         lines.append(f'<li>{esc(" · ".join(bit for bit in bits if bit))}</li>')
         for tx in month.get("transactions") or []:
-            last4 = f' •••• {tx["last4"]}' if tx.get("last4") else ""
             lines.append(
                 f'<li>{esc(tx.get("date") or "")} {esc(tx.get("merchant") or "")} '
-                f'{esc(tx.get("statement_amount") or "")} {esc(tx.get("statement_currency") or "")}{esc(last4)}</li>'
+                f'{esc(tx.get("statement_amount") or "")} {esc(tx.get("statement_currency") or "")}</li>'
             )
     plastics = "".join(
-        f'<li>•••• {esc(item["last4"])} {esc(item.get("label") or "")}</li>' for item in card.get("plastics") or []
+        f'<li>{esc(item.get("label") or "")}</li>' for item in card.get("plastics") or [] if item.get("label")
     )
     plastic_block = f'<h2>Carte</h2><ul class="history">{plastics}</ul>' if plastics else ""
     history = plastic_block + ("<ul class=\"history\">" + "".join(lines) + "</ul>" if lines else "<p>Ancora vuoto.</p>")

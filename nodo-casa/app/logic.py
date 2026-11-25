@@ -541,6 +541,7 @@ def ensure_storage() -> None:
               last4 TEXT,
               section TEXT
             );
+            CREATE INDEX IF NOT EXISTS card_tx_card_month ON card_tx(card_id, month);
             """
         )
         _add_columns(conn, "card_months", ("opening", "money_in", "money_out", "closing"))
@@ -752,11 +753,37 @@ def token_present() -> bool:
 def _db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         os.chmod(DB_PATH, 0o600)
     except OSError:
         pass
     return conn
+
+
+def backup_database(keep: int = 3) -> None:
+    """Copy the committed database beside casa.db. Older copies rotate."""
+    if keep < 1 or not DB_PATH.is_file():
+        return
+    slots = [DB_PATH.with_name(f"casa.db.bak.{index}") for index in range(1, keep + 1)]
+    for older, newer in zip(reversed(slots), reversed(slots[:-1])):
+        if newer.is_file():
+            newer.replace(older)
+    target = slots[0]
+    source = sqlite3.connect(DB_PATH)
+    try:
+        dest = sqlite3.connect(target)
+        try:
+            source.backup(dest)
+        finally:
+            dest.close()
+    finally:
+        source.close()
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
 
 
 class _db_lock:
@@ -1103,6 +1130,21 @@ def home() -> dict:
         if not view["done"] and view["delta"] is not None and view["delta"] <= 30
     ]
     upcoming.sort(key=lambda view: (view["delta"], view["label"]))
+    watch = [
+        view
+        for view in views
+        if not view["done"]
+        and view["delta"] is not None
+        and view["delta"] <= 90
+        and (
+            view["section"] == "documenti"
+            or (
+                view["section"] == "immigrazione"
+                and view["payload"].get("tipo") in ("visto", "rapporto_90")
+            )
+        )
+    ]
+    watch.sort(key=lambda view: (view["delta"], view["label"]))
     rincari = [
         {
             "id": view["id"],
@@ -1114,6 +1156,8 @@ def home() -> dict:
         for view in views
         if view.get("rincaro")
     ]
+    _mese = spending("mese", True)
+    _anno = spending("anno", True)
     return {
         "empty": not views,
         "sections": sections,
@@ -1131,10 +1175,22 @@ def home() -> dict:
             for view in upcoming[:5]
         ],
         "rincari": rincari,
-        "spese": spending("mese", False),
-        "spese_anno": spending("anno", False),
-        "spese_con_carte": spending("mese", True),
-        "spese_anno_con_carte": spending("anno", True),
+        "watch": [
+            {
+                "id": view["id"],
+                "section": view["section"],
+                "section_name": view["section_name"],
+                "label": view["label"],
+                "due_label": view["due_label"],
+                "distance": view["distance"],
+                "color": view["color"],
+            }
+            for view in watch
+        ],
+        "spese": _without_cards(_mese),
+        "spese_anno": _without_cards(_anno),
+        "spese_con_carte": _mese,
+        "spese_anno_con_carte": _anno,
         "carte": cards_summary(),
     }
 
@@ -1424,6 +1480,7 @@ def import_items(body: dict) -> dict:
                 cards_created.append(raw.get("external_id") or raw.get("name") or "")
             elif created_flag == "updated":
                 cards_updated.append(raw.get("external_id") or raw.get("name") or "")
+    backup_database()
     return {
         "created": created,
         "updated": updated,
@@ -1545,6 +1602,23 @@ def mark_done(item_id: str, body: dict | None) -> dict | None:
     return get_item(item_id)
 
 
+def _card_without_digits(card: dict) -> dict:
+    clean = dict(card)
+    clean["plastics"] = [{"label": item.get("label") or ""} for item in card.get("plastics") or []]
+    months = []
+    for month in card.get("months") or []:
+        copy = dict(month)
+        txs = []
+        for tx in month.get("transactions") or []:
+            row = dict(tx)
+            row.pop("last4", None)
+            txs.append(row)
+        copy["transactions"] = txs
+        months.append(copy)
+    clean["months"] = months
+    return clean
+
+
 def export_all() -> dict:
     today = today_bkk()
     with _db_lock() as conn:
@@ -1556,7 +1630,7 @@ def export_all() -> dict:
         items.append(_public_item(view))
         for entry in view["history"]:
             history.append({"item_id": view["id"], **entry})
-    return {"items": items, "history": history, "cards": list_cards()}
+    return {"items": items, "history": history, "cards": [_card_without_digits(card) for card in list_cards()]}
 
 
 def _public_item(view: dict) -> dict:
@@ -1618,6 +1692,24 @@ def _optional_money(data: dict, key: str) -> str | None:
     if parsed is None or parsed < 0:
         raise Invalid(key)
     return _amount_text(parsed)
+
+
+def _tx_identity(row: dict, currency: str) -> tuple:
+    statement = _parse_amount(row.get("statement_amount"))
+    if statement is None:
+        statement = _parse_amount(row.get("original_amount"))
+    amount = "" if statement is None else _amount_text(statement)
+    code = str(row.get("statement_currency") or row.get("original_currency") or currency).strip().upper()
+    when = str(row.get("date") or row.get("tx_date") or "")
+    return (
+        when,
+        str(row.get("merchant") or "").strip().lower(),
+        str(row.get("direction") or "").strip().lower(),
+        amount,
+        code,
+        str(row.get("last4") or ""),
+        str(row.get("section") or "activity").strip().lower(),
+    )
 
 
 def _tx_key(row: dict) -> tuple:
@@ -1858,16 +1950,27 @@ def _write_month(conn: sqlite3.Connection, card_id: str, raw: dict, stamp: str) 
     if "transactions" in raw:
         if not isinstance(raw.get("transactions"), list):
             raise Invalid("transactions")
-        remembered: dict[tuple, str] = {}
-        for row in conn.execute(
-            "SELECT tx_date, merchant, direction, statement_amount, last4, category FROM card_tx WHERE card_id = ? AND month = ?",
+        incoming = _dedupe_transactions(raw["transactions"])
+        stored = conn.execute(
+            """
+            SELECT tx_date, merchant, direction, statement_amount, statement_currency, last4, section, category
+            FROM card_tx WHERE card_id = ? AND month = ?
+            """,
             (card_id, month),
-        ):
+        ).fetchall()
+        if not incoming:
+            return
+        fresh = sorted(_tx_identity(item, currency) for item in incoming)
+        current = sorted(_tx_identity(dict(row), currency) for row in stored)
+        if fresh == current:
+            return
+        remembered: dict[tuple, str] = {}
+        for row in stored:
             kept = _stored_category(row["category"])
             if kept:
                 remembered[_tx_key(dict(row))] = kept
         conn.execute("DELETE FROM card_tx WHERE card_id = ? AND month = ?", (card_id, month))
-        for item in _dedupe_transactions(raw["transactions"]):
+        for item in incoming:
             _insert_tx(conn, card_id, month, currency, item, remembered.get(_tx_key(item)))
 
 
@@ -2205,6 +2308,14 @@ def _card_spend_lines(conn: sqlite3.Connection, periodo: str, today: date) -> li
     return lines
 
 
+def _without_cards(pack: dict) -> dict:
+    bare = dict(pack)
+    bare["carte"] = False
+    bare["card_lines"] = []
+    bare["empty"] = not bare["slices"]
+    return bare
+
+
 def spending(periodo: str, include_cards: bool) -> dict:
     if periodo not in ("mese", "anno"):
         raise Invalid("periodo")
@@ -2418,26 +2529,21 @@ def _percent_bars(amounts: dict[str, Decimal], currency: str) -> list[dict]:
     return bars
 
 
-def card_out_charts(periodo: str) -> list[dict]:
+def card_out_charts(periodo: str, loaded: list | None = None) -> list[dict]:
     """Outflow share per currency. A foreign rate never merges two charts."""
     if periodo not in ("mese", "anno"):
         raise Invalid("periodo")
     today = today_bkk()
-    with _db_lock() as conn:
-        rows = conn.execute("SELECT * FROM card_tx").fetchall()
+    rows = loaded if loaded is not None else _load_chart_rows()
     buckets: dict[str, dict[str, Decimal]] = {}
-    for row in rows:
-        item = dict(row)
-        if not _is_chart_out(item):
+    for item in rows:
+        if not _in_period(item["stamp"], periodo, today):
             continue
-        stamp = str(item.get("tx_date") or "") or str(item.get("month") or "")
-        if not _in_period(stamp, periodo, today):
-            continue
-        currency = str(item.get("statement_currency") or "THB").upper()
-        amount = _parse_amount(item.get("statement_amount")) or Decimal("0")
+        currency = item["ccy"]
+        amount = item["value"]
         if amount <= 0:
             continue
-        category = _stored_category(item.get("category")) or merchant_category(str(item.get("merchant") or ""))
+        category = item["cat"]
         slot = buckets.setdefault(currency, {})
         slot[category] = slot.get(category, Decimal("0")) + amount
     charts = []
@@ -2499,12 +2605,19 @@ def card_category_transactions(periodo: str, currency: str, category: str) -> li
     return found
 
 
-def card_spend_analysis(periodo: str) -> list[dict]:
+def card_views(periodo: str) -> tuple[list[dict], list[dict]]:
+    """Charts and the card breakdown from one read of the transactions."""
+    loaded = _load_chart_rows()
+    return card_out_charts(periodo, loaded), card_spend_analysis(periodo, loaded)
+
+
+def card_spend_analysis(periodo: str, loaded: list | None = None) -> list[dict]:
     """Per-currency card detail for the selected period. Empty currencies are omitted."""
     if periodo not in ("mese", "anno"):
         raise Invalid("periodo")
     today = today_bkk()
-    loaded = _load_chart_rows()
+    if loaded is None:
+        loaded = _load_chart_rows()
     rows = [row for row in loaded if _in_period(row["stamp"], periodo, today)]
     if periodo == "anno":
         year_rows = rows

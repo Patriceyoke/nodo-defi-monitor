@@ -119,8 +119,10 @@ def test_pending_duplicates_rewards_and_missing_fx(casa):
     home = server.page_home("mese", True)
     assert "18 USD" not in home
     assert "฿0" not in home
-    assert "•••• 1881" in server.page_card(ether)
-    assert "4111111111111111" not in server.page_card(ether)
+    card_page = server.page_card(ether)
+    assert "1881" not in card_page
+    assert "4242" not in card_page
+    assert "4111111111111111" not in card_page
 
 
 def test_blank_fields_keep_imported_months_and_currencies_stay_apart(casa):
