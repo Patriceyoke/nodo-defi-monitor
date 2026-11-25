@@ -19,5 +19,8 @@ ENV PORT=3847
 ENV PYTHONUNBUFFERED=1
 EXPOSE 3847
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3847/api/health', timeout=4)"
+
 USER 1000:1000
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3847"]

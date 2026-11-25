@@ -469,11 +469,39 @@ async def answer_outflow(flow_id: int, body: OutflowAnswerIn) -> dict[str, Any]:
     return {"ok": True, "outflows": flows.list_public_flows("tutti")}
 
 
+def _history_scope(owner: str) -> str:
+    value = (owner or "combinato").strip().lower()
+    if value in {"tutti", "combinato", "all"}:
+        return "combinato"
+    if value in {"io", "moglie"}:
+        return value
+    raise ValueError("Titolare non valido: usa io, moglie o combinato.")
+
+
 @app.get("/api/history")
-async def get_history(owner: str = Query("tutti"), days: int = Query(90, ge=1, le=365)) -> dict[str, Any]:
-    data = await snapshot(owner)
-    cutoff = data["ts"] - days * 86400
-    return {"owner": owner, "days": days, "history": [h for h in data["history"] if int(h.get("ts") or 0) >= cutoff]}
+async def get_history(
+    owner: str = Query("combinato"),
+    days: int = Query(30, ge=1, le=730),
+    wallet: str = Query(""),
+) -> dict[str, Any]:
+    """Net-worth points from portfolio_snapshots, plus the older history rows."""
+    try:
+        scope = _history_scope(owner)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    label = (wallet or "").strip()
+    points = db.portfolio_history(scope, wallet=label, days=days)
+    legacy_owner = "tutti" if scope == "combinato" else scope
+    data = await snapshot(legacy_owner)
+    cutoff = int(data["ts"]) - days * 86400
+    legacy = [h for h in data["history"] if int(h.get("ts") or 0) >= cutoff]
+    return {
+        "owner": scope,
+        "wallet": label or None,
+        "days": days,
+        "points": points,
+        "history": legacy,
+    }
 
 
 @app.get("/api/security")

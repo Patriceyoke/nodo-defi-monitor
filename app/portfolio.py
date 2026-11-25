@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Any
 
-from . import config, db, ens, evm, flows, markets, nft, switches, yield_history
+from . import config, db, ens, evm, flows, markets, nft, snapshots, switches, yield_history
 from .security import annotate_light_alerts
 from .validation import normalize_owner
 
@@ -598,6 +598,11 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
 
         for owner in ("io", "moglie", "tutti"):
             db.save_history(owner, hist_payload(owner))
+        if rpc_ok or positions:
+            try:
+                db.save_portfolio_snapshots(snapshots.snapshot_rows(positions))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Storico del valore non salvato: %s", exc)
 
         snapshot = {
             "ts": int(time.time()),

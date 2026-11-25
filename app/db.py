@@ -111,6 +111,17 @@ CREATE TABLE IF NOT EXISTS nft_hides (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (kind, chain, contract, token_id)
 );
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    owner TEXT NOT NULL CHECK (owner IN ('io', 'moglie', 'combinato')),
+    wallet TEXT NOT NULL DEFAULT '',
+    net_worth_usd REAL NOT NULL,
+    allocation TEXT NOT NULL,
+    apy REAL,
+    health_factor REAL
+);
+CREATE INDEX IF NOT EXISTS portfolio_snapshots_lookup ON portfolio_snapshots(owner, wallet, ts);
 """
 
 
@@ -129,6 +140,7 @@ def _open_connection() -> sqlite3.Connection:
             conn = sqlite3.connect(str(path), timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA foreign_keys=ON")
             return conn
         except (OSError, sqlite3.Error) as exc:
@@ -714,6 +726,82 @@ def save_history(
         )
         conn.execute("DELETE FROM history WHERE ts < ?", (keep_after,))
         return True
+
+
+def save_portfolio_snapshots(
+    rows: list[dict[str, Any]],
+    *,
+    ts: int | None = None,
+    min_interval: int | None = None,
+    keep_days: int = 730,
+) -> int:
+    """Write one hourly row per owner and wallet. Older than two years is removed.
+
+    Returns how many rows were inserted. A repeat inside the hour does not
+    insert again, and still prunes. The table is additive: existing history
+    rows are left alone.
+    """
+    now = int(time.time() if ts is None else ts)
+    interval = config.HISTORY_MIN_INTERVAL if min_interval is None else int(min_interval)
+    keep_after = now - int(keep_days) * 86400
+    written = 0
+    with connect() as conn:
+        for row in rows:
+            owner = row["owner"]
+            wallet = row.get("wallet") or ""
+            last = conn.execute(
+                "SELECT ts FROM portfolio_snapshots WHERE owner=? AND wallet=? ORDER BY ts DESC LIMIT 1",
+                (owner, wallet),
+            ).fetchone()
+            if last and now - int(last["ts"]) < interval:
+                continue
+            conn.execute(
+                """INSERT INTO portfolio_snapshots(ts, owner, wallet, net_worth_usd, allocation, apy, health_factor)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (
+                    now,
+                    owner,
+                    wallet,
+                    float(row.get("net_worth_usd") or 0),
+                    json.dumps(row.get("allocation") or [], ensure_ascii=False),
+                    row.get("apy"),
+                    row.get("health_factor"),
+                ),
+            )
+            written += 1
+        conn.execute("DELETE FROM portfolio_snapshots WHERE ts < ?", (keep_after,))
+    return written
+
+
+def portfolio_history(
+    owner: str = "combinato",
+    *,
+    wallet: str = "",
+    days: int = 30,
+    now: int | None = None,
+) -> list[dict[str, Any]]:
+    moment = int(time.time() if now is None else now)
+    cutoff = moment - int(days) * 86400
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT ts, owner, wallet, net_worth_usd, allocation, apy, health_factor
+               FROM portfolio_snapshots
+               WHERE owner=? AND wallet=? AND ts>=?
+               ORDER BY ts""",
+            (owner, wallet or "", cutoff),
+        ).fetchall()
+    out = []
+    for row in rows:
+        out.append({
+            "ts": int(row["ts"]),
+            "owner": row["owner"],
+            "wallet": row["wallet"] or None,
+            "net_worth_usd": row["net_worth_usd"],
+            "allocation": json.loads(row["allocation"] or "[]"),
+            "apy": row["apy"],
+            "health_factor": row["health_factor"],
+        })
+    return out
 
 
 def get_history(owner: str = "tutti", days: int = 90) -> list[dict[str, Any]]:

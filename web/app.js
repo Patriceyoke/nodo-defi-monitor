@@ -1,7 +1,7 @@
 /* Monitor DeFi frontend — original, Italian, read-only. */
 const PALETTE = ["#0D9488", "#2563EB", "#F59E0B", "#7C3AED", "#06B6D4", "#E11D48", "#64748B"];
 const OWNER_LABEL = { io: "Io", moglie: "Moglie", tutti: "Combinato" };
-const state = { owner: "tutti", chartOwner: "tutti", histOwner: "tutti", histDays: 7, wallet: "", currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
+const state = { owner: "tutti", chartOwner: "tutti", histOwner: "tutti", histDays: 7, trendDays: 30, trendPoints: null, wallet: "", currency: "USD", alloc: "protocollo", data: null, fx: null, nfts: null, showHiddenNfts: false, showHiddenApprovals: false, showHiddenSwitches: false, refreshing: false, stale: true, positionsOpenApplied: false };
 let loadGen = 0;
 let applyingPositions = false;
 const charts = {};
@@ -632,6 +632,75 @@ function renderYield(data) {
       <p class="mini">stima</p>
     </article>`).join("");
 }
+function trendOwner() {
+  return state.owner === "tutti" ? "combinato" : state.owner;
+}
+function trendQueryKey() {
+  const wallet = state.wallet ? walletLabel(state.wallet) : "";
+  const ts = state.data && state.data.ts ? state.data.ts : "";
+  return trendOwner() + "|" + wallet + "|" + state.trendDays + "|" + ts;
+}
+let trendKey = "";
+function renderTrend() {
+  const points = state.trendPoints || [];
+  const empty = $("#trend-empty");
+  const box = $("#trend-chart-box");
+  const caption = $("#trend-caption");
+  const wallet = state.wallet ? walletLabel(state.wallet) : "";
+  const label = wallet || (OWNER_LABEL[state.owner] || "Combinato");
+  if (caption) caption.textContent = label + " · " + (state.trendDays === 365 ? "1 anno" : state.trendDays + " giorni") + ". Segue la vista e la valuta scelte sopra.";
+  if (!points.length) {
+    if (charts["chart-trend"]) { charts["chart-trend"].destroy(); charts["chart-trend"] = null; }
+    if (box) box.classList.add("hidden");
+    if (empty) empty.classList.remove("hidden");
+    return;
+  }
+  if (box) box.classList.remove("hidden");
+  if (empty) empty.classList.add("hidden");
+  paintChart("chart-trend", {
+    type: "line",
+    data: {
+      labels: points.map((point) => formatHistDate(point.ts, state.trendDays > 90)),
+      datasets: [{
+        label: label,
+        data: points.map((point) => Number(point.net_worth_usd) || 0),
+        borderColor: "#0D9488",
+        backgroundColor: "rgba(13,148,136,0.12)",
+        fill: true,
+        tension: 0.25,
+        pointRadius: points.length > 40 ? 0 : 3,
+      }],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (item) => " " + money(item.raw) } },
+      },
+      scales: { y: { ticks: { callback: (value) => money(value) } } },
+    },
+  });
+}
+function queueTrend() {
+  const key = trendQueryKey();
+  if (key === trendKey && state.trendPoints) {
+    renderTrend();
+    return;
+  }
+  trendKey = key;
+  const wallet = state.wallet ? walletLabel(state.wallet) : "";
+  const path = "/api/history?owner=" + encodeURIComponent(trendOwner())
+    + "&days=" + encodeURIComponent(state.trendDays)
+    + (wallet ? "&wallet=" + encodeURIComponent(wallet) : "");
+  api(path).then((data) => {
+    if (trendQueryKey() !== key) return;
+    state.trendPoints = data.points || [];
+    renderTrend();
+  }).catch(() => {
+    if (trendQueryKey() !== key) return;
+    state.trendPoints = [];
+    renderTrend();
+  });
+}
 function renderHist(data) {
   const series = historyPoints(data);
   const walletName = state.wallet ? state.wallet.split("::").slice(1).join("::") : "";
@@ -1123,6 +1192,7 @@ function render() {
     });
     $("#empty-state").classList.toggle("hidden", !!(data.totals.tutti.total_usd || data.positions.length || data.wallet_count));
     renderMetrics(data);
+    queueTrend();
     renderWallets(data);
     renderSplit(data);
     renderPositions(data);
@@ -1363,6 +1433,13 @@ async function boot() {
       state.histOwner = histOwner.dataset.value;
       histOwner.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === histOwner));
       if (state.data) renderHist(state.data);
+      return;
+    }
+    const trendRange = ev.target.closest("#trend-range button");
+    if (trendRange) {
+      state.trendDays = Number(trendRange.dataset.value) || 30;
+      trendRange.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === trendRange));
+      queueTrend();
       return;
     }
     const histRange = ev.target.closest("#hist-range button");

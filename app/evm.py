@@ -1,6 +1,7 @@
 """Read-only Ethereum RPC helpers and DeFi position scanner."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from decimal import Decimal
@@ -33,6 +34,28 @@ MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11"
 USE_MULTICALL = True
 # Last RPC that answered, per chain. Read by /api/debug/refresh-status.
 _RPC_USED: dict[str, dict[str, Any]] = {}
+# Dead endpoints are skipped until this timestamp. A few minutes, then they are tried again.
+_CIRCUIT: dict[str, float] = {}
+_MULTICALL_SEEN: dict[str, tuple[bool, float]] = {}
+CIRCUIT_SECONDS = 180
+RPC_BACKOFF_SECONDS = 0.15
+
+
+def reset_rpc_circuit() -> None:
+    _CIRCUIT.clear()
+    _MULTICALL_SEEN.clear()
+
+
+def _circuit_open(url: str) -> bool:
+    return (_CIRCUIT.get(url) or 0) > time.time()
+
+
+def _trip_circuit(url: str) -> None:
+    _CIRCUIT[url] = time.time() + CIRCUIT_SECONDS
+
+
+def _http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=8.0)
 
 
 def rpc_status() -> dict[str, dict[str, Any]]:
@@ -85,11 +108,21 @@ async def eth_rpc(method: str, params: list[Any], url: str | None = None, chain:
         if fallback not in candidates:
             candidates.append(fallback)
     label = CHAINS.get(chain, {}).get("label", chain)
+    live = [item for item in candidates if not _circuit_open(item)]
+    if not live:
+        live = list(candidates)
     # Keep each attempt short so Umbrel's proxy does not time out the whole refresh.
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        for candidate in candidates:
+    async with _http_client() as client:
+        for index, candidate in enumerate(live):
             try:
                 resp = await client.post(candidate, json=payload)
+                if resp.status_code == 429:
+                    last_error = RuntimeError("HTTP 429")
+                    _trip_circuit(candidate)
+                    log.warning("RPC %s ha risposto 429 su %s (%s)", method, candidate, chain)
+                    if index < len(live) - 1:
+                        await asyncio.sleep(RPC_BACKOFF_SECONDS)
+                    continue
                 resp.raise_for_status()
                 data = resp.json()
                 if "error" in data:
@@ -98,21 +131,32 @@ async def eth_rpc(method: str, params: list[Any], url: str | None = None, chain:
                 if method == "eth_blockNumber":
                     _remember_rpc(chain, candidate, True, None)
                 return data.get("result")
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
+                last_error = exc
+                _trip_circuit(candidate)
+                log.warning("RPC %s non raggiungibile su %s (%s): %s", method, candidate, chain, exc)
+                if index < len(live) - 1:
+                    await asyncio.sleep(RPC_BACKOFF_SECONDS)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and exc.response.status_code >= 500:
+                    _trip_circuit(candidate)
                 log.warning("RPC %s failed on %s (%s): %s", method, candidate, chain, exc)
+                if index < len(live) - 1:
+                    await asyncio.sleep(RPC_BACKOFF_SECONDS)
     if method == "eth_blockNumber":
         _remember_rpc(chain, None, False, str(last_error))
     raise RuntimeError(f"Nessun RPC {label} disponibile: {last_error}")
 
 
-async def eth_call_raw(to: str, data: str, chain: str = "ethereum") -> str:
-    result = await eth_rpc("eth_call", [{"to": to, "data": data}, "latest"], chain=chain)
+async def eth_call_raw(to: str, data: str, chain: str = "ethereum", block: str | None = None) -> str:
+    tag = block or "latest"
+    result = await eth_rpc("eth_call", [{"to": to, "data": data}, tag], chain=chain)
     return "" if result is None else str(result)
 
 
-async def eth_call(to: str, data: str, chain: str = "ethereum") -> int:
-    return _parse_hex_int(await eth_call_raw(to, data, chain))
+async def eth_call(to: str, data: str, chain: str = "ethereum", block: str | None = None) -> int:
+    return _parse_hex_int(await eth_call_raw(to, data, chain, block=block))
 
 
 async def eth_get_balance(address: str, chain: str = "ethereum") -> int:
@@ -174,10 +218,47 @@ def decode_aggregate3(result: str) -> list[tuple[bool, bytes]]:
     return out
 
 
-async def multicall(chain: str, calls: list[tuple[str, str]]) -> list[tuple[bool, bytes]]:
+def apply_multicall_reads(
+    specs: list[dict[str, Any]],
+    decoded: list[tuple[bool, bytes]],
+) -> tuple[dict[tuple[str, str], int], list[dict[str, Any]]]:
+    """Keep every successful sub-call. A failed one is returned on its own."""
+    balances: dict[tuple[str, str], int] = {}
+    failed: list[dict[str, Any]] = []
+    for spec, item in zip(specs, decoded):
+        ok, chunk = item
+        if ok and len(chunk) >= 32:
+            balances[(spec["chain"], spec["token"])] = int.from_bytes(chunk[:32], "big")
+        else:
+            failed.append(spec)
+    return balances, failed
+
+
+async def multicall_available(chain: str) -> bool:
+    """False when Multicall3 has no code on this chain. Cached for ten minutes."""
+    seen = _MULTICALL_SEEN.get(chain)
+    if seen and time.time() - seen[1] < 600:
+        return seen[0]
+    try:
+        code = await eth_rpc("eth_getCode", [MULTICALL3, "latest"], chain=chain)
+        ok = isinstance(code, str) and code not in {"0x", "0x0"} and len(code) > 2
+    except Exception as exc:  # noqa: BLE001
+        log.info("Multicall3 non verificato su %s: %s", chain, exc)
+        ok = False
+    _MULTICALL_SEEN[chain] = (ok, time.time())
+    return ok
+
+
+async def multicall(chain: str, calls: list[tuple[str, str]], block: str | None = None) -> list[tuple[bool, bytes]]:
     if not calls:
         return []
-    raw = await eth_call_raw(MULTICALL3, encode_aggregate3(calls), chain)
+    tag = block
+    if not tag:
+        try:
+            tag = await eth_rpc("eth_blockNumber", [], chain=chain)
+        except Exception:  # noqa: BLE001
+            tag = "latest"
+    raw = await eth_call_raw(MULTICALL3, encode_aggregate3(calls), chain, block=str(tag or "latest"))
     decoded = decode_aggregate3(raw)
     if len(decoded) != len(calls):
         raise ValueError("multicall incompleto")
@@ -261,16 +342,36 @@ async def scan_wallet(
         grouped.setdefault(chain, []).append(spec)
 
     balances: dict[tuple[str, str], int] = {}
+    chain_blocks: dict[str, str] = {}
     for chain, specs in grouped.items():
         try:
             if not USE_MULTICALL:
                 raise RuntimeError("multicall disattivato")
+            if not await multicall_available(chain):
+                raise RuntimeError("Multicall3 assente su questa rete")
+            try:
+                block = str(await eth_rpc("eth_blockNumber", [], chain=chain) or "latest")
+            except Exception:  # noqa: BLE001
+                block = "latest"
+            chain_blocks[chain] = block
             calls = [(spec["token"], _encode_balance_of(address)) for spec in specs]
-            decoded = await multicall(chain, calls)
-            for spec, (ok, chunk) in zip(specs, decoded):
-                if not ok or len(chunk) < 32:
-                    raise RuntimeError(f"saldo {spec['asset']} non letto")
-                balances[(chain, spec["token"])] = int.from_bytes(chunk[:32], "big")
+            decoded = await multicall(chain, calls, block=block)
+            got, failed = apply_multicall_reads(specs, decoded)
+            balances.update(got)
+            for spec in failed:
+                try:
+                    balances[(chain, spec["token"])] = await eth_call(
+                        spec["token"], _encode_balance_of(address), chain, block=block
+                    )
+                except Exception as bal_exc:  # noqa: BLE001
+                    msg = f"Lettura saldo fallita per {spec['protocol']} {spec['asset']} ({chain}): {bal_exc}"
+                    log.warning(msg)
+                    notes.append(msg)
+                    reports.append({
+                        "chain": chain,
+                        "asset": f"{spec['protocol']} {spec['asset']}",
+                        "error": str(bal_exc),
+                    })
         except Exception as exc:  # noqa: BLE001
             log.info("Multicall %s non usato (%s), lettura singola.", chain, exc)
             async def _bal(spec: dict[str, Any], chain: str = chain) -> None:
@@ -296,7 +397,7 @@ async def scan_wallet(
                 (spec["token"], "0x" + SELECTOR_CONVERT_TO_ASSETS + balances[(chain, spec["token"])].to_bytes(32, "big").hex())
                 for spec in vaults
             ]
-            decoded = await multicall(chain, calls)
+            decoded = await multicall(chain, calls, block=chain_blocks.get(chain))
             for spec, (ok, chunk) in zip(vaults, decoded):
                 if ok and len(chunk) >= 32:
                     vault_assets[(chain, spec["token"])] = int.from_bytes(chunk[:32], "big")

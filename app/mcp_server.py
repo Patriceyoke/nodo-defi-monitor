@@ -7,10 +7,10 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from . import db
+from . import compact, db
 from .config import APP_VERSION
 from .nft import collect_nfts
-from .portfolio import snapshot
+from .portfolio import cached_snapshot, snapshot
 from . import security as security_checks
 from .validation import normalize_owner
 
@@ -84,6 +84,34 @@ TOOLS = [
         },
     },
     {
+        "name": "get_portfolio_summary",
+        "description": "Riassunto breve per protocollo e asset: valore, APY netto, totale. Al massimo 5 righe, il resto è «altro». Etichette dei portafogli, mai indirizzi.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner": {"type": "string", "enum": ["combinato", "io", "moglie", "tutti"], "default": "combinato"},
+                "wallet": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "get_risk_and_alerts",
+        "description": "Solo health factor sotto 1.6, reward da ritirare, errori RPC o protocollo, e depeg. «Nessun rischio» se non c'è nulla. Nessun indirizzo.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "simulate_market_shock",
+        "description": "Simula in locale uno shock di prezzo sul saldo già in memoria. Nessuna lettura di rete, nessun indirizzo.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "asset": {"type": "string"},
+                "pct_change": {"type": "number"},
+            },
+            "required": ["asset", "pct_change"],
+        },
+    },
+    {
         "name": "get_nfts",
         "description": "NFT in sola lettura dei portafogli salvati, con spam nascosto e un prezzo suggerito. Non mette in vendita e non firma.",
         "inputSchema": {
@@ -127,6 +155,11 @@ def _text(data: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, indent=2)}], "isError": False}
 
 
+def _cached_positions() -> tuple[list[dict[str, Any]], list[Any]]:
+    raw = cached_snapshot() or {}
+    return list(raw.get("positions") or []), list(raw.get("errors") or [])
+
+
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     if name in FORBIDDEN_TOOLS or name.startswith("sign") or name.startswith("send"):
         return {
@@ -134,6 +167,23 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, An
             "isError": True,
         }
     args = arguments or {}
+    if name in {"get_portfolio_summary", "get_risk_and_alerts", "simulate_market_shock"}:
+        positions, errors = _cached_positions()
+        if name == "get_portfolio_summary":
+            payload = compact.portfolio_summary(
+                positions,
+                str(args.get("owner") or "combinato"),
+                args.get("wallet") or None,
+            )
+        elif name == "get_risk_and_alerts":
+            payload = compact.risk_and_alerts(positions, errors)
+        else:
+            payload = compact.simulate_market_shock(
+                positions,
+                str(args.get("asset") or ""),
+                float(args.get("pct_change") or 0),
+            )
+        return _text(compact.without_addresses(payload))
     owner = normalize_owner(str(args.get("owner") or "tutti"), allow_all=True)
     if name == "get_portfolio":
         data = await snapshot(owner, force=bool(args.get("refresh")))

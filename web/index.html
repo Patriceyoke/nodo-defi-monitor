@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitor DeFi</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.6.5" />
-  <link rel="icon" href="/static/favicon.svg?v=0.6.5" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.7.0" />
+  <link rel="icon" href="/static/favicon.svg?v=0.7.0" type="image/svg+xml" />
   <script>
     (function () {
       var saved = "";
@@ -63,6 +63,23 @@
       </div>
       <div class="owner-cards" id="owner-cards"></div>
       <p class="empty hidden" id="empty-state">Nessun indirizzo ancora. Apri Impostazioni e aggiungi solo indirizzi Ethereum pubblici, con titolare Io o Moglie. L'app non chiede mai seed o chiavi private.</p>
+    </section>
+
+    <section class="card" id="trend">
+      <div class="card-head">
+        <div>
+          <h2>Andamento</h2>
+          <p class="caption" id="trend-caption">Valore nel tempo, nella vista scelta sopra.</p>
+        </div>
+        <div class="segmented" id="trend-range">
+          <button data-value="7" type="button">7g</button>
+          <button data-value="30" class="on" type="button">30g</button>
+          <button data-value="90" type="button">90g</button>
+          <button data-value="365" type="button">1a</button>
+        </div>
+      </div>
+      <div class="chart-box line" id="trend-chart-box"><canvas id="chart-trend"></canvas></div>
+      <p class="empty hidden" id="trend-empty">Lo storico si riempie da solo dopo i prossimi aggiornamenti</p>
     </section>
 
     <section class="card" id="split">
@@ -259,8 +276,8 @@
   </section>
   <div id="settings-backdrop" class="hidden" style="position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:25"></div>
 
-  <script src="/static/vendor/chart.umd.min.js?v=0.6.5"></script>
-  <script src="/static/scope.js?v=0.6.5"></script>
-  <script src="/static/app.js?v=0.6.5"></script>
+  <script src="/static/vendor/chart.umd.min.js?v=0.7.0"></script>
+  <script src="/static/scope.js?v=0.7.0"></script>
+  <script src="/static/app.js?v=0.7.0"></script>
 </body>
 </html>

@@ -45,6 +45,7 @@ def test_mcp_initialize_and_tools(client):
     assert names == {
         "get_portfolio", "get_balances", "get_apys", "check_switch",
         "get_alerts", "get_history", "get_nfts", "get_security",
+        "get_portfolio_summary", "get_risk_and_alerts", "simulate_market_shock",
     }
     assert "sign" not in names and "send" not in names
 

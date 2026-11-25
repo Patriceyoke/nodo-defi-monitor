@@ -24,8 +24,11 @@ Open http://127.0.0.1:3847 — then add only public Ethereum addresses.
 | GET | `/api/health` | Process is up. Does not read wallets. |
 | GET | `/api/portfolio?owner=tutti` | Last portfolio. `refresh=true` forces a new read. |
 | POST | `/api/refresh?owner=tutti` | Force a read and return the portfolio, including `errors`. This is what Aggiorna calls. |
+| GET | `/api/history?owner=combinato&days=30` | Hourly net worth for `combinato`, `io` or `moglie`. Optional `wallet` is a label. `days` is 7, 30, 90 or 365. |
 | GET | `/api/alerts` | Last alerts and refresh errors. Does not start a scan, so it opens even when a read is slow. |
 | GET | `/api/debug/refresh-status` | Last refresh time, the RPC used on each chain, and per-wallet errors. |
+
+Hermes can also call three short tools on the same read-only MCP server: `get_portfolio_summary` (five lines plus “altro”), `get_risk_and_alerts` (or “Nessun rischio”), and `simulate_market_shock` (local math on the cached portfolio, no network). Answers use wallet labels, not addresses. The older tools stay as they are.
 
 ```bash
 python -m pytest -q
@@ -33,7 +36,7 @@ python -m pytest -q
 
 ## Umbrel
 
-See [INSTALL_IT.md](INSTALL_IT.md) (Italian step-by-step, including Hermes). Packaging lives in `umbrel-store/`. Replace `patriceyoke` before publishing images to GHCR.
+See [INSTALL_IT.md](INSTALL_IT.md) (Italian step-by-step, including Hermes). The Umbrel manifest and compose file live in `nodo-defi-monitor/`. The image is `ghcr.io/patriceyoke/nodo-defi-monitor`.
 
 ## License
 
