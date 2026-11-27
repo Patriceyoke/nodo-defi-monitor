@@ -310,3 +310,20 @@ def aave_v4_hub_name(hub: str) -> str:
 
 def aave_v4_asset_symbol(underlying: str) -> str | None:
     return AAVE_V4_UNDERLYINGS.get((underlying or "").lower())
+
+
+# Aave V3-style lending pools on Ethereum. Every reserve is read from the pool
+# itself (getReservesList + getReserveData), so new reserves need no code.
+# Checked against aave-dao/aave-address-book (AaveV3Ethereum, AaveV3EthereumLido)
+# and sparkdotfi/spark-address-registry (SparkLend Pool).
+AAVE_V3_POOLS = [
+    {"name": "Aave V3 Core", "protocol": "Aave", "debt_protocol": "Debito Aave",
+     "address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2", "llama_project": "aave-v3"},
+    {"name": "Aave V3 Prime", "protocol": "Aave", "debt_protocol": "Debito Aave",
+     "address": "0x4e033931ad43597d96D6bcc25c280717730B58B1", "llama_project": "aave-v3"},
+    {"name": "SparkLend", "protocol": "SparkLend", "debt_protocol": "Debito SparkLend",
+     "address": "0xC13e21B648A5Ee794902342038FF3aDAB66BE987", "llama_project": "sparklend"},
+]
+
+# Collateral that also earns the Lido staking rate on top of the pool rate.
+LIDO_UNDERLYINGS = {"steth", "wsteth"}

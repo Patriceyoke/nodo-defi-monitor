@@ -72,6 +72,9 @@ def observe_positions(positions: list[dict[str, Any]], *, now: int | None = None
     known = {row["position_key"]: row for row in db.list_position_marks()}
     grouped: dict[str, dict[str, Any]] = {}
     for row in positions:
+        if row.get("debt"):
+            # Repaying a loan lowers the debt. That is not money leaving the wallet.
+            continue
         key = position_key(row)
         if not key.strip("|"):
             continue

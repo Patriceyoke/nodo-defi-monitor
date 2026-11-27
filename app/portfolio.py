@@ -360,11 +360,39 @@ async def _enrich(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], lis
     out = []
     missing_price: list[str] = []
     missing_apy: list[str] = []
+    lido: tuple[float | None, float | None] | None = None
     for row in rows:
         name = f"{row.get('protocol')} {row.get('asset')}"
         price = _lookup_price(px, row)
         apy, apy30, pool = (None, None, None)
-        if row.get("protocol") != "Wallet":
+        if row.get("debt"):
+            # Borrow cost from the pool's live rate. Applied to a negative value, it lowers income.
+            borrow = row.get("borrow_apy")
+            apy = None if borrow is None else float(borrow)
+            apy30 = apy
+        elif row.get("onchain_apy") is not None:
+            # Aave V3-style supply: live pool rate, plus the Lido rate for stETH collateral.
+            base = (0.0, 0.0)
+            if row.get("lido_base"):
+                if lido is None:
+                    try:
+                        got = await markets.apy_for("lido", "STETH", "ethereum")
+                        lido = (got[0], got[1])
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("APY Lido non disponibile: %s", exc)
+                        lido = (None, None)
+                base = (float(lido[0] or 0.0), float(lido[1] if lido[1] is not None else (lido[0] or 0.0)))
+            apy = float(row["onchain_apy"]) + base[0]
+            apy30 = apy
+            try:
+                _live, avg30, pool = await markets.apy_for(
+                    row.get("llama_project"), row.get("llama_symbol") or row.get("asset"), "ethereum", None,
+                )
+                if avg30 is not None:
+                    apy30 = float(avg30) + base[1]
+            except Exception as exc:  # noqa: BLE001
+                log.info("Media 30 giorni non disponibile per %s: %s", name, exc)
+        elif row.get("protocol") != "Wallet":
             try:
                 apy, apy30, pool = await markets.apy_for(
                     row.get("llama_project"),
@@ -387,6 +415,8 @@ async def _enrich(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], lis
             # Hide leftover dust only when we actually know the dollar value.
             if usd < 1:
                 continue
+            if row.get("debt"):
+                usd = -usd
         item = {
             **row,
             "price_usd": price_out,

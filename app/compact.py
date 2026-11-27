@@ -57,7 +57,7 @@ def portfolio_summary(
         key = (str(row.get("protocol") or "Posizione"), str(row.get("asset") or ""))
         slot = grouped.setdefault(key, {"usd": 0.0, "weighted": 0.0, "base": 0.0})
         slot["usd"] += usd
-        if apy is not None and usd > 0:
+        if apy is not None and usd != 0:
             slot["weighted"] += usd * apy
             slot["base"] += usd
     lines = []
@@ -161,6 +161,8 @@ def simulate_market_shock(
         usd = _num(raw.get("usd")) or 0.0
         before += usd
         moved = str(raw.get("asset") or "").strip().lower() == target
+        backing = [str(a).strip().lower() for a in (raw.get("collateral_assets") or [])]
+        collateral_moved = (target in backing) if raw.get("debt") else moved
         new_usd = usd * factor if moved else usd
         after += new_usd
         health = _num(raw.get("health_factor"))
@@ -171,7 +173,7 @@ def simulate_market_shock(
         room = None
         if health is not None and debt and debt > 0:
             base = collateral if collateral is not None else usd
-            new_collateral = base * factor if moved else base
+            new_collateral = base * factor if collateral_moved else base
             new_debt = debt * factor if debt_asset == target else debt
             if base > 0 and new_debt > 0:
                 new_health = health * (new_collateral / base) / (new_debt / debt)

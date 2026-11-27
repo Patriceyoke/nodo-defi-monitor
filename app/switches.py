@@ -323,6 +323,11 @@ def _risk_label(src_tier: int, dest_tier: int) -> str:
     return "Rischio: uguale"
 
 
+def movable(pos: dict[str, Any]) -> bool:
+    """Debt and collateral that backs a loan are never switch candidates."""
+    return not pos.get("debt") and not pos.get("collateral_locked")
+
+
 def classify_switches(positions: list[dict[str, Any]], gas_usd: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Safe switches, plus anomalous rates that must stay out of the suggestion cards."""
     ideas: list[dict[str, Any]] = []
@@ -330,7 +335,7 @@ def classify_switches(positions: list[dict[str, Any]], gas_usd: float) -> tuple[
     seen_anomaly: set[tuple[str, str, str]] = set()
     by_owner: dict[str, list[dict[str, Any]]] = {}
     for pos in positions:
-        if pos.get("protocol") == "Wallet":
+        if pos.get("protocol") == "Wallet" or not movable(pos):
             continue
         if pos.get("apy") is None:
             continue
@@ -454,7 +459,7 @@ def compare_rates(positions: list[dict[str, Any]], gas_usd: float) -> list[dict[
     cards: list[dict[str, Any]] = []
     by_owner: dict[str, list[dict[str, Any]]] = {}
     for pos in positions:
-        if pos.get("protocol") == "Wallet" or pos.get("apy") is None:
+        if pos.get("protocol") == "Wallet" or pos.get("apy") is None or not movable(pos):
             continue
         by_owner.setdefault(str(pos.get("owner") or ""), []).append(pos)
     for owner, rows in by_owner.items():
@@ -662,7 +667,7 @@ def best_advice(
 
     by_owner: dict[str, list[dict[str, Any]]] = {}
     for pos in positions:
-        if pos.get("protocol") == "Wallet" or pos.get("apy") is None:
+        if pos.get("protocol") == "Wallet" or pos.get("apy") is None or not movable(pos):
             continue
         by_owner.setdefault(str(pos.get("owner") or ""), []).append(pos)
 
@@ -889,7 +894,7 @@ async def market_alternatives(positions: list[dict[str, Any]]) -> list[dict[str,
     """Same-bucket yields from the same pool matcher the positions table uses."""
     from .markets import apy_for
 
-    held_buckets = {bucket(p["asset"]) for p in positions if p.get("protocol") != "Wallet"}
+    held_buckets = {bucket(p["asset"]) for p in positions if p.get("protocol") != "Wallet" and not p.get("debt")}
     if not held_buckets:
         return []
     alts: list[dict[str, Any]] = []

@@ -19,7 +19,7 @@ function money(usd, cur = state.currency) {
   if (!Number.isFinite(n0)) return "n/d";
   if (cur === "THB") {
     if (!state.fx) return "n/d";
-    return "฿" + formatAmount(n0 * state.fx);
+    return (n0 < 0 ? "-฿" : "฿") + formatAmount(Math.abs(n0) * state.fx);
   }
   return formatAmount(n0) + " $";
 }
@@ -433,9 +433,22 @@ function renderMetrics(data) {
   const title = state.wallet
     ? (sample.label || "Portafoglio") + " · " + (OWNER_LABEL[sample.owner] || "")
     : (OWNER_LABEL[state.owner] || "Totale");
-  const stable = groupIncome(positions.filter((item) => assetKind(item.asset) === "stable"));
-  const eth = groupIncome(positions.filter((item) => assetKind(item.asset) === "eth"));
-  const base = total || (stable.usd + eth.usd);
+  const assets = positions.filter((item) => !item.debt);
+  const debtRows = positions.filter((item) => item.debt);
+  const stable = groupIncome(assets.filter((item) => assetKind(item.asset) === "stable"));
+  const eth = groupIncome(assets.filter((item) => assetKind(item.asset) === "eth"));
+  const debt = groupIncome(debtRows);
+  const base = total || (stable.usd + eth.usd + debt.usd);
+  const health = debtRows
+    .filter((item) => item.health_factor != null && Number.isFinite(Number(item.health_factor)))
+    .sort((a, b) => Number(a.health_factor) - Number(b.health_factor))[0];
+  const healthText = health
+    ? Number(health.health_factor).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      + (state.wallet ? "" : " · " + escapeHtml(health.label || ""))
+    : "";
+  const healthLine = health
+    ? `<dt>Health factor</dt><dd>${Number(health.health_factor) < 1.5 ? `<span class="pill bad">${healthText}</span>` : healthText}</dd>`
+    : "";
   const side = !state.wallet && state.owner === "tutti"
     ? `<dl class="headline">
         <dt>Io</dt><dd>${money((totals.io || {}).total_usd || 0)}</dd>
@@ -449,6 +462,7 @@ function renderMetrics(data) {
       <dl class="headline">
         <dt>Reddito mensile</dt><dd>${money(year / 12)}</dd>
         <dt>APY ponderato</dt><dd>${apyValue == null ? "–" : pct(apyValue)}</dd>
+        ${healthLine}
       </dl>
       ${side}
       <div class="table-scroll">
@@ -460,6 +474,7 @@ function renderMetrics(data) {
           <tbody>
             ${splitRow("Stablecoin", stable, base)}
             ${splitRow("ETH", eth, base)}
+            ${debtRows.length ? splitRow("Debito Aave", debt, base) : ""}
           </tbody>
         </table>
       </div>
@@ -484,7 +499,7 @@ function renderAlloc(data) {
     $("#alloc-title").textContent = "Ripartizione per titolare";
   } else {
     const map = new Map();
-    defi.forEach((p) => map.set(p.protocol, (map.get(p.protocol) || 0) + (Number(p.usd) || 0)));
+    defi.filter((p) => !p.debt).forEach((p) => map.set(p.protocol, (map.get(p.protocol) || 0) + (Number(p.usd) || 0)));
     parts = [...map.entries()].map(([label, usd]) => ({ label, usd }));
     $("#alloc-title").textContent = "Ripartizione per protocollo";
   }
@@ -539,7 +554,7 @@ function renderApy(data) {
       scales: { y: { beginAtZero: true, ticks: { callback: (v) => v + "%" } } },
     },
   });
-  const pos = data.positions.filter((p) => p.protocol !== "Wallet");
+  const pos = data.positions.filter((p) => p.protocol !== "Wallet" && !p.debt);
   const labels = pos.map((p) => p.protocol + " " + p.asset + (state.owner === "tutti" ? " · " + OWNER_LABEL[p.owner] : ""));
   paintChart("chart-apy", {
     type: "bar",

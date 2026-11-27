@@ -150,6 +150,11 @@ def test_scan_wallet_keeps_going_when_aave_v4_fails(monkeypatch):
     monkeypatch.setattr(evm, "USE_MULTICALL", False)
     monkeypatch.setattr(evm, "token_balance", no_balance)
     monkeypatch.setattr(evm, "scan_aave_v4", boom)
+
+    async def no_v3(*args, **kwargs):
+        return [], [], [], {}
+
+    monkeypatch.setattr(evm, "scan_aave_v3", no_v3)
     rows, notes, reports = asyncio.run(evm.scan_wallet(USER, "io", "Esempio"))
     assert rows == []
     assert any("Aave V4" in note for note in notes)

@@ -25,6 +25,7 @@ SELECTOR_CONVERT_TO_ASSETS = "07a2d13a"
 SELECTOR_AAVE_V4_RESERVE_COUNT = "99806546"
 SELECTOR_AAVE_V4_GET_RESERVE = "77778db3"
 SELECTOR_AAVE_V4_USER_SUPPLIED = "f1568a89"
+SELECTOR_AAVE_V4_USER_TOTAL_DEBT = "9b7172a6"
 SELECTOR_SYMBOL = "95d89b41"
 _V4_CATALOG: dict[str, Any] = {"at": 0.0, "rows": None}
 _V4_SYMBOLS: dict[str, str] = {}
@@ -456,6 +457,22 @@ async def scan_wallet(
     found = await asyncio.gather(*[_one(spec) for spec in TOKENS])
     rows.extend([row for row in found if row])
     if ethereum_ok:
+        static_tokens = {str(spec["token"]).lower() for spec in TOKENS if spec["chain"] == "ethereum"}
+        try:
+            v3_rows, v3_notes, v3_reports, locked = await scan_aave_v3(address, owner, label, static_tokens)
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Lettura Aave V3 fallita: {exc}"
+            log.warning(msg)
+            notes.append(msg)
+            reports.append({"chain": "ethereum", "asset": "Aave V3", "error": str(exc)})
+        else:
+            for row in rows:
+                if str(row.get("token") or "").lower() in locked:
+                    row["collateral"] = True
+                    row["collateral_locked"] = True
+            rows.extend(v3_rows)
+            notes.extend(v3_notes)
+            reports.extend(v3_reports)
         try:
             v4_rows, v4_notes, v4_reports = await scan_aave_v4(address, owner, label)
         except Exception as exc:  # noqa: BLE001
@@ -609,10 +626,17 @@ async def scan_aave_v4(
             "0x" + SELECTOR_AAVE_V4_USER_SUPPLIED + _encode_word(int(item["reserve_id"])) + _pad(address),
         )
         for item in catalog
+    ] + [
+        (
+            item["spoke"],
+            "0x" + SELECTOR_AAVE_V4_USER_TOTAL_DEBT + _encode_word(int(item["reserve_id"])) + _pad(address),
+        )
+        for item in catalog
     ]
     decoded = await _multicall_or_each(calls)
     rows: list[dict[str, Any]] = []
-    for item, (ok, chunk) in zip(catalog, decoded):
+    entries = [(item, False) for item in catalog] + [(item, True) for item in catalog]
+    for (item, is_debt), (ok, chunk) in zip(entries, decoded):
         if not ok or len(chunk) < 32:
             continue
         raw_amount = int.from_bytes(chunk[:32], "big")
@@ -627,6 +651,29 @@ async def scan_aave_v4(
         hub_name = aave_v4_hub_name(item["hub"]) or item["spoke_name"]
         amount = human(raw_amount, int(item["decimals"]))
         if amount <= 0:
+            continue
+        if is_debt:
+            # Borrow rate is not read for V4 yet: the debt lowers the total, income shows n/d.
+            rows.append({
+                "owner": owner,
+                "label": label,
+                "address": address,
+                "chain": "ethereum",
+                "protocol": "Debito Aave V4",
+                "asset": symbol,
+                "amount": amount,
+                "token": item["underlying"],
+                "price_token": price_key("ethereum", item["underlying"]),
+                "decimals": int(item["decimals"]),
+                "llama_project": None,
+                "llama_symbol": None,
+                "market": hub_name,
+                "valuation_ok": True,
+                "debt": True,
+                "debt_kind": "variabile",
+                "borrow_apy": None,
+                "debt_asset": symbol,
+            })
             continue
         rows.append({
             "owner": owner,
@@ -646,3 +693,215 @@ async def scan_aave_v4(
             "valuation_ok": True,
         })
     return rows, notes, reports
+
+
+# --- Aave V3-style pools: supplies (aTokens) and debt (variable/stable debt tokens) ---
+
+SELECTOR_V3_RESERVES_LIST = "d1946dbc"
+SELECTOR_V3_RESERVE_DATA = "35ea6a75"
+SELECTOR_V3_ACCOUNT_DATA = "bf92857c"
+SELECTOR_V3_USER_CONFIG = "4417a583"
+SECONDS_PER_YEAR = 31_536_000
+RAY = 10**27
+V3_CATALOG_SECONDS = 300
+_V3_CATALOG: dict[str, dict[str, Any]] = {}
+_V3_LOCK = asyncio.Lock()
+
+
+def ray_rate_to_apy_pct(rate_ray: int) -> float:
+    """Aave rates are yearly APR in ray. Compounded per second, as the Aave app shows them."""
+    apr = Decimal(int(rate_ray)) / Decimal(RAY)
+    if apr <= 0:
+        return 0.0
+    return float(((1 + apr / SECONDS_PER_YEAR) ** SECONDS_PER_YEAR - 1) * 100)
+
+
+def decode_v3_reserve_data(chunk: bytes) -> dict[str, Any]:
+    """getReserveData (ReserveDataLegacy): 15 words. Same layout on Aave 3.0-3.4 and SparkLend."""
+    words = [chunk[i:i + 32] for i in range(0, len(chunk) - 31, 32)]
+    if len(words) < 11:
+        raise ValueError("getReserveData incompleto")
+    configuration = int.from_bytes(words[0], "big")
+    stable = "0x" + words[9][-20:].hex()
+    return {
+        "decimals": (configuration >> 48) & 0xFF,
+        "liquidity_rate": int.from_bytes(words[2], "big"),
+        "variable_borrow_rate": int.from_bytes(words[4], "big"),
+        "stable_borrow_rate": int.from_bytes(words[5], "big"),
+        "id": int.from_bytes(words[7], "big"),
+        "a_token": "0x" + words[8][-20:].hex(),
+        "stable_debt": "" if int(stable, 16) == 0 else stable,
+        "variable_debt": "0x" + words[10][-20:].hex(),
+    }
+
+
+def decode_account_data(chunk: bytes) -> dict[str, float | None]:
+    """getUserAccountData: collateral, debt (base currency, 8 decimals), ..., healthFactor (1e18)."""
+    words = [int.from_bytes(chunk[i:i + 32], "big") for i in range(0, len(chunk) - 31, 32)]
+    if len(words) < 6:
+        raise ValueError("getUserAccountData incompleto")
+    debt = words[1] / 1e8
+    return {
+        "collateral_usd": words[0] / 1e8,
+        "debt_usd": debt,
+        "liquidation_threshold_pct": words[3] / 100.0,
+        "health_factor": (words[5] / 1e18) if debt > 0 else None,
+    }
+
+
+async def _v3_pool_catalog(pool: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reserves of one pool with live rates. Shared by every wallet for a few minutes."""
+    key = pool["address"].lower()
+    async with _V3_LOCK:
+        cached = _V3_CATALOG.get(key)
+        if cached and time.time() - float(cached["at"]) < V3_CATALOG_SECONDS:
+            return list(cached["rows"])
+        raw = await eth_call_raw(pool["address"], "0x" + SELECTOR_V3_RESERVES_LIST, "ethereum")
+        data = bytes.fromhex(raw[2:] if raw.startswith("0x") else raw)
+        if len(data) < 64:
+            raise ValueError("getReservesList vuoto")
+        count = int.from_bytes(data[32:64], "big")
+        underlyings = ["0x" + data[64 + i * 32 + 12:64 + (i + 1) * 32].hex() for i in range(count)]
+        decoded = await _multicall_or_each(
+            [(pool["address"], "0x" + SELECTOR_V3_RESERVE_DATA + _pad(u)) for u in underlyings]
+        )
+        rows: list[dict[str, Any]] = []
+        for underlying, (ok, chunk) in zip(underlyings, decoded):
+            if not ok or not chunk:
+                continue
+            try:
+                item = decode_v3_reserve_data(chunk)
+            except Exception as exc:  # noqa: BLE001
+                log.info("Riserva %s scartata: %s", pool["name"], exc)
+                continue
+            item["underlying"] = underlying
+            rows.append(item)
+        _V3_CATALOG[key] = {"at": time.time(), "rows": rows}
+        return list(rows)
+
+
+def _collateral_on(config_bits: int, reserve_id: int) -> bool:
+    return bool((config_bits >> (reserve_id * 2 + 1)) & 1)
+
+
+async def scan_aave_v3(
+    address: str,
+    owner: str,
+    label: str,
+    skip_tokens: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, str]], dict[str, dict[str, Any]]]:
+    """Supplies and debts on Aave V3-style pools.
+
+    Debt rows carry debt=True and are valued negative in portfolio._enrich.
+    skip_tokens holds aTokens already read from the static TOKENS list, so a
+    supply is never counted twice. The last return value maps those aTokens to
+    their pool's account data when they back a loan.
+    """
+    from .protocols import AAVE_V3_POOLS, LIDO_UNDERLYINGS
+
+    skip = {t.lower() for t in (skip_tokens or set())}
+    rows: list[dict[str, Any]] = []
+    notes: list[str] = []
+    reports: list[dict[str, str]] = []
+    locked: dict[str, dict[str, Any]] = {}
+    probes = await _multicall_or_each(
+        [(pool["address"], "0x" + SELECTOR_V3_ACCOUNT_DATA + _pad(address)) for pool in AAVE_V3_POOLS]
+        + [(pool["address"], "0x" + SELECTOR_V3_USER_CONFIG + _pad(address)) for pool in AAVE_V3_POOLS]
+    )
+    n = len(AAVE_V3_POOLS)
+    for index, pool in enumerate(AAVE_V3_POOLS):
+        ok, chunk = probes[index]
+        cfg_ok, cfg_chunk = probes[n + index]
+        if not ok or len(chunk) < 192:
+            msg = f"Lettura {pool['name']} fallita: conto non letto."
+            notes.append(msg)
+            reports.append({"chain": "ethereum", "asset": pool["name"], "error": "getUserAccountData"})
+            continue
+        account = decode_account_data(chunk)
+        config_bits = int.from_bytes(cfg_chunk[:32], "big") if cfg_ok and len(cfg_chunk) >= 32 else 0
+        # A supply with collateral switched off is not in collateral_usd, so the
+        # aTokens are always read. Debt tokens only when the pool reports debt.
+        try:
+            catalog = await _v3_pool_catalog(pool)
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Lettura riserve {pool['name']} fallita: {exc}"
+            log.warning(msg)
+            notes.append(msg)
+            reports.append({"chain": "ethereum", "asset": pool["name"], "error": str(exc)})
+            continue
+        calls: list[tuple[str, str]] = []
+        index_of: list[tuple[dict[str, Any], str]] = []
+        for item in catalog:
+            kinds = ("a_token", "variable_debt", "stable_debt") if account["debt_usd"] else ("a_token",)
+            for kind in kinds:
+                token = item.get(kind)
+                if token:
+                    calls.append((token, _encode_balance_of(address)))
+                    index_of.append((item, kind))
+        decoded = await _multicall_or_each(calls)
+        debts: list[dict[str, Any]] = []
+        collateral_assets: list[str] = []
+        for (item, kind), (ok, chunk) in zip(index_of, decoded):
+            if not ok or len(chunk) < 32:
+                continue
+            raw_amount = int.from_bytes(chunk[:32], "big")
+            if raw_amount <= 0:
+                continue
+            amount = human(raw_amount, int(item["decimals"]))
+            if amount < 1e-8:
+                continue
+            symbol = await _underlying_symbol(item["underlying"])
+            base = {
+                "owner": owner,
+                "label": label,
+                "address": address,
+                "chain": "ethereum",
+                "asset": symbol,
+                "amount": amount,
+                "price_token": price_key("ethereum", item["underlying"]),
+                "decimals": int(item["decimals"]),
+                "market": pool["name"],
+                "valuation_ok": True,
+            }
+            if kind == "a_token":
+                is_collateral = _collateral_on(config_bits, int(item["id"]))
+                if is_collateral:
+                    collateral_assets.append(symbol)
+                if item["a_token"].lower() in skip:
+                    if is_collateral and account["debt_usd"]:
+                        locked[item["a_token"].lower()] = {"market": pool["name"], **account}
+                    continue
+                rows.append({
+                    **base,
+                    "protocol": pool["protocol"],
+                    "token": item["a_token"],
+                    "llama_project": pool["llama_project"],
+                    "llama_symbol": symbol,
+                    "onchain_apy": ray_rate_to_apy_pct(item["liquidity_rate"]),
+                    "lido_base": symbol.lower() in LIDO_UNDERLYINGS,
+                    "collateral": is_collateral,
+                    "collateral_locked": bool(is_collateral and account["debt_usd"]),
+                })
+            else:
+                rate = item["variable_borrow_rate"] if kind == "variable_debt" else item["stable_borrow_rate"]
+                debts.append({
+                    **base,
+                    "protocol": pool["debt_protocol"],
+                    "token": item[kind],
+                    "llama_project": None,
+                    "llama_symbol": None,
+                    "debt": True,
+                    "debt_kind": "variabile" if kind == "variable_debt" else "stabile",
+                    "borrow_apy": ray_rate_to_apy_pct(rate),
+                    "debt_asset": symbol,
+                })
+        for row in debts:
+            row.update({
+                "health_factor": account["health_factor"],
+                "debt_usd": account["debt_usd"],
+                "collateral_usd": account["collateral_usd"],
+                "liquidation_threshold_pct": account["liquidation_threshold_pct"],
+                "collateral_assets": collateral_assets,
+            })
+        rows.extend(debts)
+    return rows, notes, reports, locked

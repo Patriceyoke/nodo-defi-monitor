@@ -108,11 +108,15 @@ def test_erc4626_valuation_uses_convert_to_assets(monkeypatch):
     async def no_v4(*args, **kwargs):
         return [], [], []
 
+    async def no_v3(*args, **kwargs):
+        return [], [], [], {}
+
     monkeypatch.setattr(evm, "eth_get_balance", fake_eth_balance)
     monkeypatch.setattr(evm, "USE_MULTICALL", False)
     monkeypatch.setattr(evm, "token_balance", fake_token_balance)
     monkeypatch.setattr(evm, "convert_to_assets", fake_convert)
     monkeypatch.setattr(evm, "scan_aave_v4", no_v4)
+    monkeypatch.setattr(evm, "scan_aave_v3", no_v3)
 
     rows, notes, _reports = asyncio.run(evm.scan_wallet("0x" + "11" * 20, "io", "test"))
     hit = [row for row in rows if row["token"] == syrup]
@@ -138,11 +142,15 @@ def test_failed_conversion_keeps_the_position(monkeypatch):
     async def no_v4(*args, **kwargs):
         return [], [], []
 
+    async def no_v3(*args, **kwargs):
+        return [], [], [], {}
+
     monkeypatch.setattr(evm, "eth_get_balance", fake_eth_balance)
     monkeypatch.setattr(evm, "USE_MULTICALL", False)
     monkeypatch.setattr(evm, "token_balance", fake_token_balance)
     monkeypatch.setattr(evm, "convert_to_assets", fake_convert)
     monkeypatch.setattr(evm, "scan_aave_v4", no_v4)
+    monkeypatch.setattr(evm, "scan_aave_v3", no_v3)
     rows, notes, _reports = asyncio.run(evm.scan_wallet("0x" + "22" * 20, "io", "test"))
     hit = [row for row in rows if row["token"] == fluid]
     assert len(hit) == 1
