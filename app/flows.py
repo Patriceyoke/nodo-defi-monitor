@@ -60,6 +60,9 @@ def _worth_showing(delta: float, usd_delta: float, usd_min: float) -> bool:
     return float(usd_delta) >= float(usd_min) and float(usd_delta) > 0
 
 
+MISREAD_NOTE = "lettura errata, saldo tornato"
+
+
 def reliable_quantity(row: dict[str, Any]) -> bool:
     """False for a quantity that came from a failed or partial read.
 
@@ -84,10 +87,14 @@ def flow_position_key(flow_key: str) -> str:
 
 
 def close_recovered_flows(current: dict[str, float]) -> int:
-    """An open alert whose quantity is read back at or above the old amount was a misread."""
+    """An alert whose quantity is read back at or above the old amount was a misread.
+
+    Open alerts and the ones answered "No, non sono stato io" both close: the
+    tokens are back, so nothing left. "Sì, sono stato io" stays in the history.
+    """
     closed = 0
     for flow in db.list_fund_flows():
-        if flow.get("status") != "open" or flow.get("direction") != "out":
+        if flow.get("status") not in {"open", "suspicious"} or flow.get("direction") != "out":
             continue
         key = flow_position_key(flow.get("flow_key") or "")
         if key not in current:
@@ -189,6 +196,7 @@ def public_flow(row: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "confirmation": status,
         "urgent": urgent,
+        "note": MISREAD_NOTE if status == "noted" else "",
     }
 
 

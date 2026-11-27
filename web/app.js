@@ -173,6 +173,9 @@ function renderOutflowBanners(data) {
           <li>Controlla lo stato ufficiale del protocollo sul suo sito.</li>
         </ol>
         <p>L'app non chiede e non accetta la seed né la chiave privata.</p>
+        <div class="outflow-actions">
+          <button class="btn" type="button" data-flow-answer="${row.id}" data-flow-status="noted">Era un errore di lettura, chiudi avviso</button>
+        </div>
       </div>`;
     }
     return `<div class="callout warn outflow-banner">
@@ -188,14 +191,14 @@ function renderOutflowBanners(data) {
 function renderFlowHistory(data) {
   const box = $("#sec-flows");
   if (!box) return;
-  const rows = flowRows(data).filter((row) => row.status === "mine" || row.status === "suspicious");
+  const rows = flowRows(data).filter((row) => row.status === "mine" || row.status === "suspicious" || row.status === "noted");
   if (!rows.length) {
     box.innerHTML = "";
     return;
   }
   const line = (row) => {
     const when = updatedClock(row.detected_at);
-    const stateLabel = row.status === "mine" ? "eri tu" : "non eri tu";
+    const stateLabel = row.status === "mine" ? "eri tu" : row.status === "noted" ? (row.note || "lettura errata") : "non eri tu";
     return `<p class="flow-line"><strong>Usciti ${escapeHtml(qty(row.delta))} ${escapeHtml(row.asset || "")}</strong> ${escapeHtml(flowWhere(row))}${row.label ? " · " + escapeHtml(row.label) : ""}. ${escapeHtml(when)} · ${stateLabel}</p>`;
   };
   box.innerHTML = `<h3>Uscite già controllate</h3>${rows.map(line).join("")}`;

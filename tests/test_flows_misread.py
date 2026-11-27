@@ -57,13 +57,37 @@ def test_an_old_misread_closes_itself_when_the_amount_is_back(isolated):
     assert [r["status"] for r in list_public_flows()] == ["noted"]
 
 
-def test_an_answered_alert_is_left_alone(isolated):
+def test_an_alert_answered_mine_is_left_alone(isolated):
     observe_positions([_fluid(5000, 5000)], now=1)
     observe_positions([_fluid(4000, 4000)], now=2)
     flow = list_public_flows()[0]
-    db.set_fund_flow_status(flow["id"], "suspicious")
+    db.set_fund_flow_status(flow["id"], "mine")
     observe_positions([_fluid(5000, 5000)], now=3)
+    assert list_public_flows()[0]["status"] == "mine"
+
+
+def test_an_alert_answered_no_closes_when_the_balance_is_back(isolated):
+    observe_positions([_fluid(5000, 5000)], now=1)
+    observe_positions([_fluid(4060, 4060)], now=2)
+    flow = list_public_flows()[0]
+    db.set_fund_flow_status(flow["id"], "suspicious")
+    observe_positions([_fluid(4500, 4500)], now=3)  # still below: stays red
     assert list_public_flows()[0]["status"] == "suspicious"
+    observe_positions([_fluid(5000.2, 5000.2)], now=4)
+    row = list_public_flows()[0]
+    assert row["status"] == "noted" and row["urgent"] is False
+    assert row["note"] == "lettura errata, saldo tornato"
+
+
+def test_the_misread_button_closes_a_red_alert(isolated, client):
+    observe_positions([_fluid(5000, 5000)], now=1)
+    observe_positions([_fluid(4060, 4060)], now=2)
+    flow = list_public_flows()[0]
+    db.set_fund_flow_status(flow["id"], "suspicious")
+    res = client.post(f"/api/outflows/{flow['id']}", json={"status": "noted"})
+    assert res.status_code == 200
+    item = next(r for r in res.json()["outflows"] if r["id"] == flow["id"])
+    assert item["status"] == "noted" and item["urgent"] is False
 
 
 def test_security_scan_skips_misreads_and_empty_snapshots():
