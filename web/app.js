@@ -146,8 +146,18 @@ function qty(n) {
 function flowWhere(flow) {
   return flow.protocol === "Wallet" ? "dal portafoglio" : "da " + (flow.protocol || "una posizione");
 }
+function flowDetectedAt(ts) {
+  if (!ts) return "";
+  const date = new Date(Number(ts) * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("it-IT", { day: "numeric", month: "short" }) + " alle "
+    + date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+}
 function flowSentence(flow) {
-  return `Sono usciti ${qty(flow.delta)} ${flow.asset || ""} ${flowWhere(flow)}.`.replace(/\s+/g, " ").trim();
+  const wallet = flow.label ? ` sul portafoglio ${flow.label}` : "";
+  const when = flowDetectedAt(flow.detected_at);
+  const at = when ? `, visto il ${when}` : "";
+  return `Sono usciti ${qty(flow.delta)} ${flow.asset || ""} ${flowWhere(flow)}${wallet}${at}.`.replace(/\s+/g, " ").trim();
 }
 function renderOutflowBanners(data) {
   const box = $("#outflow-banners");
@@ -186,7 +196,7 @@ function renderFlowHistory(data) {
   const line = (row) => {
     const when = updatedClock(row.detected_at);
     const stateLabel = row.status === "mine" ? "eri tu" : "non eri tu";
-    return `<p class="flow-line"><strong>Usciti ${escapeHtml(qty(row.delta))} ${escapeHtml(row.asset || "")}</strong> ${escapeHtml(flowWhere(row))}. ${escapeHtml(when)} · ${stateLabel}</p>`;
+    return `<p class="flow-line"><strong>Usciti ${escapeHtml(qty(row.delta))} ${escapeHtml(row.asset || "")}</strong> ${escapeHtml(flowWhere(row))}${row.label ? " · " + escapeHtml(row.label) : ""}. ${escapeHtml(when)} · ${stateLabel}</p>`;
   };
   box.innerHTML = `<h3>Uscite già controllate</h3>${rows.map(line).join("")}`;
 }
@@ -1125,7 +1135,7 @@ function renderSecurity() {
     <p class="mini"><span class="pill ${row.severity === "danger" ? "bad" : "warn"}">${escapeHtml(row.protocol || "")}</span> ${escapeHtml(row.detail || row.name || "")}</p>
   `).join("") : `<p class="mini">Nessun incidente recente sui protocolli in possesso.</p>`;
   const outflowHtml = outflows.length ? outflows.map((row) => `
-    <p class="mini">${escapeHtml(row.symbol || "")} · ${OWNER_LABEL[row.owner] || ""} · da ${escapeHtml(row.previous)} a ${escapeHtml(row.amount)}
+    <p class="mini">${escapeHtml(row.symbol || "")} · ${row.label ? escapeHtml(row.label) + " · " : ""}${OWNER_LABEL[row.owner] || ""} · da ${escapeHtml(row.previous)} a ${escapeHtml(row.amount)}${row.detected_at ? " · " + escapeHtml(flowDetectedAt(row.detected_at)) : ""}
       ${row.tx_url ? `<a href="${escapeHtml(row.tx_url)}" target="_blank" rel="noopener">transazione</a>` : ""}</p>
   `).join("") : `<p class="mini">Nessuna uscita sopra la soglia dall'ultimo controllo.</p>`;
   const windowNote = data.partial && /interrotta|finestra/i.test(data.note || "")

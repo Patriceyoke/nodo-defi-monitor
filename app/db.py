@@ -540,6 +540,16 @@ def insert_fund_flow(row: dict[str, Any]) -> bool:
         return cur.rowcount > 0
 
 
+def close_fund_flow(flow_id: int) -> bool:
+    """Mark an open alert as a misread ('noted'). Answered alerts are left alone."""
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE fund_flows SET status='noted' WHERE id=? AND status='open' AND direction='out'",
+            (int(flow_id),),
+        )
+        return cur.rowcount > 0
+
+
 def set_fund_flow_status(flow_id: int, status: str) -> bool:
     if status not in {"mine", "suspicious"}:
         raise ValueError("Risposta non valida.")

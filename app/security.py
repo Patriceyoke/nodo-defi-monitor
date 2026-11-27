@@ -517,11 +517,24 @@ def outflow_rows(
     usd_min: float,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return alerts and the marks to store. The first observation is stored and not alerted."""
+    from .flows import reliable_quantity
+
     known = {_mark_key(row["wallet"], row["chain"], row["token"]): row for row in marks}
     seen: set[str] = set()
     alerts: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     rows = list(positions)
+    now = int(time.time())
+    labels: dict[str, str] = {}
+    # A wallet counts as read only when this snapshot has a fresh row for it. After a
+    # failed or empty refresh, its old marks are not "gone to zero".
+    wallets_read: set[str] = set()
+    for row in rows:
+        address = str(row.get("address") or "").lower()
+        if row.get("label"):
+            labels.setdefault(address, str(row.get("label")))
+        if not row.get("stale"):
+            wallets_read.add(address)
     for row in rows:
         wallet = str(row.get("address") or "")
         if wallet.lower() not in wallets:
@@ -530,6 +543,9 @@ def outflow_rows(
         chain = str(row.get("chain") or "ethereum")
         key = _mark_key(wallet, chain, token)
         seen.add(key)
+        if row.get("debt") or not reliable_quantity(row):
+            # Failed vault conversion, a row kept from the last refresh, or a loan.
+            continue
         amount = float(row.get("amount") or 0)
         usd = float(row.get("usd") or 0)
         reason = compare_balance(known.get(key), amount, usd, drop_pct, usd_min)
@@ -538,7 +554,8 @@ def outflow_rows(
         if reason:
             alerts.append({
                 "owner": row.get("owner"),
-                "label": row.get("label"),
+                "label": row.get("label") or labels.get(wallet.lower(), ""),
+                "detected_at": now,
                 "wallet": wallet,
                 "chain": chain,
                 "token": token,
@@ -556,6 +573,8 @@ def outflow_rows(
     for key, mark in known.items():
         if key in seen or mark["wallet"].lower() not in wallets:
             continue
+        if mark["wallet"].lower() not in wallets_read:
+            continue
         if float(mark.get("amount") or 0) <= 0:
             continue
         if str(mark.get("symbol") or "") in {"sUSDS", "stUSDS", "spUSDC", "spUSDT", "SKY"}:
@@ -569,7 +588,8 @@ def outflow_rows(
         if reason:
             alerts.append({
                 "owner": mark.get("owner"),
-                "label": mark.get("symbol"),
+                "label": labels.get(str(mark["wallet"]).lower(), ""),
+                "detected_at": now,
                 "wallet": mark["wallet"],
                 "chain": mark["chain"],
                 "token": mark["token"],

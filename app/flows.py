@@ -60,6 +60,45 @@ def _worth_showing(delta: float, usd_delta: float, usd_min: float) -> bool:
     return float(usd_delta) >= float(usd_min) and float(usd_delta) > 0
 
 
+def reliable_quantity(row: dict[str, Any]) -> bool:
+    """False for a quantity that came from a failed or partial read.
+
+    When convertToAssets fails, an ERC-4626 vault (Fluid, Maple, Sky) is listed
+    with its share count and valuation_ok False. Shares are fewer than the
+    underlying tokens, so comparing them with the last good amount looks like a
+    withdrawal. Rows kept from the previous refresh (stale) are not new readings.
+    """
+    if row.get("valuation_ok") is False or row.get("stale"):
+        return False
+    return True
+
+
+def flow_position_key(flow_key: str) -> str:
+    """'out|<position key>|prev|amount' -> '<position key>'."""
+    text = str(flow_key or "")
+    if "|" not in text:
+        return ""
+    body = text.split("|", 1)[1]
+    parts = body.rsplit("|", 2)
+    return parts[0] if len(parts) == 3 else ""
+
+
+def close_recovered_flows(current: dict[str, float]) -> int:
+    """An open alert whose quantity is read back at or above the old amount was a misread."""
+    closed = 0
+    for flow in db.list_fund_flows():
+        if flow.get("status") != "open" or flow.get("direction") != "out":
+            continue
+        key = flow_position_key(flow.get("flow_key") or "")
+        if key not in current:
+            continue
+        before = float(flow.get("previous_amount") or 0)
+        if before > 0 and current[key] >= before * (1 - 1e-6):
+            if db.close_fund_flow(int(flow["id"])):
+                closed += 1
+    return closed
+
+
 def observe_positions(positions: list[dict[str, Any]], *, now: int | None = None) -> list[dict[str, Any]]:
     """Compare token quantities with the last refresh.
 
@@ -74,6 +113,9 @@ def observe_positions(positions: list[dict[str, Any]], *, now: int | None = None
     for row in positions:
         if row.get("debt"):
             # Repaying a loan lowers the debt. That is not money leaving the wallet.
+            continue
+        if not reliable_quantity(row):
+            # A failed read is not a movement: neither alert nor overwrite the last good mark.
             continue
         key = position_key(row)
         if not key.strip("|"):
@@ -126,6 +168,7 @@ def observe_positions(positions: list[dict[str, Any]], *, now: int | None = None
         }
         if db.insert_fund_flow(row):
             created.append(row)
+    close_recovered_flows({key: float(item["amount"]) for key, item in grouped.items()})
     return created
 
 
@@ -149,8 +192,16 @@ def public_flow(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _wallet_labels() -> dict[str, str]:
+    try:
+        return {str(w.get("address") or "").lower(): str(w.get("label") or "") for w in db.list_evm()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def list_public_flows(owner: str = "tutti") -> list[dict[str, Any]]:
     rows = db.list_fund_flows()
+    labels = _wallet_labels()
     if owner and owner != "tutti":
         rows = [row for row in rows if row.get("owner") == owner]
     visible = []
@@ -159,5 +210,7 @@ def list_public_flows(owner: str = "tutti") -> list[dict[str, Any]]:
             continue
         if not _worth_showing(float(row.get("delta") or 0), float(row.get("usd_delta") or 0), 500):
             continue
-        visible.append(public_flow(row))
+        item = public_flow(row)
+        item["label"] = labels.get(str(row.get("wallet") or "").lower()) or ""
+        visible.append(item)
     return visible
