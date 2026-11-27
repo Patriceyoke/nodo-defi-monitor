@@ -39,6 +39,8 @@ _RPC_USED: dict[str, dict[str, Any]] = {}
 _CIRCUIT: dict[str, float] = {}
 _MULTICALL_SEEN: dict[str, tuple[bool, float]] = {}
 CIRCUIT_SECONDS = 180
+# Each Aave reader gets this long per wallet. Past it, the wallet keeps its other balances.
+AAVE_READ_TIMEOUT = 25.0
 RPC_BACKOFF_SECONDS = 0.15
 
 
@@ -459,9 +461,13 @@ async def scan_wallet(
     if ethereum_ok:
         static_tokens = {str(spec["token"]).lower() for spec in TOKENS if spec["chain"] == "ethereum"}
         try:
-            v3_rows, v3_notes, v3_reports, locked = await scan_aave_v3(address, owner, label, static_tokens)
+            v3_rows, v3_notes, v3_reports, locked = await asyncio.wait_for(
+                scan_aave_v3(address, owner, label, static_tokens), timeout=AAVE_READ_TIMEOUT
+            )
         except Exception as exc:  # noqa: BLE001
-            msg = f"Lettura Aave V3 fallita: {exc}"
+            if isinstance(exc, asyncio.TimeoutError):
+                exc = RuntimeError(f"nessuna risposta entro {AAVE_READ_TIMEOUT:.0f} s")
+            msg = f"Lettura Aave V3 di {label} fallita: {exc}. Prestiti e garanzie non contati in questo giro."
             log.warning(msg)
             notes.append(msg)
             reports.append({"chain": "ethereum", "asset": "Aave V3", "error": str(exc)})
@@ -474,8 +480,12 @@ async def scan_wallet(
             notes.extend(v3_notes)
             reports.extend(v3_reports)
         try:
-            v4_rows, v4_notes, v4_reports = await scan_aave_v4(address, owner, label)
+            v4_rows, v4_notes, v4_reports = await asyncio.wait_for(
+                scan_aave_v4(address, owner, label), timeout=AAVE_READ_TIMEOUT
+            )
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, asyncio.TimeoutError):
+                exc = RuntimeError(f"nessuna risposta entro {AAVE_READ_TIMEOUT:.0f} s")
             msg = f"Lettura Aave V4 fallita: {exc}"
             log.warning(msg)
             notes.append(msg)
@@ -523,15 +533,30 @@ async def _each_call(calls: list[tuple[str, str]]) -> list[tuple[bool, bytes]]:
     return out
 
 
+MULTICALL_CHUNK = 60
+SINGLE_CALL_LIMIT = 12
+
+
 async def _multicall_or_each(calls: list[tuple[str, str]]) -> list[tuple[bool, bytes]]:
+    """Read in chunks of MULTICALL_CHUNK. A long list never falls back to one call each.
+
+    A public RPC that rejects a big aggregate3 or answers 429 must not turn one
+    wallet into hundreds of single calls: that is what kept a refresh running for
+    minutes. Short lists may still go one by one.
+    """
     if not calls:
         return []
     try:
         if not USE_MULTICALL:
             raise RuntimeError("multicall disattivato")
-        return await multicall("ethereum", calls)
+        out: list[tuple[bool, bytes]] = []
+        for start in range(0, len(calls), MULTICALL_CHUNK):
+            out.extend(await multicall("ethereum", calls[start:start + MULTICALL_CHUNK], block="latest"))
+        return out
     except Exception as exc:  # noqa: BLE001
-        log.info("Multicall Aave V4 non usato (%s), lettura singola.", exc)
+        if len(calls) > SINGLE_CALL_LIMIT:
+            raise RuntimeError(f"lettura multipla non riuscita ({exc})") from exc
+        log.info("Multicall non usato (%s), lettura singola.", exc)
         return await _each_call(calls)
 
 
@@ -565,8 +590,16 @@ async def _underlying_symbol(underlying: str) -> str:
     return symbol
 
 
+_V4_LOCK = asyncio.Lock()
+
+
 async def aave_v4_catalog() -> list[dict[str, Any]]:
-    """Spoke reserves, cached for one hour. Treasury is not included."""
+    """Spoke reserves, cached for one hour. One build is shared by every wallet."""
+    async with _V4_LOCK:
+        return await _aave_v4_catalog()
+
+
+async def _aave_v4_catalog() -> list[dict[str, Any]]:
     now = time.time()
     cached = _V4_CATALOG.get("rows")
     if cached is not None and now - float(_V4_CATALOG.get("at") or 0) < 3600:

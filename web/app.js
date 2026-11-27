@@ -1264,6 +1264,35 @@ function paintFreshness(data) {
   line.innerHTML = parts.join(" · ");
 }
 
+function pollRefresh(gen, tries) {
+  setTimeout(async () => {
+    if (gen !== loadGen) return;
+    let data;
+    try {
+      data = await api("/api/portfolio?owner=tutti");
+    } catch (err) {
+      if (tries < 60) return pollRefresh(gen, tries + 1);
+      state.refreshing = false;
+      showBanner([err && err.message ? err.message : "Ricalcolo non riuscito."]);
+      if (state.data) render();
+      return;
+    }
+    if (gen !== loadGen) return;
+    if (data.refreshing && tries < 60) return pollRefresh(gen, tries + 1);
+    state.refreshing = false;
+    if (keepPreviousSnapshot(state.data, data)) {
+      state.stale = true;
+      showBanner([...(data.errors || []), "Ricalcolo non riuscito: resta l'ultimo saldo."]);
+      paintFreshness(state.data);
+      return;
+    }
+    state.data = data;
+    state.stale = !!data.kept_previous || !!data.refreshing;
+    if (data.fx_thb) state.fx = data.fx_thb;
+    render();
+  }, 4000);
+}
+
 async function load(force, extra) {
   const gen = ++loadGen;
   const full = !!(extra && extra.full);
@@ -1279,6 +1308,16 @@ async function load(force, extra) {
   try {
     const data = await api(path, opts);
     if (gen !== loadGen) return;
+    if (data.refreshing) {
+      // The server keeps reading in the background. Show the last saved data and ask again.
+      if (totalsReady(data) && (data.positions || []).length) state.data = data;
+      state.refreshing = true;
+      state.stale = true;
+      if (data.fx_thb) state.fx = data.fx_thb;
+      if (state.data) render();
+      pollRefresh(gen, 0);
+      return;
+    }
     if (keepPreviousSnapshot(state.data, data)) {
       state.refreshing = false;
       state.stale = true;

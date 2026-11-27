@@ -18,6 +18,16 @@ _SNAPSHOT: dict[str, Any] | None = None
 _SNAPSHOT_AT = 0.0
 _LOCK = asyncio.Lock()
 REFRESH_TTL = 60
+# A forced read answers within REFRESH_WAIT_SECONDS. If the chain is slower, the
+# request returns the last saved snapshot with refreshing=True and the read goes on
+# in the background, so Umbrel's proxy never drops the request.
+REFRESH_WAIT_SECONDS = 25.0
+WALLET_TIMEOUT = 60.0
+WALLET_CONCURRENCY = 4
+SOURCE_TIMEOUT = 20.0
+ENRICH_TIMEOUT = 45.0
+REFRESH_DEADLINE = 240.0
+_TASK: asyncio.Task | None = None
 _STATUS: dict[str, Any] = {
     "last_started_at": None,
     "last_finished_at": None,
@@ -466,15 +476,94 @@ def _empty_raw() -> dict[str, Any]:
     }
 
 
-async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str, Any]:
+def refresh_running() -> bool:
+    return _TASK is not None and not _TASK.done()
+
+
+def _task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.warning("Ricalcolo in background non riuscito: %s", exc)
+        _STATUS["last_ok"] = False
+        _STATUS["last_error"] = str(exc)
+        _STATUS["last_finished_at"] = time.time()
+
+
+def _start_refresh(fresh_nfts: bool) -> asyncio.Task:
+    global _TASK
+    if refresh_running():
+        return _TASK  # type: ignore[return-value]
+    _TASK = asyncio.create_task(_refresh_with_deadline(fresh_nfts))
+    _TASK.add_done_callback(_task_done)
+    return _TASK
+
+
+async def _refresh_with_deadline(fresh_nfts: bool) -> dict[str, Any]:
+    try:
+        return await asyncio.wait_for(_refresh_locked(fresh_nfts), timeout=REFRESH_DEADLINE)
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(f"il ricalcolo ha superato {REFRESH_DEADLINE:.0f} s") from exc
+
+
+async def refresh(
+    force: bool = False,
+    *,
+    fresh_nfts: bool = False,
+    wait: float | None = None,
+) -> dict[str, Any]:
+    """Cached snapshot, or a forced read that never blocks a request for long."""
+    if not force:
+        cached = cached_snapshot()
+        if cached:
+            out = {**cached, "refreshing": refresh_running()}
+            failed_at = float(_STATUS.get("last_finished_at") or 0)
+            if (
+                not out["refreshing"]
+                and _STATUS.get("last_ok") is False
+                and failed_at >= float(cached.get("ts") or 0)
+            ):
+                out["errors"] = list(cached.get("errors") or []) + [
+                    f"Ricalcolo non riuscito: {_STATUS.get('last_error')}. Resta l'ultimo saldo."
+                ]
+                out["kept_previous"] = True
+            return out
+        return {**_empty_raw(), "refreshing": refresh_running()}
+    task = _start_refresh(fresh_nfts)
+    limit = REFRESH_WAIT_SECONDS if wait is None else wait
+    done, _pending = await asyncio.wait({task}, timeout=limit)
+    if task in done:
+        return {**task.result(), "refreshing": False}
+    previous = cached_snapshot()
+    if previous:
+        return {**previous, "refreshing": True}
+    raw = _empty_raw()
+    raw["errors"] = ["Primo ricalcolo in corso: i saldi arrivano tra poco."]
+    raw["refreshing"] = True
+    return raw
+
+
+def _previous_rows(previous: dict[str, Any] | None, wallet: dict[str, Any]) -> list[dict[str, Any]]:
+    """Last saved rows of one wallet, so a slow wallet does not drop to 0 $."""
+    rows = []
+    for row in (previous or {}).get("positions") or []:
+        if (
+            row.get("owner") == wallet.get("owner")
+            and row.get("label") == wallet.get("label")
+            and str(row.get("address") or "").lower() == str(wallet.get("address") or "").lower()
+        ):
+            keep = {k: v for k, v in row.items() if k not in {"alternatives"}}
+            keep["stale"] = True
+            rows.append(keep)
+    return rows
+
+
+async def _refresh_locked(fresh_nfts: bool = False) -> dict[str, Any]:
     global _SNAPSHOT, _SNAPSHOT_AT
     async with _LOCK:
         now = time.time()
-        if not force:
-            cached_snapshot()
-            if _SNAPSHOT:
-                return _SNAPSHOT
-            return _empty_raw()
+        previous = cached_snapshot()
         _STATUS["last_started_at"] = time.time()
         _STATUS["last_ok"] = None
         markets.invalidate()
@@ -509,9 +598,21 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
 
         wallet_reports: list[dict[str, Any]] = []
 
+        gate = asyncio.Semaphore(WALLET_CONCURRENCY)
+
         async def _scan_evm(w: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
+            async with gate:
+                return await _scan_one(w)
+
+        async def _scan_one(w: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], dict[str, Any]]:
             try:
-                found, notes, reports = await evm.scan_wallet(w["address"], w["owner"], w["label"], chains_ok)
+                try:
+                    found, notes, reports = await asyncio.wait_for(
+                        evm.scan_wallet(w["address"], w["owner"], w["label"], chains_ok),
+                        timeout=WALLET_TIMEOUT,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise RuntimeError(f"nessuna risposta entro {WALLET_TIMEOUT:.0f} s") from exc
                 by_chain: dict[str, list[str]] = {}
                 for report in reports:
                     by_chain.setdefault(report["chain"], []).append(f"{report['asset']}: {report['error']}")
@@ -527,7 +628,11 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                 }
             except Exception as exc:  # noqa: BLE001
                 log.warning("Lettura %s fallita: %s", w["label"], exc)
-                return [], [f"Lettura {w['label']}: {exc}"], {
+                kept = _previous_rows(previous, w)
+                note = f"Lettura {w['label']}: {exc}."
+                if kept:
+                    note += " Restano i saldi dell'aggiornamento precedente."
+                return kept, [note], {
                     "label": w["label"],
                     "owner": w["owner"],
                     "address": w["address"],
@@ -556,16 +661,31 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
                         ],
                     }
                 )
+        nothing_new = not positions or all(p.get("stale") for p in positions)
+        if evm_wallets and nothing_new and previous and previous.get("positions"):
+            # Nothing read (network down right after a restart, RPC limits). Keep the
+            # last saved snapshot and history instead of saving a portfolio at 0 $.
+            raise RuntimeError("nessun saldo letto: " + ("; ".join(errors[:3]) or "rete non raggiungibile"))
         if positions:
             try:
-                positions, alerts = await _enrich(positions)
+                positions, alerts = await asyncio.wait_for(_enrich(positions), timeout=ENRICH_TIMEOUT)
                 errors.extend(alerts)
             except Exception as exc:  # noqa: BLE001
                 log.warning("Arricchimento prezzi/APY fallito: %s", exc)
                 errors.append(f"Prezzi o APY: {exc}. Le posizioni lette restano in elenco.")
                 positions = [{**p, "price_usd": None, "usd": None, "apy": None, "apy30": None, "risk": switches.risk_of(p["protocol"], p.get("asset"))} for p in positions]
 
-        fx = await markets.fx_thb()
+        if previous and previous.get("positions") and positions:
+            known = sum(abs(float(p.get("usd") or 0)) for p in positions)
+            if known <= 0:
+                raise RuntimeError("prezzi non letti: " + ("; ".join(errors[-2:]) or "listino non raggiungibile"))
+        try:
+            fx = await asyncio.wait_for(markets.fx_thb(), timeout=SOURCE_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Cambio THB non letto: %s", exc)
+            fx = None
+        if fx is None and previous and previous.get("fx_thb"):
+            fx = previous.get("fx_thb")
         eth_price = 0.0
         for p in positions:
             if p.get("asset") == "ETH" and p.get("price_usd"):
@@ -583,9 +703,13 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
 
         gas_override = db.get_setting("gas_estimate_usd")
         override = float(gas_override) if gas_override else None
-        gas_usd = await switches.gas_usd_now(override, eth_price or 0)
         try:
-            alts = await switches.market_alternatives(positions)
+            gas_usd = await asyncio.wait_for(switches.gas_usd_now(override, eth_price or 0), timeout=SOURCE_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Gas non letto: %s", exc)
+            gas_usd = float((previous or {}).get("gas_usd") or override or 0)
+        try:
+            alts = await asyncio.wait_for(switches.market_alternatives(positions), timeout=SOURCE_TIMEOUT)
         except Exception as exc:  # noqa: BLE001
             alts = []
             errors.append(f"Mercato APY: {exc}")
@@ -597,7 +721,7 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
         ideas, anomalies = switches.classify_switches(pos_with_alts, gas_usd)
 
         try:
-            health = await markets.protocol_health()
+            health = await asyncio.wait_for(markets.protocol_health(), timeout=SOURCE_TIMEOUT)
         except Exception as exc:  # noqa: BLE001
             health = []
             errors.append(f"Controlli di sicurezza: {exc}")
@@ -677,8 +801,10 @@ async def refresh(force: bool = False, *, fresh_nfts: bool = False) -> dict[str,
 
 async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: bool = False) -> dict[str, Any]:
     owner = normalize_owner(owner, allow_all=True)
+    refreshing = False
     try:
         data = await refresh(force=force, fresh_nfts=fresh_nfts)
+        refreshing = bool(data.get("refreshing"))
     except Exception as exc:  # noqa: BLE001
         log.exception("snapshot failed")
         _STATUS["last_ok"] = False
@@ -839,4 +965,5 @@ async def snapshot(owner: str = "tutti", force: bool = False, *, fresh_nfts: boo
             if filter_owner(owner, row.get("owner"))
         ],
         "ok": not data.get("errors"),
+        "refreshing": refreshing,
     }
